@@ -25,4 +25,19 @@ export class WorkflowTransitionService {
     const state = this.store.update(taskId, current.version, transition.patch);
     return { state, effect: transition.effect };
   }
+
+  mergeContext(taskId, patch = {}) {
+    const current = this.store.get(taskId);
+    if (!current) throw new Error(`unknown workflow state: ${taskId}`);
+    const context = { ...(current.context ?? {}), ...patch };
+    return this.store.update(taskId, current.version, { context });
+  }
+
+  clearContext(taskId, keys = []) {
+    const current = this.store.get(taskId);
+    if (!current) throw new Error(`unknown workflow state: ${taskId}`);
+    const context = { ...(current.context ?? {}) };
+    for (const key of keys) delete context[key];
+    return this.store.update(taskId, current.version, { context });
+  }
 }
