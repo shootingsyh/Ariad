@@ -10,6 +10,7 @@ export function createFakeRuntimeAdapter(options = {}) {
   const probeErrors = Array.isArray(options.probeErrors) ? [...options.probeErrors] : [];
   const calls = [];
   const state = new Map();
+  const handlesByRunId = new Map();
   let installed = false;
   let installCount = 0;
   let currentHealth = options.initialHealth || 'HEALTHY';
@@ -23,11 +24,20 @@ export function createFakeRuntimeAdapter(options = {}) {
     });
   }
 
+  function ensureHandle(runId) {
+    if (handlesByRunId.has(runId)) return handlesByRunId.get(runId);
+    const handle = normalizeRunHandle('fake', runId, `fake:${runId}`);
+    handlesByRunId.set(runId, handle);
+    state.set(handle.externalId, { status: 'RUNNING' });
+    return handle;
+  }
+
   return {
     id: 'fake',
     config: options.config || {},
     calls,
     get installCount() { return installCount; },
+    get executionCount() { return handlesByRunId.size; },
 
     async install(context = {}) {
       calls.push({ operation: 'install', runtimeKey: context.runtimeKey || null });
@@ -49,22 +59,20 @@ export function createFakeRuntimeAdapter(options = {}) {
     },
 
     async start(request) {
-      calls.push({ operation: 'start', runId: request.runId });
-      const handle = normalizeRunHandle('fake', request.runId, `fake:${request.runId}`);
-      state.set(handle.externalId, { status: 'RUNNING' });
-      return handle;
+      const duplicate = handlesByRunId.has(request.runId);
+      calls.push({ operation: 'start', runId: request.runId, duplicate });
+      return ensureHandle(request.runId);
     },
 
     async resume(request) {
       calls.push({ operation: 'resume', runId: request.runId, checkpoint: request.checkpoint });
-      const handle = normalizeRunHandle('fake', request.runId, `fake:${request.runId}`);
-      state.set(handle.externalId, { status: 'RUNNING' });
-      return handle;
+      return ensureHandle(request.runId);
     },
 
     async poll(handle) {
       const current = state.get(handle.externalId);
       if (!current || current.status === 'CANCELLED') return { state: current?.status || 'LOST' };
+      if (current.status === 'COMPLETED' && current.result) return current.result;
       const result = nextResult();
       state.set(handle.externalId, { status: result.state, result });
       return result;
