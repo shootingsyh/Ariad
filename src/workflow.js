@@ -1,4 +1,5 @@
 import { TransitionEngine } from './transition-engine.js';
+import { ReliabilityExecutionExecutor } from './reliability-execution-executor.js';
 
 function normalizeLegacyResult(role, result) {
   if (role === 'pm' && result?.outcome === 'REPLAN_READY') {
@@ -9,25 +10,18 @@ function normalizeLegacyResult(role, result) {
 
 export class WorkflowEngine {
   constructor(executor, options = {}) {
-    this.executor = executor;
-    this.maxSystemRetries = options.maxSystemRetries ?? 2;
+    this.executor = options.executionExecutor ?? new ReliabilityExecutionExecutor({
+      executor,
+      reliability: options.reliability ?? null,
+      bridge: options.executionReliabilityBridge ?? null,
+      maxRecoveries: options.maxSystemRetries ?? 2,
+    });
     this.maxStrategyEpochs = options.maxStrategyEpochs ?? 3;
     this.finalizeSourceControl = options.finalizeSourceControl ?? (async () => ({ ok: true }));
     this.transitions = options.transitionEngine ?? new TransitionEngine({
       maxDevCycles: 3,
       maxStrategyEpochs: this.maxStrategyEpochs,
     });
-  }
-
-  async runRoleWithSystemRetry(role, context, history) {
-    let retries = 0;
-    while (true) {
-      const result = await this.executor.run(role, context);
-      history.push({ role, context: structuredClone(context), result: structuredClone(result) });
-      if (result.executionStatus !== 'FAILED') return result;
-      if (retries >= this.maxSystemRetries) return { ...result, recoveryExhausted: true };
-      retries += 1;
-    }
   }
 
   async runFeature(featureId) {
@@ -75,10 +69,15 @@ export class WorkflowEngine {
       };
       if (role === 'pm' && pendingDiagnosis) context.diagnosis = pendingDiagnosis;
 
-      let result = await this.runRoleWithSystemRetry(role, context, history);
-      if (result.recoveryExhausted) {
-        result = { ...result, executionStatus: 'FAILED' };
-      }
+      let result = await this.executor.run(role, context, {
+        onAttempt: attemptResult => {
+          history.push({
+            role,
+            context: structuredClone(context),
+            result: structuredClone(attemptResult),
+          });
+        },
+      });
       result = normalizeLegacyResult(role, result);
 
       const transition = this.transitions.next(state, role, result);
