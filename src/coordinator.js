@@ -17,15 +17,15 @@ export class Coordinator {
         continue;
       }
       const transition=await this.applyExecutionResult(work, scheduled.result);
-      let effectResult = null;
+      const outcome = { work, status:'APPLIED', execution:scheduled.result, transition };
       if (this.effectExecutor && transition?.effect) {
-        effectResult = await this.effectExecutor.execute({
+        outcome.effectResult = await this.effectExecutor.execute({
           taskId: work.taskId ?? work.context?.taskId,
           state: transition.state,
           effect: transition.effect,
         });
       }
-      outcomes.push({ work, status:'APPLIED', execution:scheduled.result, transition, effectResult });
+      outcomes.push(outcome);
     }
     return outcomes;
   }
