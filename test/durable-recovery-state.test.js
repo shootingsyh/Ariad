@@ -79,7 +79,8 @@ test('event journal is append-only, ordered, and survives restart', () => {
   const events = journal.list({ aggregateType:'run', aggregateId:'RUN-1' });
   assert.deepEqual(events.map(e => e.type), ['RUN_CREATED', 'RUN_DISPATCHED']);
   assert.equal(events[0].seq < events[1].seq, true);
-  assert.throws(() => journal.update?.(1, {}), /append-only|not a function/i);
+  assert.equal(typeof journal.update, 'undefined');
+  assert.equal(typeof journal.delete, 'undefined');
   journal.close();
 });
 
