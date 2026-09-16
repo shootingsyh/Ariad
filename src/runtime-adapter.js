@@ -7,7 +7,7 @@ class RuntimeAdapterError extends Error {
   }
 }
 
-const REQUIRED_METHODS = ['start', 'resume', 'poll', 'cancel'];
+const REQUIRED_METHODS = ['install', 'probe', 'start', 'resume', 'poll', 'cancel'];
 
 function validateRuntimeAdapter(adapter) {
   if (!adapter || typeof adapter !== 'object') {
@@ -38,9 +38,18 @@ function normalizeRuntimeResult(value) {
   return value;
 }
 
+function normalizeHealth(value) {
+  const health = typeof value === 'string' ? value : value?.health;
+  if (!['HEALTHY', 'DEGRADED', 'UNHEALTHY', 'UNKNOWN'].includes(health)) {
+    throw new RuntimeAdapterError('runtime probe requires a normalized health state');
+  }
+  return typeof value === 'string' ? { health } : { ...value, health };
+}
+
 module.exports = {
   RuntimeAdapterError,
   validateRuntimeAdapter,
   normalizeRunHandle,
   normalizeRuntimeResult,
+  normalizeHealth,
 };
