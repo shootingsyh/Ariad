@@ -10,6 +10,7 @@ This repository contains the first fake-executor implementation used to harden t
 - project-debugger escalation after bounded development cycles
 - system failures routed to reliability without corrupting semantic development counters
 - scripted fake agent executor for deterministic tests
+- abstract runtime adapter contract and runtime registry
 - thin reliability incidents with bounded recovery and recovery locks
 - resource contention between local model runtimes and tools such as ComfyUI
 - append-only event store
@@ -26,7 +27,30 @@ Run:
 npm test
 ```
 
-The current suite covers workflow convergence, failure isolation, source-control boundaries, resource conflicts, fake-agent behavior, and reliability recovery behavior.
+The current suite covers workflow convergence, failure isolation, source-control boundaries, resource conflicts, fake-agent behavior, runtime-adapter conformance, runtime registry behavior, and reliability recovery behavior.
+
+## Runtime adapters
+
+Ariad Core does not depend on OpenClaw, OpenCode, local model servers, or any other concrete runtime. It resolves a logical runtime key through `RuntimeRegistry` and talks only to a minimal contract:
+
+```text
+start
+resume
+poll
+cancel
+```
+
+The preferred integration shape is one runtime per adapter file:
+
+```text
+src/adapters/
+  fake-runtime.js
+  openclaw.js
+  opencode.js
+  local-cli.js
+```
+
+Runtime-specific endpoint, session, model, provider, and authentication details stay inside the adapter. See `docs/runtime-adapters.md` for the contract and implementation pattern.
 
 ## Project initialization vs plugin installation
 
