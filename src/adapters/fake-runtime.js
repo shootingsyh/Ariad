@@ -3,12 +3,18 @@
 const {
   normalizeRunHandle,
   normalizeRuntimeResult,
+  normalizeHealth,
 } = require('../runtime-adapter');
 
 function createFakeRuntimeAdapter(options = {}) {
   const script = Array.isArray(options.script) ? [...options.script] : [];
+  const healthScript = Array.isArray(options.healthScript) ? [...options.healthScript] : [];
+  const probeErrors = Array.isArray(options.probeErrors) ? [...options.probeErrors] : [];
   const calls = [];
   const state = new Map();
+  let installed = false;
+  let installCount = 0;
+  let currentHealth = options.initialHealth || 'HEALTHY';
 
   function nextResult() {
     const item = script.length > 0
@@ -21,10 +27,34 @@ function createFakeRuntimeAdapter(options = {}) {
     });
   }
 
-  return {
+  const adapter = {
     id: 'fake',
     config: options.config || {},
     calls,
+
+    get installCount() {
+      return installCount;
+    },
+
+    async install(context = {}) {
+      calls.push({ operation: 'install', runtimeKey: context.runtimeKey || null });
+      if (!installed) {
+        installed = true;
+        installCount += 1;
+      }
+      return { state: 'INSTALLED', changed: installCount === 1 };
+    },
+
+    async probe() {
+      calls.push({ operation: 'probe' });
+      if (probeErrors.length > 0) {
+        throw probeErrors.shift();
+      }
+      if (healthScript.length > 0) {
+        currentHealth = healthScript.shift();
+      }
+      return normalizeHealth({ health: currentHealth });
+    },
 
     async start(request) {
       calls.push({ operation: 'start', runId: request.runId });
@@ -60,6 +90,8 @@ function createFakeRuntimeAdapter(options = {}) {
       return { state: 'CANCELLED' };
     },
   };
+
+  return adapter;
 }
 
 module.exports = { createFakeRuntimeAdapter };
