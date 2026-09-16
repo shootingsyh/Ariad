@@ -1,11 +1,9 @@
-'use strict';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-
-const { RuntimeRegistry } = require('../src/runtime-registry');
-const { createFakeRuntimeAdapter } = require('../src/adapters/fake-runtime');
-const { RuntimeManager } = require('../src/runtime-manager');
+import { RuntimeRegistry } from '../src/runtime-registry.js';
+import { createFakeRuntimeAdapter } from '../src/adapters/fake-runtime.js';
+import { RuntimeManager } from '../src/runtime-manager.js';
 
 test('runtime manager installs, probes, then starts monitors in order', async () => {
   const events = [];
@@ -27,7 +25,6 @@ test('runtime manager installs, probes, then starts monitors in order', async ()
   await manager.start();
   assert.deepEqual(events.slice(0, 2), ['install', 'monitor:start:fake']);
   assert.equal(manager.getStatus('fake').health, 'HEALTHY');
-
   await manager.stop();
   assert.equal(events.at(-1), 'monitor:stop:fake');
 });
@@ -35,19 +32,11 @@ test('runtime manager installs, probes, then starts monitors in order', async ()
 test('runtime manager does not start monitors when install fails', async () => {
   let monitorStarted = false;
   const registry = new RuntimeRegistry();
-  const fake = createFakeRuntimeAdapter({
-    installError: new Error('install failed'),
-  });
-  registry.register('fake', fake);
-
+  registry.register('fake', createFakeRuntimeAdapter({ installError: new Error('install failed') }));
   const manager = new RuntimeManager({
     registry,
-    monitorFactory: () => ({
-      async start() { monitorStarted = true; },
-      async stop() {},
-    }),
+    monitorFactory: () => ({ async start() { monitorStarted = true; }, async stop() {} }),
   });
-
   await assert.rejects(() => manager.start(), /install failed/);
   assert.equal(monitorStarted, false);
 });
@@ -56,15 +45,10 @@ test('runtime manager stop is idempotent', async () => {
   let stopCalls = 0;
   const registry = new RuntimeRegistry();
   registry.register('fake', createFakeRuntimeAdapter());
-
   const manager = new RuntimeManager({
     registry,
-    monitorFactory: () => ({
-      async start() {},
-      async stop() { stopCalls += 1; },
-    }),
+    monitorFactory: () => ({ async start() {}, async stop() { stopCalls += 1; } }),
   });
-
   await manager.start();
   await manager.stop();
   await manager.stop();
@@ -74,9 +58,7 @@ test('runtime manager stop is idempotent', async () => {
 test('runtime manager exposes installed runtime status snapshots', async () => {
   const registry = new RuntimeRegistry();
   registry.register('fake', createFakeRuntimeAdapter({ healthScript: ['DEGRADED'] }));
-
   const manager = new RuntimeManager({ registry, monitorFactory: () => ({ async start() {}, async stop() {} }) });
   await manager.start();
-
   assert.deepEqual(manager.listStatus(), [{ key: 'fake', runtimeId: 'fake', health: 'DEGRADED' }]);
 });
