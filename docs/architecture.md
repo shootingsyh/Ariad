@@ -9,7 +9,19 @@ Shared vocabulary: Workflow, Task, Run, Tool Invocation, Resource Lease, Inciden
 Owns semantic task flow and counters. `devCycle` changes only on Tester/Reviewer NOT_PASS. `strategyEpoch` changes only after Project Debugger returns WRONG_IMPLEMENTATION_APPROACH.
 
 ### 2. Execution
-A RoleExecutor contract. v1 uses ScriptedFakeExecutor. Future implementations may use OpenClaw/OpenCode/etc.
+Execution depends on an abstract runtime contract rather than concrete OpenClaw/OpenCode/local implementations.
+
+Ariad Core knows only normalized lifecycle operations:
+
+```text
+start -> poll -> completed/failed
+resume -> poll -> completed/failed
+cancel
+```
+
+Concrete runtimes live under `src/adapters/` and should normally require one adapter file per runtime. `RuntimeRegistry` maps a logical runtime key to a validated adapter so Workflow Core never imports runtime-specific code.
+
+See `docs/runtime-adapters.md`.
 
 ### 3. Context & Memory
 Not implemented in v1. Durable state will eventually be independent from chat/session context.
@@ -38,6 +50,28 @@ Reliability control plane
 ```
 
 Workflow owns desired business state. Reliability owns execution health. Neither directly mutates the other's counters/state.
+
+## Runtime adapter boundary
+
+```text
+Workflow / Coordinator
+        |
+        v
+logical runtime key
+        |
+        v
+RuntimeRegistry
+        |
+        v
+RuntimeAdapter contract
+        |
+        +--> OpenClaw adapter
+        +--> OpenCode adapter
+        +--> local CLI adapter
+        +--> fake adapter
+```
+
+Runtime adapters translate only execution mechanics. They do not own workflow transitions, semantic retry counters, reliability policy, resource scheduling, context policy, or source-control policy.
 
 ## Project Debugger vs System Debugger
 
