@@ -1,0 +1,46 @@
+'use strict';
+
+class RuntimeAdapterError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RuntimeAdapterError';
+  }
+}
+
+const REQUIRED_METHODS = ['start', 'resume', 'poll', 'cancel'];
+
+function validateRuntimeAdapter(adapter) {
+  if (!adapter || typeof adapter !== 'object') {
+    throw new RuntimeAdapterError('runtime adapter must be an object');
+  }
+  if (typeof adapter.id !== 'string' || adapter.id.trim() === '') {
+    throw new RuntimeAdapterError('runtime adapter requires a stable string id');
+  }
+  for (const method of REQUIRED_METHODS) {
+    if (typeof adapter[method] !== 'function') {
+      throw new RuntimeAdapterError(`runtime adapter ${adapter.id} requires ${method}()`);
+    }
+  }
+  return adapter;
+}
+
+function normalizeRunHandle(runtimeId, runId, externalId, state = 'RUNNING') {
+  if (!runtimeId || !runId || !externalId) {
+    throw new RuntimeAdapterError('run handle requires runtimeId, runId, and externalId');
+  }
+  return { runtimeId, runId, externalId, state };
+}
+
+function normalizeRuntimeResult(value) {
+  if (!value || typeof value !== 'object' || typeof value.state !== 'string') {
+    throw new RuntimeAdapterError('runtime result requires a state');
+  }
+  return value;
+}
+
+module.exports = {
+  RuntimeAdapterError,
+  validateRuntimeAdapter,
+  normalizeRunHandle,
+  normalizeRuntimeResult,
+};
