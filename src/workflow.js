@@ -40,7 +40,6 @@ export class WorkflowEngine {
     };
     const history = [];
     let pendingDiagnosis = null;
-    let pendingGuidance = null;
 
     while (true) {
       if (state.status === 'AWAITING_SOURCE_CONTROL') {
@@ -75,7 +74,6 @@ export class WorkflowEngine {
         devCycle: state.devCycle,
       };
       if (role === 'pm' && pendingDiagnosis) context.diagnosis = pendingDiagnosis;
-      if (role === 'developer' && pendingGuidance) context.guidance = pendingGuidance;
 
       let result = await this.runRoleWithSystemRetry(role, context, history);
       if (result.recoveryExhausted) {
@@ -90,12 +88,6 @@ export class WorkflowEngine {
         pendingDiagnosis = transition.effect.diagnosis;
       } else if (role === 'pm') {
         pendingDiagnosis = null;
-      }
-
-      if (transition.effect?.type === 'APPLY_STRATEGY_GUIDANCE') {
-        pendingGuidance = transition.effect.guidance;
-      } else if (role === 'developer') {
-        pendingGuidance = null;
       }
     }
   }
