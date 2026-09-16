@@ -1,6 +1,4 @@
-'use strict';
-
-class RuntimeAdapterError extends Error {
+export class RuntimeAdapterError extends Error {
   constructor(message) {
     super(message);
     this.name = 'RuntimeAdapterError';
@@ -9,7 +7,7 @@ class RuntimeAdapterError extends Error {
 
 const REQUIRED_METHODS = ['install', 'probe', 'start', 'resume', 'poll', 'cancel'];
 
-function validateRuntimeAdapter(adapter) {
+export function validateRuntimeAdapter(adapter) {
   if (!adapter || typeof adapter !== 'object') {
     throw new RuntimeAdapterError('runtime adapter must be an object');
   }
@@ -24,32 +22,24 @@ function validateRuntimeAdapter(adapter) {
   return adapter;
 }
 
-function normalizeRunHandle(runtimeId, runId, externalId, state = 'RUNNING') {
+export function normalizeRunHandle(runtimeId, runId, externalId, state = 'RUNNING') {
   if (!runtimeId || !runId || !externalId) {
     throw new RuntimeAdapterError('run handle requires runtimeId, runId, and externalId');
   }
   return { runtimeId, runId, externalId, state };
 }
 
-function normalizeRuntimeResult(value) {
+export function normalizeRuntimeResult(value) {
   if (!value || typeof value !== 'object' || typeof value.state !== 'string') {
     throw new RuntimeAdapterError('runtime result requires a state');
   }
   return value;
 }
 
-function normalizeHealth(value) {
+export function normalizeHealth(value) {
   const health = typeof value === 'string' ? value : value?.health;
   if (!['HEALTHY', 'DEGRADED', 'UNHEALTHY', 'UNKNOWN'].includes(health)) {
     throw new RuntimeAdapterError('runtime probe requires a normalized health state');
   }
   return typeof value === 'string' ? { health } : { ...value, health };
 }
-
-module.exports = {
-  RuntimeAdapterError,
-  validateRuntimeAdapter,
-  normalizeRunHandle,
-  normalizeRuntimeResult,
-  normalizeHealth,
-};
