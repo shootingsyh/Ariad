@@ -1,11 +1,12 @@
 const TERMINAL_STATES = new Set(['COMPLETED', 'FAILED', 'LOST', 'CANCELLED']);
 
 export class RuntimeExecutor {
-  constructor({ registry, runStore, roleRuntimeMap = {}, maxPolls = 100 }) {
+  constructor({ registry, runStore, checkpointStore = null, roleRuntimeMap = {}, maxPolls = 100 }) {
     if (!registry || typeof registry.get !== 'function') throw new Error('RuntimeExecutor requires a runtime registry');
     if (!runStore || typeof runStore.create !== 'function') throw new Error('RuntimeExecutor requires a run store');
     this.registry = registry;
     this.runStore = runStore;
+    this.checkpointStore = checkpointStore;
     this.roleRuntimeMap = { ...roleRuntimeMap };
     this.maxPolls = maxPolls;
   }
@@ -56,6 +57,37 @@ export class RuntimeExecutor {
     if (TERMINAL_STATES.has(run.state)) throw new Error(`cannot redispatch terminal run ${runId}`);
     try {
       const { adapter, handle } = await this.#dispatch(run, run.role, run.context || {});
+      return await this.#pollToTerminal(run, adapter, handle);
+    } catch (error) {
+      this.runStore.update(run.id, { state: 'FAILED', failure: error?.message || String(error) });
+      return { executionStatus: 'FAILED', failure: error?.message || String(error), runId: run.id };
+    }
+  }
+
+  async resume(runId) {
+    if (!this.checkpointStore || typeof this.checkpointStore.latestSafe !== 'function') {
+      throw new Error('RuntimeExecutor requires checkpointStore to resume');
+    }
+    const run = this.runStore.get(runId);
+    if (run.state === 'COMPLETED' || run.state === 'CANCELLED') throw new Error(`cannot resume terminal run ${runId}`);
+    const checkpoint = this.checkpointStore.latestSafe(runId);
+    if (!checkpoint) throw new Error(`no safe checkpoint for run ${runId}`);
+    const adapter = this.registry.get(run.runtimeKey);
+    if (typeof adapter.resume !== 'function') throw new Error(`runtime ${adapter.id} does not support resume`);
+    try {
+      this.runStore.update(run.id, { state: 'DISPATCHING', failure: null });
+      const handle = await adapter.resume({
+        runId: run.id,
+        role: run.role,
+        task: { id: run.taskId },
+        context: run.context || {},
+        checkpoint,
+      });
+      this.runStore.update(run.id, {
+        state: handle.state || 'RUNNING',
+        externalId: handle.externalId,
+        runtimeId: handle.runtimeId || adapter.id,
+      });
       return await this.#pollToTerminal(run, adapter, handle);
     } catch (error) {
       this.runStore.update(run.id, { state: 'FAILED', failure: error?.message || String(error) });
