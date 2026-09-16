@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import { ResourceManager } from '../src/resources.js';
+test('local model and ComfyUI tool contend on same configured resource',async()=>{const rm=new ResourceManager({gpu_5090:1});const a=await rm.acquire('gpu_5090','run:qwen');let acquired=false;const waiter=rm.acquire('gpu_5090','tool:comfy').then(x=>{acquired=true;return x});await new Promise(r=>setTimeout(r,5));assert.equal(acquired,false);a.release();const b=await waiter;assert.equal(acquired,true);b.release();});
+test('release is idempotent',async()=>{const rm=new ResourceManager({gpu:1});const lease=await rm.acquire('gpu','x');lease.release();lease.release();const second=await rm.acquire('gpu','y');second.release();});
