@@ -1,9 +1,22 @@
+import { TransitionEngine } from './transition-engine.js';
+
+function normalizeLegacyResult(role, result) {
+  if (role === 'pm' && result?.outcome === 'REPLAN_READY') {
+    return { ...result, outcome: 'REPLANNED' };
+  }
+  return result;
+}
+
 export class WorkflowEngine {
   constructor(executor, options = {}) {
     this.executor = executor;
     this.maxSystemRetries = options.maxSystemRetries ?? 2;
     this.maxStrategyEpochs = options.maxStrategyEpochs ?? 3;
     this.finalizeSourceControl = options.finalizeSourceControl ?? (async () => ({ ok: true }));
+    this.transitions = options.transitionEngine ?? new TransitionEngine({
+      maxDevCycles: 3,
+      maxStrategyEpochs: this.maxStrategyEpochs,
+    });
   }
 
   async runRoleWithSystemRetry(role, context, history) {
@@ -18,47 +31,72 @@ export class WorkflowEngine {
   }
 
   async runFeature(featureId) {
-    let devCycle = 1;
-    let strategyEpoch = 1;
+    let state = {
+      taskId: featureId,
+      stage: 'developer',
+      devCycle: 1,
+      strategyEpoch: 1,
+      status: 'RUNNING',
+    };
     const history = [];
+    let pendingDiagnosis = null;
+    let pendingGuidance = null;
 
     while (true) {
-      if (devCycle > 3) {
-        const dbg = await this.runRoleWithSystemRetry('project_debugger', { taskId: featureId, strategyEpoch, devCycle: devCycle - 1 }, history);
-        if (dbg.recoveryExhausted) return { status: 'PAUSED_SYSTEM', devCycle: devCycle - 1, strategyEpoch, history };
-        if (dbg.outcome === 'WRONG_IMPLEMENTATION_APPROACH') {
-          if (strategyEpoch >= this.maxStrategyEpochs) return { status: 'NEEDS_HUMAN', devCycle: devCycle - 1, strategyEpoch, history };
-          strategyEpoch += 1;
-          devCycle = 1;
-          continue;
-        }
-        if (dbg.outcome === 'TASK_TOO_LARGE' || dbg.outcome === 'TASK_CONTRADICTORY') {
-          const pm = await this.runRoleWithSystemRetry('pm', { taskId: featureId, strategyEpoch, devCycle: devCycle - 1, diagnosis: dbg.outcome }, history);
-          if (pm.recoveryExhausted) return { status: 'PAUSED_SYSTEM', devCycle: devCycle - 1, strategyEpoch, history };
-          if (pm.outcome === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', devCycle: devCycle - 1, strategyEpoch, history };
-          return { status: 'WAITING_REPLAN', devCycle: devCycle - 1, strategyEpoch, history };
-        }
-        return { status: 'NEEDS_HUMAN', devCycle: devCycle - 1, strategyEpoch, history };
+      if (state.status === 'AWAITING_SOURCE_CONTROL') {
+        const sc = await this.finalizeSourceControl({
+          taskId: featureId,
+          strategyEpoch: state.strategyEpoch,
+          devCycle: state.devCycle,
+        });
+        history.push({
+          role: 'source_control_step',
+          context: { taskId: featureId, strategyEpoch: state.strategyEpoch, devCycle: state.devCycle },
+          result: structuredClone(sc),
+        });
+        const completed = this.transitions.completeSourceControl(state, sc);
+        state = { ...state, ...completed.patch };
+        continue;
       }
 
-      const dev = await this.runRoleWithSystemRetry('developer', { taskId: featureId, strategyEpoch, devCycle }, history);
-      if (dev.recoveryExhausted) return { status: 'PAUSED_SYSTEM', devCycle, strategyEpoch, history };
-
-      const tester = await this.runRoleWithSystemRetry('tester', { taskId: featureId, strategyEpoch, devCycle }, history);
-      if (tester.recoveryExhausted) return { status: 'PAUSED_SYSTEM', devCycle, strategyEpoch, history };
-      if (tester.outcome === 'NOT_PASS') { devCycle += 1; continue; }
-      if (tester.outcome !== 'PASS') return { status: 'NEEDS_HUMAN', devCycle, strategyEpoch, history };
-
-      const reviewer = await this.runRoleWithSystemRetry('reviewer', { taskId: featureId, strategyEpoch, devCycle }, history);
-      if (reviewer.recoveryExhausted) return { status: 'PAUSED_SYSTEM', devCycle, strategyEpoch, history };
-      if (reviewer.outcome === 'NOT_PASS') { devCycle += 1; continue; }
-      if (reviewer.outcome === 'PASS') {
-        const sc = await this.finalizeSourceControl({ taskId: featureId, strategyEpoch, devCycle });
-        history.push({ role: 'source_control_step', context: { taskId: featureId, strategyEpoch, devCycle }, result: structuredClone(sc) });
-        if (!sc?.ok) return { status: 'PAUSED_SYSTEM', devCycle, strategyEpoch, history };
-        return { status: 'SUCCEEDED', devCycle, strategyEpoch, history };
+      if (state.status !== 'RUNNING') {
+        return {
+          status: state.status,
+          devCycle: state.devCycle,
+          strategyEpoch: state.strategyEpoch,
+          history,
+        };
       }
-      return { status: 'NEEDS_HUMAN', devCycle, strategyEpoch, history };
+
+      const role = state.stage;
+      const context = {
+        taskId: featureId,
+        strategyEpoch: state.strategyEpoch,
+        devCycle: state.devCycle,
+      };
+      if (role === 'pm' && pendingDiagnosis) context.diagnosis = pendingDiagnosis;
+      if (role === 'developer' && pendingGuidance) context.guidance = pendingGuidance;
+
+      let result = await this.runRoleWithSystemRetry(role, context, history);
+      if (result.recoveryExhausted) {
+        result = { ...result, executionStatus: 'FAILED' };
+      }
+      result = normalizeLegacyResult(role, result);
+
+      const transition = this.transitions.next(state, role, result);
+      state = { ...state, ...transition.patch };
+
+      if (transition.effect?.type === 'PM_REPLAN_REQUIRED') {
+        pendingDiagnosis = transition.effect.diagnosis;
+      } else if (role === 'pm') {
+        pendingDiagnosis = null;
+      }
+
+      if (transition.effect?.type === 'APPLY_STRATEGY_GUIDANCE') {
+        pendingGuidance = transition.effect.guidance;
+      } else if (role === 'developer') {
+        pendingGuidance = null;
+      }
     }
   }
 }
