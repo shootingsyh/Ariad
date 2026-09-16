@@ -1,6 +1,4 @@
-'use strict';
-
-class RuntimeMonitor {
+export class RuntimeMonitor {
   constructor({ adapter, intervalMs = 1000, emit = () => {} }) {
     if (!adapter || typeof adapter.probe !== 'function') {
       throw new Error('RuntimeMonitor requires an adapter with probe()');
@@ -66,5 +64,3 @@ class RuntimeMonitor {
     }
   }
 }
-
-module.exports = { RuntimeMonitor };
