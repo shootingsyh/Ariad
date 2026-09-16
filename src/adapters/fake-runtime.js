@@ -38,11 +38,16 @@ function createFakeRuntimeAdapter(options = {}) {
 
     async install(context = {}) {
       calls.push({ operation: 'install', runtimeKey: context.runtimeKey || null });
+      if (options.installError) throw options.installError;
+      if (typeof options.onInstall === 'function') {
+        await options.onInstall(context);
+      }
+      const changed = !installed;
       if (!installed) {
         installed = true;
         installCount += 1;
       }
-      return { state: 'INSTALLED', changed: installCount === 1 };
+      return { state: 'INSTALLED', changed };
     },
 
     async probe() {
