@@ -16,18 +16,36 @@ This repository contains the first fake-executor implementation used to harden t
 - append-only event store
 - project initialization distinct from plugin installation
 - source-control finalization controlled by the coordinator, not the Reviewer
+- optional OpenAI-compatible live LLM semantic eval lane
 
 ## TDD
 
 The project is developed test-first. Behavioral changes should start with a failing test, then the minimum implementation to make it pass, followed by refactoring while keeping the suite green.
 
-Run:
+Run deterministic tests:
 
 ```bash
 npm test
 ```
 
-The current suite covers workflow convergence, failure isolation, source-control boundaries, resource conflicts, fake-agent behavior, runtime-adapter conformance, runtime registry behavior, and reliability recovery behavior.
+The current suite covers workflow convergence, failure isolation, source-control boundaries, resource conflicts, fake-agent behavior, runtime-adapter conformance, runtime registry behavior, LLM contract validation, and reliability recovery behavior.
+
+## Live LLM evals
+
+Ariad keeps real-model evaluation separate from required deterministic CI. The live lane uses an OpenAI-compatible chat-completions endpoint and currently exercises PM decomposition, Reviewer semantic rejection, and Project Debugger classification.
+
+Configure any compatible endpoint:
+
+```bash
+export ARIAD_LLM_BASE_URL=https://router.huggingface.co/v1
+export ARIAD_LLM_API_KEY=<token>
+export ARIAD_LLM_MODEL=<chat-completion-model>
+npm run test:llm
+```
+
+For local testing, the same variables can point at llama.cpp, vLLM, or another OpenAI-compatible server. If `ARIAD_LLM_BASE_URL` or `ARIAD_LLM_MODEL` is absent, live tests skip instead of failing normal CI.
+
+Hugging Face Inference Providers exposes `GET /v1/models`; use that to choose a currently served chat model rather than hard-coding provider availability. Lightweight instruction models are useful for testing Ariad's role contracts because the evals assert structured properties, not exact prose.
 
 ## Runtime adapters
 
