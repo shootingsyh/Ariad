@@ -35,14 +35,15 @@ export class SQLiteLeaseStore {
     `);
   }
 
-  acquire({ resource, owner, ttlMs }) {
+  acquire({ resource, owner, ttlMs, capacity = 1 }) {
     if (!resource || !owner) throw new Error('resource and owner are required');
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('ttlMs must be positive');
+    if (!Number.isInteger(capacity) || capacity <= 0) throw new Error('capacity must be a positive integer');
     this.reapExpired();
-    const active = this.db.prepare(
-      "SELECT * FROM resource_leases WHERE resource = ? AND state = 'ACTIVE' LIMIT 1"
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM resource_leases WHERE resource = ? AND state = 'ACTIVE'"
     ).get(resource);
-    if (active) return null;
+    if (Number(row.count) >= capacity) return null;
     const now = this.now();
     const info = this.db.prepare(`
       INSERT INTO resource_leases (resource, owner, state, acquired_at, expires_at, released_at)
