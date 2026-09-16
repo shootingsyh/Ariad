@@ -1,12 +1,10 @@
-'use strict';
-
-const {
+import {
   normalizeRunHandle,
   normalizeRuntimeResult,
   normalizeHealth,
-} = require('../runtime-adapter');
+} from '../runtime-adapter.js';
 
-function createFakeRuntimeAdapter(options = {}) {
+export function createFakeRuntimeAdapter(options = {}) {
   const script = Array.isArray(options.script) ? [...options.script] : [];
   const healthScript = Array.isArray(options.healthScript) ? [...options.healthScript] : [];
   const probeErrors = Array.isArray(options.probeErrors) ? [...options.probeErrors] : [];
@@ -17,9 +15,7 @@ function createFakeRuntimeAdapter(options = {}) {
   let currentHealth = options.initialHealth || 'HEALTHY';
 
   function nextResult() {
-    const item = script.length > 0
-      ? script.shift()
-      : { outcome: 'PASS', result: null };
+    const item = script.length > 0 ? script.shift() : { outcome: 'PASS', result: null };
     return normalizeRuntimeResult({
       state: 'COMPLETED',
       outcome: item.outcome,
@@ -27,21 +23,16 @@ function createFakeRuntimeAdapter(options = {}) {
     });
   }
 
-  const adapter = {
+  return {
     id: 'fake',
     config: options.config || {},
     calls,
-
-    get installCount() {
-      return installCount;
-    },
+    get installCount() { return installCount; },
 
     async install(context = {}) {
       calls.push({ operation: 'install', runtimeKey: context.runtimeKey || null });
       if (options.installError) throw options.installError;
-      if (typeof options.onInstall === 'function') {
-        await options.onInstall(context);
-      }
+      if (typeof options.onInstall === 'function') await options.onInstall(context);
       const changed = !installed;
       if (!installed) {
         installed = true;
@@ -52,12 +43,8 @@ function createFakeRuntimeAdapter(options = {}) {
 
     async probe() {
       calls.push({ operation: 'probe' });
-      if (probeErrors.length > 0) {
-        throw probeErrors.shift();
-      }
-      if (healthScript.length > 0) {
-        currentHealth = healthScript.shift();
-      }
+      if (probeErrors.length > 0) throw probeErrors.shift();
+      if (healthScript.length > 0) currentHealth = healthScript.shift();
       return normalizeHealth({ health: currentHealth });
     },
 
@@ -69,11 +56,7 @@ function createFakeRuntimeAdapter(options = {}) {
     },
 
     async resume(request) {
-      calls.push({
-        operation: 'resume',
-        runId: request.runId,
-        checkpoint: request.checkpoint,
-      });
+      calls.push({ operation: 'resume', runId: request.runId, checkpoint: request.checkpoint });
       const handle = normalizeRunHandle('fake', request.runId, `fake:${request.runId}`);
       state.set(handle.externalId, { status: 'RUNNING' });
       return handle;
@@ -81,9 +64,7 @@ function createFakeRuntimeAdapter(options = {}) {
 
     async poll(handle) {
       const current = state.get(handle.externalId);
-      if (!current || current.status === 'CANCELLED') {
-        return { state: current?.status || 'LOST' };
-      }
+      if (!current || current.status === 'CANCELLED') return { state: current?.status || 'LOST' };
       const result = nextResult();
       state.set(handle.externalId, { status: result.state, result });
       return result;
@@ -95,8 +76,4 @@ function createFakeRuntimeAdapter(options = {}) {
       return { state: 'CANCELLED' };
     },
   };
-
-  return adapter;
 }
-
-module.exports = { createFakeRuntimeAdapter };
