@@ -10,6 +10,8 @@ import { RuntimeRegistry } from '../src/runtime-registry.js';
 import { RuntimeExecutor } from '../src/runtime-executor.js';
 import { SQLiteRunStore } from '../src/sqlite-run-store.js';
 import { SQLiteWorkflowStateStore } from '../src/sqlite-workflow-state-store.js';
+import { TransitionEngine } from '../src/transition-engine.js';
+import { WorkflowTransitionService } from '../src/workflow-transition-service.js';
 import { ScriptedLLM } from '../src/llm/scripted.js';
 import { LLMWorkflowRoleExecutor } from '../src/llm/workflow-role-executor.js';
 import { LLMRuntimeAdapter } from '../src/adapters/llm-runtime.js';
@@ -30,6 +32,8 @@ function requestFor(role, context) {
 function makeStack({ dbFile, llm, taskId }) {
   const runStore = new SQLiteRunStore(dbFile);
   const workflowStore = new SQLiteWorkflowStateStore(dbFile);
+  const transitionEngine = new TransitionEngine();
+  const transitions = new WorkflowTransitionService({ store: workflowStore, engine: transitionEngine });
   const roleExecutor = new LLMWorkflowRoleExecutor(llm);
   const runtime = new LLMRuntimeAdapter({ roleExecutor });
   const registry = new RuntimeRegistry();
@@ -50,22 +54,9 @@ function makeStack({ dbFile, llm, taskId }) {
   });
   const coordinator = new Coordinator({
     scheduler,
-    applyExecutionResult: async (work, result) => {
-      const current = workflowStore.get(taskId);
-      if (result.executionStatus !== 'COMPLETED') return workflowStore.update(taskId, current.version, { status: 'PAUSED_SYSTEM' });
-      if (work.role === 'developer') return workflowStore.update(taskId, current.version, { stage: 'tester' });
-      if (work.role === 'tester') {
-        if (result.outcome === 'PASS') return workflowStore.update(taskId, current.version, { stage: 'reviewer' });
-        return workflowStore.update(taskId, current.version, { stage: 'developer', devCycle: current.devCycle + 1 });
-      }
-      if (work.role === 'reviewer') {
-        if (result.outcome === 'PASS') return workflowStore.update(taskId, current.version, { status: 'SUCCEEDED' });
-        return workflowStore.update(taskId, current.version, { stage: 'developer', devCycle: current.devCycle + 1 });
-      }
-      throw new Error(`unexpected role ${work.role}`);
-    },
+    applyExecutionResult: (work, result) => transitions.apply(work, result),
   });
-  return { runStore, workflowStore, coordinator };
+  return { runStore, workflowStore, transitions, coordinator };
 }
 
 function workFromState(taskId, state) {
@@ -80,6 +71,11 @@ function workFromState(taskId, state) {
       devCycle: state.devCycle,
     },
   };
+}
+
+function finalizeIfRequested(stack, taskId, outcome) {
+  if (outcome.transition?.effect?.type !== 'FINALIZE_SOURCE_CONTROL') return null;
+  return stack.transitions.completeSourceControl(taskId, { ok: true });
 }
 
 test('full Ariad execution survives restart between LLM roles using SQLite durable truth', async () => {
@@ -138,6 +134,8 @@ test('full Ariad execution survives restart between LLM roles using SQLite durab
     const reviewerState = phase2.workflowStore.get(taskId);
     const [reviewerOutcome] = await phase2.coordinator.tick([workFromState(taskId, reviewerState)]);
     assert.equal(reviewerOutcome.status, 'APPLIED');
+    assert.equal(phase2.workflowStore.get(taskId).status, 'AWAITING_SOURCE_CONTROL');
+    finalizeIfRequested(phase2, taskId, reviewerOutcome);
     assert.equal(phase2.workflowStore.get(taskId).status, 'SUCCEEDED');
 
     const runs = phase2.runStore.list();
@@ -169,9 +167,9 @@ test('reviewer rejection advances dev cycle durably and restart resumes develope
     phase1.workflowStore.create(taskId);
 
     for (const expectedRole of ['developer', 'tester', 'reviewer']) {
-      const state = phase1.workflowStore.get(taskId);
-      assert.equal(state.stage, expectedRole);
-      const [outcome] = await phase1.coordinator.tick([workFromState(taskId, state)]);
+      const current = phase1.workflowStore.get(taskId);
+      assert.equal(current.stage, expectedRole);
+      const [outcome] = await phase1.coordinator.tick([workFromState(taskId, current)]);
       assert.equal(outcome.status, 'APPLIED');
     }
 
@@ -198,13 +196,15 @@ test('reviewer rejection advances dev cycle durably and restart resumes develope
       { stage: 'developer', devCycle: 2, strategyEpoch: 1 },
     );
 
+    let lastOutcome;
     for (const expectedRole of ['developer', 'tester', 'reviewer']) {
-      const state = phase2.workflowStore.get(taskId);
-      assert.equal(state.stage, expectedRole);
-      assert.equal(state.devCycle, 2);
-      const [outcome] = await phase2.coordinator.tick([workFromState(taskId, state)]);
-      assert.equal(outcome.status, 'APPLIED');
+      const current = phase2.workflowStore.get(taskId);
+      assert.equal(current.stage, expectedRole);
+      assert.equal(current.devCycle, 2);
+      [lastOutcome] = await phase2.coordinator.tick([workFromState(taskId, current)]);
+      assert.equal(lastOutcome.status, 'APPLIED');
     }
+    finalizeIfRequested(phase2, taskId, lastOutcome);
 
     const finished = phase2.workflowStore.get(taskId);
     assert.equal(finished.status, 'SUCCEEDED');
