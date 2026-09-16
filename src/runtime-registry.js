@@ -1,8 +1,6 @@
-'use strict';
+import { validateRuntimeAdapter } from './runtime-adapter.js';
 
-const { validateRuntimeAdapter } = require('./runtime-adapter');
-
-class RuntimeRegistry {
+export class RuntimeRegistry {
   constructor() {
     this.adapters = new Map();
   }
@@ -34,5 +32,3 @@ class RuntimeRegistry {
     return [...this.adapters.entries()].map(([key, adapter]) => ({ key, id: adapter.id }));
   }
 }
-
-module.exports = { RuntimeRegistry };
