@@ -63,12 +63,17 @@ export class AriadSupervisor {
   async submitDecision(name: string, decision: string) {
     const project = this.manager.setDesiredState(name, 'RUNNING');
     const current = this.controllers.get(project.id);
+    const snapshot = current?.status?.() as { active?: boolean } | undefined;
+    if (snapshot?.active) throw new Error(`project ${project.id} is still running and cannot accept a human decision yet`);
+
+    const resumer = new HumanDecisionResumer({ project });
+    if (!resumer.pendingRequest()) throw new Error(`project ${project.id} is not waiting for a human decision`);
+    const resumed = resumer.submit(decision);
+
     if (current) {
       await current.stop();
       this.controllers.delete(project.id);
     }
-
-    const resumed = new HumanDecisionResumer({ project }).submit(decision);
     const nextProject = this.manager.status(project.id);
     const next = this.createController(nextProject);
     this.controllers.set(project.id, next);
