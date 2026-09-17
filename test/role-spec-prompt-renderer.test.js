@@ -32,11 +32,16 @@ test('PromptRenderer combines role semantics with work context without substrate
   assert.deepEqual(JSON.parse(request.messages[1].content), context);
 });
 
-test('Tech Lead prompt defines horizontal vertical architecture, contracts, and atomic Task Graph leaves', () => {
+test('Tech Lead prompt defines living architecture driven by vertical slices and executable contracts', () => {
   const system = new PromptRenderer().render('tech_lead', { requirement: 'build feature' }).messages[0].content;
   assert.match(system, /horizontal shared infrastructure/i);
   assert.match(system, /vertical user-facing product features/i);
-  assert.match(system, /explicit contracts/i);
+  assert.match(system, /Design globally but implement vertically/i);
+  assert.match(system, /PROVISIONAL/);
+  assert.match(system, /concrete vertical slice/i);
+  assert.match(system, /implementationRequired/);
+  assert.match(system, /skeletonTest/);
+  assert.match(system, /interface-first/i);
   assert.match(system, /Recursively decompose/i);
   assert.match(system, /Developer\/Tester\/Reviewer are workflow stages, not Tech Lead tasks/);
   assert.match(system, /acceptance criteria/i);
@@ -47,6 +52,7 @@ test('PM prompt owns product intent and customer satisfaction review rather than
   assert.match(system, /user intent and product scope/i);
   assert.match(system, /complete user-visible outcome/i);
   assert.match(system, /every task in the graph/i);
+  assert.match(system, /speculative future needs/i);
   assert.match(system, /PLAN_REVISION_REQUIRED/);
   assert.doesNotMatch(system, /Developer\/Tester\/Reviewer are workflow stages, not PM tasks/);
 });
