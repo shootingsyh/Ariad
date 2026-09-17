@@ -108,7 +108,7 @@ try {
   const modelDir = join(projectRoot, '.ariad', 'project');
   const dbPath = join(projectRoot, '.ariad', 'state.db');
   assert.equal(existsSync(graphPath), true, 'approved task graph must be durable');
-  for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'technical-direction.json', 'decomposition.json', 'current-state-review.json', 'plan-review.json', 'task-graph.json']) {
+  for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'dependencies.json', 'vertical-slices.json', 'technical-direction.json', 'decomposition.json', 'current-state-review.json', 'plan-review.json', 'task-graph.json']) {
     assert.equal(existsSync(join(modelDir, name)), true, `${name} must be durable`);
   }
   const currentState = JSON.parse(readFileSync(join(modelDir, 'current-state.json'), 'utf8'));
@@ -117,31 +117,41 @@ try {
   assert.equal(JSON.parse(readFileSync(join(modelDir, 'current-state-review.json'), 'utf8')).outcome, 'CURRENT_STATE_ACKNOWLEDGED');
   assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
 
+  const contracts = JSON.parse(readFileSync(join(modelDir, 'contracts.json'), 'utf8'));
+  assert.equal(contracts[0].interfaceTaskId, 'T_INTERFACE');
+  assert.equal(contracts[0].contractTestTaskId, 'T_CONTRACT_TEST');
+  assert.equal(contracts[0].fakeTaskId, 'T_FAKE');
+  const verticalSlices = JSON.parse(readFileSync(join(modelDir, 'vertical-slices.json'), 'utf8'));
+  assert.equal(verticalSlices[0].skeletonTaskId, 'T1');
+
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
   assert.equal(graph.approvedBy, 'pm');
-  assert.deepEqual(graph.tasks.map((task) => task.id), ['T1']);
-  assert.equal(graph.tasks[0].atomic, true);
-  assert.equal(graph.tasks[0].componentId, 'health-feature');
+  assert.deepEqual(graph.tasks.map((task) => task.id), ['T_INTERFACE', 'T_CONTRACT_TEST', 'T_FAKE', 'T1']);
+  assert.deepEqual(graph.tasks.map((task) => task.kind), ['CONTRACT_INTERFACE', 'CONTRACT_TEST', 'FAKE_PROVIDER', 'VERTICAL_SKELETON']);
+  assert.equal(graph.tasks.every((task) => task.atomic === true), true);
 
   const db = new DatabaseSync(dbPath, { readOnly: true });
-  const state = db.prepare('SELECT stage, dev_cycle, strategy_epoch, status FROM workflow_state WHERE task_id = ?').get('T1');
-  assert.equal(state.status, 'SUCCEEDED');
-  assert.equal(state.dev_cycle, 2);
-  assert.equal(state.strategy_epoch, 1);
+  const states = db.prepare('SELECT task_id, stage, dev_cycle, strategy_epoch, status FROM workflow_state ORDER BY task_id').all();
+  assert.equal(states.length, 4);
+  assert.equal(states.every((state) => state.status === 'SUCCEEDED'), true);
+  const skeletonState = states.find((state) => state.task_id === 'T1');
+  assert.equal(skeletonState.dev_cycle, 2);
+  assert.equal(skeletonState.strategy_epoch, 1);
+  for (const taskId of ['T_INTERFACE', 'T_CONTRACT_TEST', 'T_FAKE']) {
+    assert.equal(states.find((state) => state.task_id === taskId).dev_cycle, 1);
+  }
   const runs = db.prepare('SELECT task_id, role, attempt, state, result_json FROM runs ORDER BY seq').all();
   db.close();
-  assert.deepEqual(runs.map((run) => `${run.task_id}:${run.role}:${run.state}`), [
+  assert.deepEqual(runs.slice(0, 4).map((run) => `${run.task_id}:${run.role}:${run.state}`), [
     '__project_discovery__:tech_lead:COMPLETED',
     '__project_current_state_review__:pm:COMPLETED',
     '__project_plan__:tech_lead:COMPLETED',
     '__project_plan_review__:pm:COMPLETED',
-    'T1:developer:COMPLETED',
-    'T1:tester:COMPLETED',
-    'T1:reviewer:COMPLETED',
-    'T1:developer:COMPLETED',
-    'T1:tester:COMPLETED',
-    'T1:reviewer:COMPLETED',
   ]);
+  for (const taskId of ['T_INTERFACE', 'T_CONTRACT_TEST', 'T_FAKE']) {
+    assert.deepEqual(runs.filter((run) => run.task_id === taskId).map((run) => run.role), ['developer', 'tester', 'reviewer']);
+  }
+  assert.deepEqual(runs.filter((run) => run.task_id === 'T1').map((run) => run.role), ['developer', 'tester', 'reviewer', 'developer', 'tester', 'reviewer']);
   for (const run of runs.filter((candidate) => candidate.task_id === 'T1')) {
     const result = JSON.parse(run.result_json);
     assert.equal(result?.result?.toolExecuted, true, `${run.role} attempt ${run.attempt} must complete only after an OpenClaw tool result`);
@@ -166,7 +176,7 @@ try {
   assert.match(git(workspace, ['log', '-1', '--pretty=%s']), /^Ariad: T1 \(strategy 1, cycle 2\)$/);
   assert.equal(git(workspace, ['remote']), '', 'CI fixture intentionally has no remote, proving no push was attempted');
 
-  console.log('ARIAD_OPENCLAW_TL_PM_PROJECT_MODEL_E2E_OK');
+  console.log('ARIAD_OPENCLAW_TL_TASK_MATERIALIZATION_E2E_OK');
 } finally {
   gateway.kill('SIGTERM');
   provider.kill('SIGTERM');
