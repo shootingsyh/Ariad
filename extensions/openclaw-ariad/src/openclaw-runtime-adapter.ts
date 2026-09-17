@@ -69,12 +69,15 @@ export class OpenClawRuntimeAdapter {
   }
 
   async start(input: { runId: string; role: string; context?: Record<string, unknown> }) {
+    const context = input.context ?? {};
+    const workspace = typeof context.workspace === 'string' && context.workspace.trim() ? context.workspace : null;
     const requestedSessionKey = sessionKey(this.agentId, input.runId);
     const launched = await this.subagent.run({
       sessionKey: requestedSessionKey,
-      message: this.renderMessage(input.role, input.context ?? {}),
+      message: this.renderMessage(input.role, context),
       promptMode: 'minimal',
       deliver: false,
+      ...(workspace ? { cwd: workspace } : {}),
       ...(this.provider ? { provider: this.provider } : {}),
       ...(this.model ? { model: this.model } : {}),
     });
