@@ -12,6 +12,35 @@ import { TransitionEngine } from '../src/transition-engine.js';
 import { WorkflowTransitionService } from '../src/workflow-transition-service.js';
 import { recoverCompletedRunResults } from '../src/run-result-recovery.js';
 
+function makeStores() {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-run-result-'));
+  const dbFile = join(dir, 'state.db');
+  const runs = new SQLiteRunStore(dbFile);
+  const workflow = new SQLiteWorkflowStateStore(dbFile);
+  const transitions = new WorkflowTransitionService({ store: workflow, engine: new TransitionEngine() });
+  return { dir, dbFile, runs, workflow, transitions };
+}
+
+function completedRun(runs, { taskId, role, devCycle = 1, strategyEpoch = 1, outcome = 'PASS', result = null }) {
+  const run = runs.create({
+    taskId,
+    role,
+    runtimeKey: 'mock',
+    runtimeId: 'mock',
+    context: { taskId, devCycle, strategyEpoch },
+  });
+  return runs.update(run.id, {
+    state: 'COMPLETED',
+    result: { outcome, result },
+  });
+}
+
+function cleanup({ dir, runs, workflow }) {
+  try { runs?.close(); } catch {}
+  try { workflow?.close(); } catch {}
+  rmSync(dir, { recursive: true, force: true });
+}
+
 test('completed Run survives crash before workflow transition and is applied exactly once by durable cursor', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-run-result-'));
   const dbFile = join(dir, 'state.db');
@@ -53,5 +82,83 @@ test('completed Run survives crash before workflow transition and is applied exa
     try { runs?.close(); } catch {}
     try { workflow?.close(); } catch {}
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('completed Run from an older business cycle is ignored', async () => {
+  const ctx = makeStores();
+  try {
+    ctx.workflow.create('T-old', { stage: 'developer', devCycle: 2, strategyEpoch: 1 });
+    completedRun(ctx.runs, {
+      taskId: 'T-old',
+      role: 'developer',
+      devCycle: 1,
+      strategyEpoch: 1,
+      outcome: 'IMPLEMENTATION_READY',
+    });
+
+    const before = ctx.workflow.get('T-old');
+    const recovered = await recoverCompletedRunResults({
+      runStore: ctx.runs,
+      stateStore: ctx.workflow,
+      transitionService: ctx.transitions,
+    });
+
+    assert.equal(recovered.length, 0);
+    assert.deepEqual(ctx.workflow.get('T-old'), before);
+  } finally {
+    cleanup(ctx);
+  }
+});
+
+test('completed Run for a previous stage is ignored after transition already landed', async () => {
+  const ctx = makeStores();
+  try {
+    ctx.workflow.create('T-stage', { stage: 'tester', devCycle: 1, strategyEpoch: 1 });
+    completedRun(ctx.runs, {
+      taskId: 'T-stage',
+      role: 'developer',
+      devCycle: 1,
+      strategyEpoch: 1,
+      outcome: 'IMPLEMENTATION_READY',
+    });
+
+    const before = ctx.workflow.get('T-stage');
+    const recovered = await recoverCompletedRunResults({
+      runStore: ctx.runs,
+      stateStore: ctx.workflow,
+      transitionService: ctx.transitions,
+    });
+
+    assert.equal(recovered.length, 0);
+    assert.deepEqual(ctx.workflow.get('T-stage'), before);
+  } finally {
+    cleanup(ctx);
+  }
+});
+
+test('completed Run from an older strategy epoch is ignored', async () => {
+  const ctx = makeStores();
+  try {
+    ctx.workflow.create('T-strategy', { stage: 'developer', devCycle: 1, strategyEpoch: 2 });
+    completedRun(ctx.runs, {
+      taskId: 'T-strategy',
+      role: 'developer',
+      devCycle: 1,
+      strategyEpoch: 1,
+      outcome: 'IMPLEMENTATION_READY',
+    });
+
+    const before = ctx.workflow.get('T-strategy');
+    const recovered = await recoverCompletedRunResults({
+      runStore: ctx.runs,
+      stateStore: ctx.workflow,
+      transitionService: ctx.transitions,
+    });
+
+    assert.equal(recovered.length, 0);
+    assert.deepEqual(ctx.workflow.get('T-strategy'), before);
+  } finally {
+    cleanup(ctx);
   }
 });
