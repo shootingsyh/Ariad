@@ -12,6 +12,7 @@ import { SQLiteWorkflowStateStore } from '../../../src/sqlite-workflow-state-sto
 import { TransitionEngine } from '../../../src/transition-engine.js';
 import { WorkflowTransitionService } from '../../../src/workflow-transition-service.js';
 import { EffectExecutor } from '../../../src/effect-executor.js';
+import { validateProjectModel as validateLivingProjectModel } from '../../../src/project-model-validator.js';
 import { ProjectAgentNotifier } from './project-agent-notifier.js';
 
 const ROLE_RUNTIME_MAP = Object.freeze({
@@ -193,6 +194,8 @@ export class AriadProjectController {
     writeJson(join(this.projectModelDir, 'current-state.json'), model.currentState);
     writeJson(join(this.projectModelDir, 'architecture.json'), model.architecture);
     writeJson(join(this.projectModelDir, 'contracts.json'), model.contracts);
+    writeJson(join(this.projectModelDir, 'dependencies.json'), model.dependencies);
+    writeJson(join(this.projectModelDir, 'vertical-slices.json'), model.verticalSlices);
     writeJson(join(this.projectModelDir, 'technical-direction.json'), model.technicalDirection);
     writeJson(join(this.projectModelDir, 'decomposition.json'), model.decomposition);
     writeJson(join(this.projectModelDir, 'project-model.json'), model);
@@ -203,11 +206,11 @@ export class AriadProjectController {
     if (existsSync(fullPath)) return readJson(fullPath);
     const paths = {
       currentState: join(this.projectModelDir, 'current-state.json'), architecture: join(this.projectModelDir, 'architecture.json'),
-      contracts: join(this.projectModelDir, 'contracts.json'), technicalDirection: join(this.projectModelDir, 'technical-direction.json'),
+      contracts: join(this.projectModelDir, 'contracts.json'), dependencies: join(this.projectModelDir, 'dependencies.json'), verticalSlices: join(this.projectModelDir, 'vertical-slices.json'), technicalDirection: join(this.projectModelDir, 'technical-direction.json'),
       decomposition: join(this.projectModelDir, 'decomposition.json'),
     };
     if (!Object.values(paths).every(existsSync)) return null;
-    return { currentState: readJson(paths.currentState), architecture: readJson(paths.architecture), contracts: readJson(paths.contracts), technicalDirection: readJson(paths.technicalDirection), decomposition: readJson(paths.decomposition), tasks: existsSync(this.projectGraphPath) ? readJson(this.projectGraphPath).tasks : [] };
+    return { currentState: readJson(paths.currentState), architecture: readJson(paths.architecture), contracts: readJson(paths.contracts), dependencies: readJson(paths.dependencies), verticalSlices: readJson(paths.verticalSlices), technicalDirection: readJson(paths.technicalDirection), decomposition: readJson(paths.decomposition), tasks: existsSync(this.projectGraphPath) ? readJson(this.projectGraphPath).tasks : [] };
   }
 
   async #notifyNeedsHuman(sourceRole, phase, result, projectModel = null) {
@@ -225,7 +228,8 @@ export class AriadProjectController {
     if (result.executionStatus !== 'COMPLETED') throw new Error(`Tech Lead failed: ${result.failure ?? 'unknown failure'}`);
     if (result.outcome === 'NEEDS_HUMAN') return { needsHuman: true, result };
     if (!['PLANNED', 'REPLANNED'].includes(result.outcome)) throw new Error(`Tech Lead returned unexpected outcome: ${result.outcome}`);
-    const model = validateProjectModel(result.result?.projectModel, { requireTasks });
+    validateProjectModel(result.result?.projectModel, { requireTasks });
+    const model = validateLivingProjectModel(result.result?.projectModel, { requireTasks });
     this.#persistProjectModel(model);
     return { needsHuman: false, model, result };
   }
@@ -346,7 +350,7 @@ export class AriadProjectController {
       for (const task of graph.list()) {
         if (!stateStore.get(task.id)) stateStore.create(task.id, { context: {
           projectId: this.project.id, projectGoal: this.project.goal ?? null, task,
-          architecture: projectModel?.architecture ?? null, contracts: projectModel?.contracts ?? [], technicalDirection: projectModel?.technicalDirection ?? null,
+          architecture: projectModel?.architecture ?? null, contracts: projectModel?.contracts ?? [], dependencies: projectModel?.dependencies ?? [], verticalSlices: projectModel?.verticalSlices ?? [], technicalDirection: projectModel?.technicalDirection ?? null,
         } });
       }
 
