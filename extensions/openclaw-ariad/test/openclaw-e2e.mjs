@@ -114,7 +114,7 @@ try {
   const currentState = JSON.parse(readFileSync(join(modelDir, 'current-state.json'), 'utf8'));
   assert.equal(currentState.existingProject, true);
   assert.match(currentState.summary, /Existing/);
-  assert.equal(JSON.parse(readFileSync(join(modelDir, 'current-state-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
+  assert.equal(JSON.parse(readFileSync(join(modelDir, 'current-state-review.json'), 'utf8')).outcome, 'CURRENT_STATE_ACKNOWLEDGED');
   assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
 
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
