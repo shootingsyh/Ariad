@@ -161,7 +161,16 @@ test('Tech Lead project model rejects a task that is not an atomic decomposition
       const input = adapter.runs.get(handle.externalId);
       if (input.role === 'tech_lead') {
         const model = projectModel();
-        model.decomposition.nodes = model.decomposition.nodes.filter((node) => node.kind !== 'task');
+        const taskNode = model.decomposition.nodes.find((node) => node.id === 'T1-node');
+        taskNode.children = ['nested-child'];
+        model.decomposition.nodes.push({
+          id: 'nested-child',
+          parentId: 'T1-node',
+          kind: 'subcomponent',
+          componentId: 'health-feature',
+          children: [],
+          taskId: null,
+        });
         return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: model } };
       }
       return originalPoll(handle);
