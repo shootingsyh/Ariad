@@ -30,16 +30,29 @@ test('OpenClawRuntimeAdapter translates Ariad Run lifecycle to subagent lifecycl
     renderMessage: (role, context) => `ROLE=${role};TASK=${context.taskId}`,
   });
 
-  const handle = await adapter.start({ runId: 'ariad-run-1', role: 'reviewer', context: { taskId: 'T1' } });
+  const handle = await adapter.start({ runId: 'ariad-run-1', role: 'reviewer', context: { taskId: 'T1', workspace: '/tmp/ariad-workspace' } });
   assert.equal(handle.externalId, 'oc-run-1');
   assert.equal(calls[0][1].sessionKey, 'agent:worker:subagent:ariad-ariad-run-1');
   assert.equal(calls[0][1].provider, 'fake');
   assert.equal(calls[0][1].model, 'role-model');
   assert.equal(calls[0][1].deliver, false);
+  assert.equal(calls[0][1].cwd, '/tmp/ariad-workspace');
   assert.equal(calls[0][1].message, 'ROLE=reviewer;TASK=T1');
 
   const result = await adapter.poll(handle);
   assert.deepEqual(result, { state: 'COMPLETED', outcome: 'PASS', result: { ok: true } });
+});
+
+test('OpenClawRuntimeAdapter omits cwd when no project workspace is supplied', async () => {
+  let inputSeen = null;
+  const adapter = new OpenClawRuntimeAdapter({
+    subagent: {
+      async run(input) { inputSeen = input; return { runId: 'oc-no-cwd' }; },
+      async waitForRun() { return { status: 'timeout' }; },
+    },
+  });
+  await adapter.start({ runId: 'r-no-cwd', role: 'reviewer', context: { taskId: 'probe' } });
+  assert.equal(Object.hasOwn(inputSeen, 'cwd'), false);
 });
 
 test('OpenClawRuntimeAdapter treats observation timeout as nonterminal', async () => {
