@@ -1,5 +1,7 @@
 import { TaskGraph } from './task-graph.js';
 
+const TASK_KINDS = new Set(['CONTRACT_INTERFACE', 'CONTRACT_TEST', 'FAKE_PROVIDER', 'VERTICAL_SKELETON', 'IMPLEMENTATION', 'REFACTOR']);
+
 function requireArray(value, name) {
   if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
   return value;
@@ -35,6 +37,9 @@ export function validateProjectModel(model, { requireTasks = true } = {}) {
     if (!contract.purpose || contract.interface == null || !contract.testBoundary) throw new Error(`contract ${contract.id} requires purpose, interface, and testBoundary`);
     if (!['PROVISIONAL', 'VALIDATED', 'STABLE'].includes(contract.maturity)) throw new Error(`contract ${contract.id} requires maturity PROVISIONAL, VALIDATED, or STABLE`);
     if (!Array.isArray(contract.justifiedByVerticals) || contract.justifiedByVerticals.length === 0) throw new Error(`contract ${contract.id} must be justified by at least one vertical slice`);
+    if (!contract.interfaceTaskId) throw new Error(`contract ${contract.id} requires interfaceTaskId`);
+    if (!contract.contractTestTaskId) throw new Error(`contract ${contract.id} requires contractTestTaskId`);
+    if (contract.fakeTaskId !== null && contract.fakeTaskId !== undefined && typeof contract.fakeTaskId !== 'string') throw new Error(`contract ${contract.id} fakeTaskId must be a task id or null`);
   }
 
   const dependencies = requireArray(model.dependencies, 'projectModel.dependencies');
@@ -68,6 +73,7 @@ export function validateProjectModel(model, { requireTasks = true } = {}) {
   if (requireTasks && tasks.length === 0) throw new Error('Tech Lead returned no executable project tasks');
   const taskIds = new Set(tasks.map((task) => task?.id));
   if (taskIds.size !== tasks.length || taskIds.has(undefined)) throw new Error('Tech Lead task ids must be present and unique');
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
   const decompositionTaskIds = new Set(nodes.filter((node) => node.kind === 'task' && node.children.length === 0).map((node) => node.taskId));
 
   const verticalSlices = requireArray(model.verticalSlices, 'projectModel.verticalSlices');
@@ -85,6 +91,7 @@ export function validateProjectModel(model, { requireTasks = true } = {}) {
     if (requireTasks && slice.taskIds.length === 0) throw new Error(`vertical slice ${slice.id} requires executable tasks`);
     for (const id of slice.taskIds) if (!taskIds.has(id)) throw new Error(`vertical slice ${slice.id} references unknown task ${id}`);
     if (!slice.skeletonTest) throw new Error(`vertical slice ${slice.id} requires a skeletonTest`);
+    if (requireTasks && !slice.skeletonTaskId) throw new Error(`vertical slice ${slice.id} requires skeletonTaskId`);
   }
 
   for (const contract of contracts) {
@@ -92,6 +99,7 @@ export function validateProjectModel(model, { requireTasks = true } = {}) {
   }
 
   for (const task of tasks) {
+    if (!TASK_KINDS.has(task.kind)) throw new Error(`Tech Lead task ${task.id} has invalid kind ${task.kind}`);
     if (typeof task.componentId !== 'string' || !componentIds.has(task.componentId)) throw new Error(`Tech Lead task ${task.id} has invalid componentId`);
     if (!sliceIds.has(task.verticalSliceId)) throw new Error(`Tech Lead task ${task.id} must reference a vertical slice`);
     if (!Array.isArray(task.dependsOn)) throw new Error(`Tech Lead task ${task.id} has invalid dependsOn`);
@@ -99,6 +107,23 @@ export function validateProjectModel(model, { requireTasks = true } = {}) {
     if (typeof task.testStrategy !== 'string' || !task.testStrategy) throw new Error(`Tech Lead task ${task.id} has no test strategy`);
     if (task.atomic !== true) throw new Error(`Tech Lead task ${task.id} must be explicitly atomic`);
     if (!decompositionTaskIds.has(task.id)) throw new Error(`Tech Lead task ${task.id} must be a leaf in decomposition`);
+  }
+
+  const requireTaskKind = (taskId, kind, label) => {
+    if (!taskIds.has(taskId)) throw new Error(`${label} references unknown task ${taskId}`);
+    if (taskById.get(taskId)?.kind !== kind) throw new Error(`${label} must reference a ${kind} task`);
+  };
+
+  if (requireTasks) {
+    for (const contract of contracts) {
+      requireTaskKind(contract.interfaceTaskId, 'CONTRACT_INTERFACE', `contract ${contract.id} interfaceTaskId`);
+      requireTaskKind(contract.contractTestTaskId, 'CONTRACT_TEST', `contract ${contract.id} contractTestTaskId`);
+      if (contract.fakeTaskId) requireTaskKind(contract.fakeTaskId, 'FAKE_PROVIDER', `contract ${contract.id} fakeTaskId`);
+    }
+    for (const slice of verticalSlices) {
+      requireTaskKind(slice.skeletonTaskId, 'VERTICAL_SKELETON', `vertical slice ${slice.id} skeletonTaskId`);
+      if (!slice.taskIds.includes(slice.skeletonTaskId)) throw new Error(`vertical slice ${slice.id} skeletonTaskId must be included in taskIds`);
+    }
   }
 
   if (requireTasks) new TaskGraph(tasks);
