@@ -1,0 +1,22 @@
+{
+  "id": "ariad",
+  "name": "Ariad",
+  "description": "Create and manage isolated Ariad autonomous engineering projects.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "projectsRoot": {
+        "type": "string",
+        "description": "Root directory containing isolated Ariad projects."
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["ariad_project"]
+  }
+}

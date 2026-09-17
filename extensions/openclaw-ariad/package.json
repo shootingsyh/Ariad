@@ -1,0 +1,25 @@
+{
+  "name": "@ariad/openclaw-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist", "runtime", "openclaw.plugin.json", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.17"
+  },
+  "devDependencies": {
+    "openclaw": "^2026.9.4",
+    "typescript": "^5.9.2"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  }
+}
