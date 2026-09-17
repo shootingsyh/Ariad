@@ -18,6 +18,10 @@ function requestCycle(request) {
   return Number(requestText(request).match(/"devCycle":(\d+)/)?.[1] ?? 0);
 }
 
+function requestTaskId(request) {
+  return requestText(request).match(/"taskId":"([^"]+)"/)?.[1] ?? null;
+}
+
 function hasWorkspace(request) {
   return /"workspace":"[^"]+"/.test(requestText(request));
 }
@@ -40,7 +44,7 @@ function isCurrentStateReview(request) {
 
 function isProjectExecutionRole(request) {
   const role = requestRole(request);
-  return /"taskId":"T1"/.test(requestText(request)) && ['developer', 'tester', 'reviewer'].includes(role);
+  return requestTaskId(request) === 'T1' && ['developer', 'tester', 'reviewer'].includes(role);
 }
 
 function toolCallFor(request) {
@@ -48,6 +52,7 @@ function toolCallFor(request) {
   const role = requestRole(request);
   const cycle = requestCycle(request);
   if (isDiscovery(request)) return { name: 'read', arguments: { path: 'README.md' } };
+  if (requestTaskId(request) !== 'T1') return null;
   if (role === 'developer') {
     return {
       name: 'write',
@@ -62,6 +67,53 @@ function toolCallFor(request) {
 }
 
 function fakeProjectModel({ existingProject }) {
+  const tasks = [
+    {
+      id: 'T_INTERFACE',
+      title: 'Implement the health contract interface',
+      kind: 'CONTRACT_INTERFACE',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['The executable interface matches the TL-designed health contract'],
+      testStrategy: 'Load the interface and verify the declared health boundary',
+      atomic: true,
+      dependsOn: [],
+    },
+    {
+      id: 'T_CONTRACT_TEST',
+      title: 'Implement executable health contract tests',
+      kind: 'CONTRACT_TEST',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['The contract suite detects a violating provider'],
+      testStrategy: 'Run the contract suite against deterministic fixtures',
+      atomic: true,
+      dependsOn: ['T_INTERFACE'],
+    },
+    {
+      id: 'T_FAKE',
+      title: 'Implement minimal fake health provider',
+      kind: 'FAKE_PROVIDER',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['The fake provider conforms to health-contract'],
+      testStrategy: 'Run health contract tests against the fake provider',
+      atomic: true,
+      dependsOn: ['T_INTERFACE', 'T_CONTRACT_TEST'],
+    },
+    {
+      id: 'T1',
+      title: 'Implement health walking skeleton',
+      kind: 'VERTICAL_SKELETON',
+      description: 'A deterministic CI task used to exercise the full Ariad workflow.',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['health.txt contains status=healthy after one semantic retry'],
+      testStrategy: 'Tester and Reviewer read health.txt through OpenClaw tools',
+      atomic: true,
+      dependsOn: ['T_FAKE', 'T_CONTRACT_TEST'],
+    },
+  ];
   return {
     currentState: {
       existingProject,
@@ -82,13 +134,16 @@ function fakeProjectModel({ existingProject }) {
       testBoundary: 'Read health.txt and verify status=healthy',
       maturity: 'PROVISIONAL',
       justifiedByVerticals: ['health-slice'],
+      interfaceTaskId: 'T_INTERFACE',
+      contractTestTaskId: 'T_CONTRACT_TEST',
+      fakeTaskId: 'T_FAKE',
     }],
     dependencies: [{
       from: 'runtime',
       to: 'health-feature',
       contractId: 'health-contract',
       implementationRequired: false,
-      rationale: 'The application shell consumes the health contract; the vertical can be exercised before a richer provider exists.',
+      rationale: 'The application shell consumes the health contract; the vertical can be exercised against the fake provider before a richer provider exists.',
     }],
     verticalSlices: [{
       id: 'health-slice',
@@ -97,7 +152,8 @@ function fakeProjectModel({ existingProject }) {
       componentIds: ['runtime', 'health-feature'],
       contractIds: ['health-contract'],
       skeletonTest: 'Developer writes health.txt; Tester and Reviewer read it through OpenClaw and verify the observable state.',
-      taskIds: ['T1'],
+      skeletonTaskId: 'T1',
+      taskIds: tasks.map((task) => task.id),
     }],
     technicalDirection: {
       summary: 'Preserve the existing Node/Git project and use a deterministic file contract for the CI feature.',
@@ -108,27 +164,18 @@ function fakeProjectModel({ existingProject }) {
     decomposition: {
       nodes: [
         { id: 'runtime', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
-        { id: 'health-feature', parentId: null, kind: 'component', componentId: 'health-feature', children: ['health-task'], taskId: null },
-        { id: 'health-task', parentId: 'health-feature', kind: 'task', componentId: 'health-feature', children: [], taskId: 'T1' },
+        { id: 'health-feature', parentId: null, kind: 'component', componentId: 'health-feature', children: tasks.map((task) => `${task.id}-node`), taskId: null },
+        ...tasks.map((task) => ({ id: `${task.id}-node`, parentId: 'health-feature', kind: 'task', componentId: task.componentId, children: [], taskId: task.id })),
       ],
     },
-    tasks: [{
-      id: 'T1',
-      title: 'Implement health walking skeleton',
-      description: 'A deterministic CI task used to exercise the full Ariad workflow.',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['health.txt contains status=healthy after one semantic retry'],
-      testStrategy: 'Tester and Reviewer read health.txt through OpenClaw tools',
-      atomic: true,
-      dependsOn: [],
-    }],
+    tasks,
   };
 }
 
 function roleReply(request) {
   const cycle = requestCycle(request);
   const role = requestRole(request);
+  const taskId = requestTaskId(request);
 
   if (isDiscovery(request) && (!hasWorkspace(request) || !hasToolResult(request))) {
     return { executionStatus: 'FAILED', failure: !hasWorkspace(request) ? 'FAKE_E2E_WORKSPACE_MISSING' : 'FAKE_E2E_DISCOVERY_TOOL_RESULT_MISSING' };
@@ -149,15 +196,15 @@ function roleReply(request) {
         source: 'fake-provider',
         reason: 'The current-state reconstruction and next vertical slice preserve the requested customer outcome without speculative infrastructure.',
         guidance: '',
-        customerOutcomeSummary: 'Existing project understood; the health walking skeleton is scoped and ready to implement.',
+        customerOutcomeSummary: 'Existing project understood; TL design is materialized into implementation tasks before the health walking skeleton runs.',
         questions: [],
       },
     };
   }
-  if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, toolExecuted: hasToolResult(request) } };
-  if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, toolExecuted: hasToolResult(request) } };
-  if (role === 'reviewer' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, toolExecuted: hasToolResult(request), findings: ['health endpoint still needs the semantic fix'] } };
-  if (role === 'reviewer') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, toolExecuted: hasToolResult(request) } };
+  if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
+  if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
+  if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['health endpoint still needs the semantic fix'] } };
+  if (role === 'reviewer') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } };
 }
 
