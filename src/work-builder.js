@@ -26,10 +26,10 @@ export class WorkBuilder {
         runtimeKey,
         resources: [...resources],
         context: {
+          ...(state.context ?? {}),
           taskId: task.id,
           strategyEpoch: state.strategyEpoch,
           devCycle: state.devCycle,
-          ...(state.context ?? {}),
         },
       });
     }
