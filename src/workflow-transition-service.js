@@ -18,6 +18,15 @@ export class WorkflowTransitionService {
     return { state, effect: transition.effect };
   }
 
+  submitHumanDecision(taskId, decision) {
+    const current = this.store.get(taskId);
+    if (!current) throw new Error(`unknown workflow state: ${taskId}`);
+    if (typeof this.engine.resumeHumanDecision !== 'function') throw new Error('transition engine does not support human decisions');
+    const transition = this.engine.resumeHumanDecision(current, decision);
+    const state = this.store.update(taskId, current.version, transition.patch);
+    return { state, effect: transition.effect };
+  }
+
   completeSourceControl(taskId, result) {
     const current = this.store.get(taskId);
     if (!current) throw new Error(`unknown workflow state: ${taskId}`);
