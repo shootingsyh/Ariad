@@ -126,7 +126,7 @@ try {
   git(workspace, ['add', 'README.md']);
   git(workspace, ['-c', 'user.name=Ariad CI', '-c', 'user.email=ariad-ci@localhost', 'commit', '-m', 'seed']);
   const seedCommit = git(workspace, ['rev-parse', 'HEAD']);
-  writeFileSync(join(workspace, 'health.txt'), 'fake developer workspace change\n');
+  assert.equal(existsSync(join(workspace, 'health.txt')), false, 'Developer must create health.txt through OpenClaw tool execution');
 
   gatewayCall('ariad.ci.project', { action: 'start', name: 'full-e2e' });
 
@@ -167,14 +167,26 @@ try {
   );
   assert.deepEqual(runs.filter((run) => run.role === 'reviewer').map((run) => run.attempt), [1, 2]);
 
+  assert.equal(readFileSync(join(workspace, 'health.txt'), 'utf8'), 'status=healthy\ncycle=2\n', 'cycle 2 Developer tool call must produce the reviewed artifact');
+  for (const expected of [
+    'role=developer cycle=1 tool=write',
+    'role=tester cycle=1 tool=read',
+    'role=reviewer cycle=1 tool=read',
+    'role=developer cycle=2 tool=write',
+    'role=tester cycle=2 tool=read',
+    'role=reviewer cycle=2 tool=read',
+  ]) {
+    assert.match(providerLog, new RegExp(`ARIAD_FAKE_TOOL_CALL ${expected}`), `missing fake-provider tool request: ${expected}\n${providerLog}`);
+  }
+
   const finalCommit = git(workspace, ['rev-parse', 'HEAD']);
-  assert.notEqual(finalCommit, seedCommit, 'source-control finalizer must create a commit');
+  assert.notEqual(finalCommit, seedCommit, 'source-control finalizer must create a commit from tool-produced workspace changes');
   assert.equal(git(workspace, ['status', '--porcelain']), '', 'workspace must be clean after finalization');
   assert.equal(git(workspace, ['rev-list', '--count', 'HEAD']), '2');
   assert.match(git(workspace, ['log', '-1', '--pretty=%s']), /^Ariad: T1 \(strategy 1, cycle 2\)$/);
   assert.equal(git(workspace, ['remote']), '', 'CI fixture intentionally has no remote, proving no push was attempted');
 
-  console.log('ARIAD_OPENCLAW_FULL_PROJECT_E2E_OK');
+  console.log('ARIAD_OPENCLAW_TOOL_EXECUTION_E2E_OK');
 } finally {
   gateway.kill('SIGTERM');
   provider.kill('SIGTERM');
