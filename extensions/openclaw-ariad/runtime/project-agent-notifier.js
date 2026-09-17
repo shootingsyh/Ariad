@@ -15,12 +15,13 @@ export class ProjectAgentNotifier {
   }
 
   async notify(type, payload = {}) {
+    const createdAt = this.now();
     const event = {
       version: 1,
-      id: `${this.project.id}:${Date.now()}:${++this.sequence}`,
+      id: `${this.project.id}:${createdAt.getTime()}:${++this.sequence}`,
       projectId: this.project.id,
       type,
-      createdAt: this.now().toISOString(),
+      createdAt: createdAt.toISOString(),
       payload,
     };
     mkdirSync(this.dir, { recursive: true });
