@@ -1,17 +1,19 @@
 import { homedir } from 'node:os';
 import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
+import { PromptRenderer } from '../../../src/llm/prompt-renderer.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
+import { AriadProjectController } from '../runtime/project-controller.js';
 import { AriadSupervisor } from './ariad-supervisor.js';
 import { contract } from './contract.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 
+const promptRenderer = new PromptRenderer();
+
 function renderRoleMessage(role: string, context: Record<string, unknown>) {
-  return [
-    `You are executing the Ariad ${role} role.`,
-    'Return only one JSON object with executionStatus, outcome, and optional result/failure fields.',
-    'Do not communicate with other agents or the user. Complete only the assigned work and return the structured result.',
-    `Context: ${JSON.stringify(context)}`,
-  ].join('\n\n');
+  const rendered = promptRenderer.render(role, context);
+  return rendered.messages
+    .map((message: { role: string; content: string }) => `[${message.role.toUpperCase()}]\n${message.content}`)
+    .join('\n\n');
 }
 
 export default defineFeaturePlugin({
@@ -33,18 +35,13 @@ export default defineFeaturePlugin({
 
     const supervisor = new AriadSupervisor({
       manager,
-      createController: (project) => {
-        let active = false;
-        return {
-          async start() {
-            await runtimeAdapter.install();
-            await runtimeAdapter.probe();
-            active = true;
-          },
-          async stop() { active = false; },
-          status() { return { active, runtime: runtimeAdapter.id, projectId: project.id }; },
-        };
-      },
+      createController: (project) => new AriadProjectController({
+        project,
+        runtimeAdapter,
+        // Source-control ownership remains outside Reviewer. This callback is the
+        // current host integration seam until the concrete SCM finalizer is wired.
+        finalizeSourceControl: async () => ({ ok: true }),
+      }),
     });
 
     api.registerService({
@@ -65,6 +62,34 @@ export default defineFeaturePlugin({
             result = await runtimeAdapter.poll(handle);
           }
           respond(true, { handle, result });
+        } catch (error) {
+          respond(false, undefined, { code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
+        }
+      }, { scope: 'operator.admin' });
+
+      api.registerGatewayMethod('ariad.ci.project', async ({ params, respond }) => {
+        try {
+          const input = (params ?? {}) as { action?: string; name?: string; goal?: string };
+          if (!input.action) throw new Error('action is required');
+          if (input.action === 'create') {
+            if (!input.name) throw new Error('name is required');
+            const project = manager.create(input.name, {
+              goal: input.goal ?? null,
+              projectAgent: { host: 'openclaw', agentId: 'ci', sessionKey: 'ci' },
+            });
+            respond(true, { project: supervisor.status(project.id) });
+            return;
+          }
+          if (!input.name) throw new Error('name is required');
+          if (input.action === 'start') {
+            respond(true, { project: await supervisor.ensureRunning(input.name) });
+            return;
+          }
+          if (input.action === 'status') {
+            respond(true, { project: supervisor.status(input.name) });
+            return;
+          }
+          throw new Error(`unsupported CI project action: ${input.action}`);
         } catch (error) {
           respond(false, undefined, { code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
         }
