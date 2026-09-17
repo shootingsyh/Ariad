@@ -49,8 +49,15 @@ const env = {
   OPENCLAW_OFFLINE: '1',
   ARIAD_PROJECTS_ROOT: projectsRoot,
   ARIAD_CI_RUNTIME_PROBE: '1',
+  ARIAD_SOURCE_CONTROL_PUSH: '0',
   NO_COLOR: '1',
 };
+
+function git(cwd, args) {
+  const call = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(call.status, 0, `git ${args.join(' ')} failed\nstdout:\n${call.stdout}\nstderr:\n${call.stderr}`);
+  return call.stdout.trim();
+}
 
 const provider = spawn(process.execPath, ['test/fake-openai-server.mjs'], {
   cwd: pluginDir,
@@ -111,6 +118,16 @@ try {
     name: 'full-e2e',
     goal: 'Create a tiny deterministic health endpoint and verify it.',
   });
+
+  const projectRoot = join(projectsRoot, 'full-e2e');
+  const workspace = join(projectRoot, 'workspace');
+  git(workspace, ['init', '-b', 'main']);
+  writeFileSync(join(workspace, 'README.md'), '# Ariad E2E\n');
+  git(workspace, ['add', 'README.md']);
+  git(workspace, ['-c', 'user.name=Ariad CI', '-c', 'user.email=ariad-ci@localhost', 'commit', '-m', 'seed']);
+  const seedCommit = git(workspace, ['rev-parse', 'HEAD']);
+  writeFileSync(join(workspace, 'health.txt'), 'fake developer workspace change\n');
+
   gatewayCall('ariad.ci.project', { action: 'start', name: 'full-e2e' });
 
   let lastStatus = '';
@@ -122,7 +139,6 @@ try {
     return /"phase"\s*:\s*"SUCCEEDED"/.test(lastStatus);
   }, 'full Ariad project success');
 
-  const projectRoot = join(projectsRoot, 'full-e2e');
   const graphPath = join(projectRoot, '.ariad', 'task-graph.json');
   const dbPath = join(projectRoot, '.ariad', 'state.db');
   assert.equal(existsSync(graphPath), true, 'PM task graph must be durable');
@@ -150,6 +166,13 @@ try {
     ],
   );
   assert.deepEqual(runs.filter((run) => run.role === 'reviewer').map((run) => run.attempt), [1, 2]);
+
+  const finalCommit = git(workspace, ['rev-parse', 'HEAD']);
+  assert.notEqual(finalCommit, seedCommit, 'source-control finalizer must create a commit');
+  assert.equal(git(workspace, ['status', '--porcelain']), '', 'workspace must be clean after finalization');
+  assert.equal(git(workspace, ['rev-list', '--count', 'HEAD']), '2');
+  assert.match(git(workspace, ['log', '-1', '--pretty=%s']), /^Ariad: T1 \(strategy 1, cycle 2\)$/);
+  assert.equal(git(workspace, ['remote']), '', 'CI fixture intentionally has no remote, proving no push was attempted');
 
   console.log('ARIAD_OPENCLAW_FULL_PROJECT_E2E_OK');
 } finally {
