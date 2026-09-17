@@ -7,6 +7,52 @@ import { DatabaseSync } from 'node:sqlite';
 import { AriadProjectController } from '../runtime/project-controller.js';
 
 function projectModel({ existingProject = false } = {}) {
+  const tasks = [
+    {
+      id: 'T_INTERFACE',
+      title: 'Implement the health contract interface',
+      kind: 'CONTRACT_INTERFACE',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['The executable interface matches the TL-designed health contract'],
+      testStrategy: 'Load the interface and verify its declared health boundary',
+      atomic: true,
+      dependsOn: [],
+    },
+    {
+      id: 'T_CONTRACT_TEST',
+      title: 'Implement executable health contract tests',
+      kind: 'CONTRACT_TEST',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['The contract test fails for a violating provider and passes for a conforming provider'],
+      testStrategy: 'Run the contract suite against deterministic fixtures',
+      atomic: true,
+      dependsOn: ['T_INTERFACE'],
+    },
+    {
+      id: 'T_FAKE',
+      title: 'Implement minimal fake health provider',
+      kind: 'FAKE_PROVIDER',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['Fake provider conforms to health-contract'],
+      testStrategy: 'Run the contract suite against the fake provider',
+      atomic: true,
+      dependsOn: ['T_INTERFACE', 'T_CONTRACT_TEST'],
+    },
+    {
+      id: 'T1',
+      title: 'Implement health vertical walking skeleton',
+      kind: 'VERTICAL_SKELETON',
+      componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
+      acceptanceCriteria: ['passes after one review retry'],
+      testStrategy: 'Read health.txt and verify the final healthy state',
+      atomic: true,
+      dependsOn: ['T_FAKE', 'T_CONTRACT_TEST'],
+    },
+  ];
   return {
     currentState: {
       existingProject,
@@ -27,13 +73,16 @@ function projectModel({ existingProject = false } = {}) {
       testBoundary: 'Read health.txt and verify status',
       maturity: 'PROVISIONAL',
       justifiedByVerticals: ['health-slice'],
+      interfaceTaskId: 'T_INTERFACE',
+      contractTestTaskId: 'T_CONTRACT_TEST',
+      fakeTaskId: 'T_FAKE',
     }],
     dependencies: [{
       from: 'runtime',
       to: 'health-feature',
       contractId: 'health-contract',
       implementationRequired: false,
-      rationale: 'Runtime consumes the health boundary; the walking skeleton can use the minimal implementation.',
+      rationale: 'Runtime consumes the health boundary; the walking skeleton can use the fake provider.',
     }],
     verticalSlices: [{
       id: 'health-slice',
@@ -42,7 +91,8 @@ function projectModel({ existingProject = false } = {}) {
       componentIds: ['runtime', 'health-feature'],
       contractIds: ['health-contract'],
       skeletonTest: 'Read the final health.txt through the same boundary used by the feature.',
-      taskIds: ['T1'],
+      skeletonTaskId: 'T1',
+      taskIds: tasks.map((task) => task.id),
     }],
     technicalDirection: {
       summary: 'Use the existing Node runtime and file-based deterministic fixture.',
@@ -53,20 +103,11 @@ function projectModel({ existingProject = false } = {}) {
     decomposition: {
       nodes: [
         { id: 'runtime-node', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
-        { id: 'health-feature-node', parentId: null, kind: 'component', componentId: 'health-feature', children: ['T1-node'], taskId: null },
-        { id: 'T1-node', parentId: 'health-feature-node', kind: 'task', componentId: 'health-feature', children: [], taskId: 'T1' },
+        { id: 'health-feature-node', parentId: null, kind: 'component', componentId: 'health-feature', children: tasks.map((task) => `${task.id}-node`), taskId: null },
+        ...tasks.map((task) => ({ id: `${task.id}-node`, parentId: 'health-feature-node', kind: 'task', componentId: task.componentId, children: [], taskId: task.id })),
       ],
     },
-    tasks: [{
-      id: 'T1',
-      title: 'Implement deterministic health state',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['passes after one review retry'],
-      testStrategy: 'Read health.txt and verify the final healthy state',
-      atomic: true,
-      dependsOn: [],
-    }],
+    tasks,
   };
 }
 
@@ -87,6 +128,7 @@ class ScriptedRuntimeAdapter {
   async poll(handle) {
     const input = this.runs.get(handle.externalId);
     const cycle = input.context?.devCycle ?? 0;
+    const taskId = input.context?.taskId;
     if (input.role === 'tech_lead') {
       return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: projectModel({ existingProject: input.context?.planningPhase === 'EXISTING_PROJECT_DISCOVERY' }) } };
     }
@@ -94,10 +136,10 @@ class ScriptedRuntimeAdapter {
       const outcome = input.context?.productPhase === 'CURRENT_STATE_REVIEW' ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED';
       return { state: 'COMPLETED', outcome, result: { reason: 'covers the requested customer outcome', guidance: '', customerOutcomeSummary: 'Ready to implement', questions: [] } };
     }
-    if (input.role === 'developer') return { state: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { cycle } };
-    if (input.role === 'tester') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle } };
-    if (input.role === 'reviewer' && cycle === 1) return { state: 'COMPLETED', outcome: 'NOT_PASS', result: { cycle } };
-    if (input.role === 'reviewer') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle } };
+    if (input.role === 'developer') return { state: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { cycle, taskId } };
+    if (input.role === 'tester') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle, taskId } };
+    if (input.role === 'reviewer' && taskId === 'T1' && cycle === 1) return { state: 'COMPLETED', outcome: 'NOT_PASS', result: { cycle, taskId } };
+    if (input.role === 'reviewer') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle, taskId } };
     throw new Error(`unexpected role ${input.role}`);
   }
 }
@@ -116,7 +158,7 @@ async function waitForController(controller) {
   while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
-test('AriadProjectController persists TL living architecture, obtains PM approval, then converges', async () => {
+test('AriadProjectController persists TL living architecture, materializes design tasks, obtains PM approval, then converges', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ariad-project-controller-'));
   try {
     const ariad = join(root, '.ariad');
@@ -134,20 +176,26 @@ test('AriadProjectController persists TL living architecture, obtains PM approva
       assert.equal(existsSync(join(modelDir, name)), true, `${name} must be durable`);
     }
     assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
-    assert.equal(JSON.parse(readFileSync(join(modelDir, 'contracts.json'), 'utf8'))[0].maturity, 'PROVISIONAL');
-    assert.equal(JSON.parse(readFileSync(join(modelDir, 'vertical-slices.json'), 'utf8'))[0].skeletonTest.length > 0, true);
+    const contract = JSON.parse(readFileSync(join(modelDir, 'contracts.json'), 'utf8'))[0];
+    assert.equal(contract.maturity, 'PROVISIONAL');
+    assert.equal(contract.interfaceTaskId, 'T_INTERFACE');
+    assert.equal(contract.contractTestTaskId, 'T_CONTRACT_TEST');
+    assert.equal(contract.fakeTaskId, 'T_FAKE');
+    const slice = JSON.parse(readFileSync(join(modelDir, 'vertical-slices.json'), 'utf8'))[0];
+    assert.equal(slice.skeletonTaskId, 'T1');
 
     const db = new DatabaseSync(stateDb, { readOnly: true });
-    const state = db.prepare('SELECT dev_cycle, status, context_json FROM workflow_state WHERE task_id = ?').get('T1');
+    const states = db.prepare('SELECT task_id, dev_cycle, status, context_json FROM workflow_state ORDER BY task_id').all();
     const runs = db.prepare('SELECT role, attempt, state FROM runs ORDER BY seq').all();
     db.close();
-    assert.equal(state.status, 'SUCCEEDED');
-    assert.equal(state.dev_cycle, 2);
-    const context = JSON.parse(state.context_json);
-    assert.equal(context.task.verticalSliceId, 'health-slice');
+    assert.equal(states.length, 4);
+    assert.equal(states.every((state) => state.status === 'SUCCEEDED'), true);
+    assert.equal(states.find((state) => state.task_id === 'T1').dev_cycle, 2);
+    const context = JSON.parse(states.find((state) => state.task_id === 'T_INTERFACE').context_json);
+    assert.equal(context.task.kind, 'CONTRACT_INTERFACE');
     assert.equal(context.dependencies[0].contractId, 'health-contract');
     assert.equal(context.verticalSlices[0].id, 'health-slice');
-    assert.deepEqual(runs.map((run) => run.role), ['tech_lead', 'pm', 'developer', 'tester', 'reviewer', 'developer', 'tester', 'reviewer']);
+    assert.deepEqual(runs.slice(0, 2).map((run) => run.role), ['tech_lead', 'pm']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
