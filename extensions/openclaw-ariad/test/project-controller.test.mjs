@@ -34,9 +34,9 @@ function projectModel({ existingProject = false } = {}) {
     },
     decomposition: {
       nodes: [
-        { id: 'runtime', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
-        { id: 'health-feature', parentId: null, kind: 'component', componentId: 'health-feature', children: ['T1'], taskId: null },
-        { id: 'T1-node', parentId: 'health-feature', kind: 'task', componentId: 'health-feature', children: [], taskId: 'T1' },
+        { id: 'runtime-node', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
+        { id: 'health-feature-node', parentId: null, kind: 'component', componentId: 'health-feature', children: ['T1-node'], taskId: null },
+        { id: 'T1-node', parentId: 'health-feature-node', kind: 'task', componentId: 'health-feature', children: [], taskId: 'T1' },
       ],
     },
     tasks: [{
@@ -72,7 +72,8 @@ class ScriptedRuntimeAdapter {
       return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: projectModel({ existingProject: input.context?.planningPhase === 'EXISTING_PROJECT_DISCOVERY' }) } };
     }
     if (input.role === 'pm') {
-      return { state: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'covers the requested customer outcome', guidance: '', customerOutcomeSummary: 'Ready to implement', questions: [] } };
+      const outcome = input.context?.productPhase === 'CURRENT_STATE_REVIEW' ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED';
+      return { state: 'COMPLETED', outcome, result: { reason: 'covers the requested customer outcome', guidance: '', customerOutcomeSummary: 'Ready to implement', questions: [] } };
     }
     if (input.role === 'developer') return { state: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { cycle } };
     if (input.role === 'tester') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle } };
@@ -80,6 +81,11 @@ class ScriptedRuntimeAdapter {
     if (input.role === 'reviewer') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle } };
     throw new Error(`unexpected role ${input.role}`);
   }
+}
+
+async function waitForController(controller) {
+  await controller.start();
+  while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 test('AriadProjectController persists TL project model, obtains PM approval, then converges', async () => {
@@ -90,17 +96,13 @@ test('AriadProjectController persists TL project model, obtains PM approval, the
     mkdirSync(ariad, { recursive: true });
     mkdirSync(workspace, { recursive: true });
     const stateDb = join(ariad, 'state.db');
-    const controller = new AriadProjectController({
-      project: { id: 'p1', root, workspace, stateDb, goal: 'build a tiny feature' },
-      runtimeAdapter: new ScriptedRuntimeAdapter(),
-    });
+    const controller = new AriadProjectController({ project: { id: 'p1', root, workspace, stateDb, goal: 'build a tiny feature' }, runtimeAdapter: new ScriptedRuntimeAdapter() });
 
-    await controller.start();
-    while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitForController(controller);
     assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
 
     const modelDir = join(ariad, 'project');
-    for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'technical-direction.json', 'decomposition.json', 'plan-review.json', 'task-graph.json']) {
+    for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'technical-direction.json', 'decomposition.json', 'project-model.json', 'plan-review.json', 'task-graph.json']) {
       assert.equal(existsSync(join(modelDir, name)), true, `${name} must be durable`);
     }
     assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
@@ -127,13 +129,9 @@ test('existing workspace is discovered and PM sees current state before requirem
     writeFileSync(join(workspace, 'README.md'), '# Existing app\n');
     const stateDb = join(ariad, 'state.db');
     const adapter = new ScriptedRuntimeAdapter();
-    const controller = new AriadProjectController({
-      project: { id: 'existing', root, workspace, stateDb, goal: 'add a health feature' },
-      runtimeAdapter: adapter,
-    });
+    const controller = new AriadProjectController({ project: { id: 'existing', root, workspace, stateDb, goal: 'add a health feature' }, runtimeAdapter: adapter });
 
-    await controller.start();
-    while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitForController(controller);
     assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
 
     const calls = [...adapter.runs.values()].map((run) => ({ role: run.role, context: run.context }));
@@ -143,7 +141,35 @@ test('existing workspace is discovered and PM sees current state before requirem
     assert.equal(calls[2].context.planningPhase, 'REQUIREMENT_PLAN');
     assert.equal(calls[3].context.productPhase, 'PLAN_REVIEW');
     assert.equal(calls[1].context.currentProjectModel.currentState.existingProject, true);
-    assert.equal(existsSync(join(ariad, 'project', 'current-state-review.json')), true);
+    const currentReview = JSON.parse(readFileSync(join(ariad, 'project', 'current-state-review.json'), 'utf8'));
+    assert.equal(currentReview.outcome, 'CURRENT_STATE_ACKNOWLEDGED');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Tech Lead project model rejects a task that is not an atomic decomposition leaf', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-quality-gate-'));
+  try {
+    const ariad = join(root, '.ariad');
+    const workspace = join(root, 'workspace');
+    mkdirSync(ariad, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    const adapter = new ScriptedRuntimeAdapter();
+    const originalPoll = adapter.poll.bind(adapter);
+    adapter.poll = async (handle) => {
+      const input = adapter.runs.get(handle.externalId);
+      if (input.role === 'tech_lead') {
+        const model = projectModel();
+        model.decomposition.nodes = model.decomposition.nodes.filter((node) => node.kind !== 'task');
+        return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: model } };
+      }
+      return originalPoll(handle);
+    };
+    const controller = new AriadProjectController({ project: { id: 'bad', root, workspace, stateDb: join(ariad, 'state.db'), goal: 'build' }, runtimeAdapter: adapter });
+    await waitForController(controller);
+    assert.equal(controller.status().phase, 'FAILED');
+    assert.match(controller.status().error, /must be a leaf in decomposition/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
