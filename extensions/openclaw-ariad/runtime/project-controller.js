@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { TaskGraph } from '../../../src/task-graph.js';
 import { WorkBuilder } from '../../../src/work-builder.js';
 import { GraphRunner } from '../../../src/graph-runner.js';
@@ -18,10 +18,13 @@ const ROLE_RUNTIME_MAP = Object.freeze({
   tester: 'openclaw',
   reviewer: 'openclaw',
   project_debugger: 'openclaw',
+  tech_lead: 'openclaw',
   pm: 'openclaw',
   system_debugger: 'openclaw',
   artist: 'openclaw',
 });
+
+const IGNORED_DISCOVERY_NAMES = new Set(['.git', '.ariad', 'node_modules']);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -31,17 +34,52 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-function validatePlannedTasks(tasks) {
-  if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('PM returned no project tasks');
+function requireArray(value, name) {
+  if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
+  return value;
+}
+
+function validateProjectModel(model, { requireTasks = true } = {}) {
+  if (!model || typeof model !== 'object' || Array.isArray(model)) throw new Error('Tech Lead returned no projectModel');
+  if (!model.currentState || typeof model.currentState !== 'object') throw new Error('projectModel.currentState is required');
+  if (!model.architecture || typeof model.architecture !== 'object') throw new Error('projectModel.architecture is required');
+  requireArray(model.architecture.horizontals, 'projectModel.architecture.horizontals');
+  requireArray(model.architecture.verticals, 'projectModel.architecture.verticals');
+  requireArray(model.contracts, 'projectModel.contracts');
+  if (!model.technicalDirection || typeof model.technicalDirection !== 'object') throw new Error('projectModel.technicalDirection is required');
+  if (!model.decomposition || typeof model.decomposition !== 'object') throw new Error('projectModel.decomposition is required');
+  requireArray(model.decomposition.nodes, 'projectModel.decomposition.nodes');
+  const tasks = requireArray(model.tasks ?? [], 'projectModel.tasks');
+  if (requireTasks && tasks.length === 0) throw new Error('Tech Lead returned no executable project tasks');
   for (const task of tasks) {
-    if (!task || typeof task !== 'object' || typeof task.id !== 'string' || !task.id) {
-      throw new Error('PM returned a task without a stable id');
-    }
-    if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
-      throw new Error(`PM task ${task.id} has no acceptance criteria`);
-    }
+    if (!task || typeof task !== 'object' || typeof task.id !== 'string' || !task.id) throw new Error('Tech Lead returned a task without a stable id');
+    if (typeof task.componentId !== 'string' || !task.componentId) throw new Error(`Tech Lead task ${task.id} has no componentId`);
+    if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) throw new Error(`Tech Lead task ${task.id} has no acceptance criteria`);
+    if (typeof task.testStrategy !== 'string' || !task.testStrategy) throw new Error(`Tech Lead task ${task.id} has no test strategy`);
+    if (task.atomic !== true) throw new Error(`Tech Lead task ${task.id} must be explicitly atomic`);
   }
-  return tasks;
+  return model;
+}
+
+function surveyWorkspace(workspace, maxEntries = 200, maxDepth = 4) {
+  if (!workspace || !existsSync(workspace)) return [];
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > maxDepth || found.length >= maxEntries) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (IGNORED_DISCOVERY_NAMES.has(entry.name)) continue;
+      const absolute = join(dir, entry.name);
+      found.push({ path: relative(workspace, absolute), kind: entry.isDirectory() ? 'directory' : 'file' });
+      if (entry.isDirectory()) walk(absolute, depth + 1);
+      if (found.length >= maxEntries) return;
+    }
+  };
+  walk(workspace, 0);
+  return found;
+}
+
+function hasExistingProjectContent(workspace) {
+  return surveyWorkspace(workspace, 1, 1).length > 0;
 }
 
 export class AriadProjectController {
@@ -52,7 +90,9 @@ export class AriadProjectController {
     this.runtimeAdapter = runtimeAdapter;
     this.finalizeSourceControl = finalizeSourceControl;
     this.onError = onError;
+    this.projectModelDir = join(project.root, '.ariad', 'project');
     this.graphPath = join(project.root, '.ariad', 'task-graph.json');
+    this.projectGraphPath = join(this.projectModelDir, 'task-graph.json');
     this.active = false;
     this.phase = 'STOPPED';
     this.result = null;
@@ -96,29 +136,161 @@ export class AriadProjectController {
       active: this.active,
       phase: this.phase,
       graphPath: this.graphPath,
+      projectModelDir: this.projectModelDir,
       result: this.result,
       error: this.error,
     };
   }
 
+  #ensureProjectBrief() {
+    mkdirSync(this.projectModelDir, { recursive: true });
+    const path = join(this.projectModelDir, 'brief.json');
+    if (!existsSync(path)) {
+      writeJson(path, {
+        version: 1,
+        projectId: this.project.id,
+        goal: this.project.goal ?? null,
+        source: 'project-agent',
+      });
+    }
+    return readJson(path);
+  }
+
+  #persistProjectModel(model) {
+    mkdirSync(this.projectModelDir, { recursive: true });
+    writeJson(join(this.projectModelDir, 'current-state.json'), model.currentState);
+    writeJson(join(this.projectModelDir, 'architecture.json'), model.architecture);
+    writeJson(join(this.projectModelDir, 'contracts.json'), model.contracts);
+    writeJson(join(this.projectModelDir, 'technical-direction.json'), model.technicalDirection);
+    writeJson(join(this.projectModelDir, 'decomposition.json'), model.decomposition);
+  }
+
+  #readPersistedProjectModel() {
+    const paths = {
+      currentState: join(this.projectModelDir, 'current-state.json'),
+      architecture: join(this.projectModelDir, 'architecture.json'),
+      contracts: join(this.projectModelDir, 'contracts.json'),
+      technicalDirection: join(this.projectModelDir, 'technical-direction.json'),
+      decomposition: join(this.projectModelDir, 'decomposition.json'),
+    };
+    if (!Object.values(paths).every(existsSync)) return null;
+    return {
+      currentState: readJson(paths.currentState),
+      architecture: readJson(paths.architecture),
+      contracts: readJson(paths.contracts),
+      technicalDirection: readJson(paths.technicalDirection),
+      decomposition: readJson(paths.decomposition),
+      tasks: existsSync(this.projectGraphPath) ? readJson(this.projectGraphPath).tasks : [],
+    };
+  }
+
+  async #runTechLead(runtimeExecutor, context, { requireTasks }) {
+    const result = await runtimeExecutor.run('tech_lead', { ...context, workspace: this.project.workspace });
+    if (result.executionStatus !== 'COMPLETED') throw new Error(`Tech Lead failed: ${result.failure ?? 'unknown failure'}`);
+    if (result.outcome === 'NEEDS_HUMAN') return { needsHuman: true, result };
+    if (!['PLANNED', 'REPLANNED'].includes(result.outcome)) throw new Error(`Tech Lead returned unexpected outcome: ${result.outcome}`);
+    const model = validateProjectModel(result.result?.projectModel, { requireTasks });
+    this.#persistProjectModel(model);
+    return { needsHuman: false, model, result };
+  }
+
+  async #runPmReview(runtimeExecutor, context, filename) {
+    const review = await runtimeExecutor.run('pm', context);
+    if (review.executionStatus !== 'COMPLETED') throw new Error(`PM product review failed: ${review.failure ?? 'unknown failure'}`);
+    if (!['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN'].includes(review.outcome)) throw new Error(`PM product review returned unexpected outcome: ${review.outcome}`);
+    writeJson(join(this.projectModelDir, filename), {
+      outcome: review.outcome,
+      ...(review.result ?? {}),
+    });
+    return review;
+  }
+
+  async #ensureExistingProjectDiscovery(runtimeExecutor, brief) {
+    const workspaceSurvey = surveyWorkspace(this.project.workspace);
+    if (!hasExistingProjectContent(this.project.workspace)) return { status: 'READY', model: null };
+    const persisted = this.#readPersistedProjectModel();
+    const currentStateReviewPath = join(this.projectModelDir, 'current-state-review.json');
+    if (persisted && existsSync(currentStateReviewPath) && readJson(currentStateReviewPath).outcome === 'PLAN_ACCEPTED') {
+      return { status: 'READY', model: persisted };
+    }
+
+    this.phase = 'DISCOVERING';
+    let guidance = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const discovery = await this.#runTechLead(runtimeExecutor, {
+        taskId: '__project_discovery__',
+        projectId: this.project.id,
+        planningPhase: 'EXISTING_PROJECT_DISCOVERY',
+        projectBrief: brief,
+        workspaceSurvey,
+        productReviewGuidance: guidance,
+      }, { requireTasks: false });
+      if (discovery.needsHuman) return { status: 'NEEDS_HUMAN', model: null };
+
+      this.phase = 'PRODUCT_REVIEW';
+      const review = await this.#runPmReview(runtimeExecutor, {
+        taskId: '__project_current_state_review__',
+        projectId: this.project.id,
+        productPhase: 'CURRENT_STATE_REVIEW',
+        projectBrief: brief,
+        currentProjectModel: discovery.model,
+      }, 'current-state-review.json');
+      if (review.outcome === 'PLAN_ACCEPTED') return { status: 'READY', model: discovery.model };
+      if (review.outcome === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', model: discovery.model };
+      guidance = review.result?.guidance ?? review.result?.reason ?? 'PM requested a more accurate current-state reconstruction.';
+    }
+    throw new Error('Tech Lead current-state discovery did not satisfy PM review after 3 revisions');
+  }
+
   async #ensureTaskGraph(runtimeExecutor) {
-    if (existsSync(this.graphPath)) return validatePlannedTasks(readJson(this.graphPath).tasks);
+    if (existsSync(this.graphPath)) {
+      const tasks = readJson(this.graphPath).tasks;
+      new TaskGraph(tasks);
+      return { status: 'READY', tasks, projectModel: this.#readPersistedProjectModel() };
+    }
     if (!this.project.goal) throw new Error('project goal is required before Ariad can plan work');
 
+    const brief = this.#ensureProjectBrief();
+    const discovery = await this.#ensureExistingProjectDiscovery(runtimeExecutor, brief);
+    if (discovery.status === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', tasks: null, projectModel: discovery.model };
+
     this.phase = 'PLANNING';
-    const plan = await runtimeExecutor.run('pm', {
-      taskId: '__project_plan__',
-      projectId: this.project.id,
-      projectGoal: this.project.goal,
-      planningPhase: 'INITIAL_PLAN',
-      workspace: this.project.workspace,
-    });
-    if (plan.executionStatus !== 'COMPLETED') throw new Error(`PM planning failed: ${plan.failure ?? 'unknown failure'}`);
-    if (plan.outcome !== 'REPLANNED') throw new Error(`PM planning returned unexpected outcome: ${plan.outcome}`);
-    const tasks = validatePlannedTasks(plan.result?.tasks);
-    new TaskGraph(tasks);
-    writeJson(this.graphPath, { version: 1, tasks });
-    return tasks;
+    let guidance = null;
+    let baseModel = discovery.model;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const planned = await this.#runTechLead(runtimeExecutor, {
+        taskId: '__project_plan__',
+        projectId: this.project.id,
+        planningPhase: 'REQUIREMENT_PLAN',
+        projectBrief: brief,
+        currentProjectModel: baseModel,
+        productReviewGuidance: guidance,
+      }, { requireTasks: true });
+      if (planned.needsHuman) return { status: 'NEEDS_HUMAN', tasks: null, projectModel: baseModel };
+
+      this.phase = 'PRODUCT_REVIEW';
+      const review = await this.#runPmReview(runtimeExecutor, {
+        taskId: '__project_plan_review__',
+        projectId: this.project.id,
+        productPhase: 'PLAN_REVIEW',
+        projectBrief: brief,
+        currentProjectModel: planned.model,
+      }, 'plan-review.json');
+      if (review.outcome === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', tasks: null, projectModel: planned.model };
+      if (review.outcome === 'PLAN_REVISION_REQUIRED') {
+        guidance = review.result?.guidance ?? review.result?.reason ?? 'PM requested product-plan revision.';
+        baseModel = planned.model;
+        continue;
+      }
+
+      const tasks = planned.model.tasks;
+      new TaskGraph(tasks);
+      const graphDocument = { version: 2, approvedBy: 'pm', tasks };
+      writeJson(this.projectGraphPath, graphDocument);
+      writeJson(this.graphPath, graphDocument);
+      return { status: 'READY', tasks, projectModel: planned.model };
+    }
+    throw new Error('Tech Lead plan did not satisfy PM product review after 3 revisions');
   }
 
   async #run() {
@@ -138,7 +310,9 @@ export class AriadProjectController {
         roleRuntimeMap: ROLE_RUNTIME_MAP,
         maxPolls: 400,
       });
-      const tasks = await this.#ensureTaskGraph(runtimeExecutor);
+      const planning = await this.#ensureTaskGraph(runtimeExecutor);
+      if (planning.status === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN' };
+      const { tasks, projectModel } = planning;
       const graph = new TaskGraph(tasks);
 
       for (const task of graph.list()) {
@@ -148,6 +322,9 @@ export class AriadProjectController {
               projectId: this.project.id,
               projectGoal: this.project.goal ?? null,
               task,
+              architecture: projectModel?.architecture ?? null,
+              contracts: projectModel?.contracts ?? [],
+              technicalDirection: projectModel?.technicalDirection ?? null,
             },
           });
         }
