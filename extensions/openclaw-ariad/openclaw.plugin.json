@@ -2,7 +2,7 @@
   "id": "ariad",
   "name": "Ariad",
   "description": "Create and manage isolated Ariad autonomous engineering projects.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -10,6 +10,16 @@
       "projectsRoot": {
         "type": "string",
         "description": "Root directory containing isolated Ariad projects."
+      },
+      "subagentAgentId": {
+        "type": "string",
+        "description": "Configured OpenClaw agent used to own Ariad subagent runs."
+      },
+      "subagentProvider": { "type": "string" },
+      "subagentModel": { "type": "string" },
+      "ciRuntimeProbeEnabled": {
+        "type": "boolean",
+        "description": "Enable the CI-only ariad.ci.roleRun gateway probe."
       }
     }
   },

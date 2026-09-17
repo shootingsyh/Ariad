@@ -14,6 +14,12 @@ jobs:
       - name: Install OpenClaw plugin dependencies
         working-directory: extensions/openclaw-ariad
         run: npm install
+      - name: Test OpenClaw Ariad host/runtime adapters
+        working-directory: extensions/openclaw-ariad
+        run: npm test
       - name: Build and validate OpenClaw Ariad plugin
         working-directory: extensions/openclaw-ariad
         run: npm run plugin:validate
+      - name: Run OpenClaw Gateway against fake provider
+        working-directory: extensions/openclaw-ariad
+        run: npm run test:e2e

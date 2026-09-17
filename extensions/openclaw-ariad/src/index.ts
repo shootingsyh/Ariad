@@ -1,53 +1,133 @@
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { Type } from 'typebox';
-import { defineToolPlugin } from 'openclaw/plugin-sdk/tool-plugin';
+import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
+import { AriadSupervisor } from './ariad-supervisor.js';
+import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 
 const configSchema = Type.Object({
   projectsRoot: Type.Optional(Type.String({ description: 'Root directory containing isolated Ariad projects.' })),
+  subagentAgentId: Type.Optional(Type.String({ description: 'Configured OpenClaw agent used to own Ariad subagent runs.' })),
+  subagentProvider: Type.Optional(Type.String()),
+  subagentModel: Type.Optional(Type.String()),
+  ciRuntimeProbeEnabled: Type.Optional(Type.Boolean({ description: 'Enable the CI-only ariad.ci.roleRun gateway probe.' })),
 }, { additionalProperties: false });
 
-const outputSchema = Type.Object({
-  action: Type.String(),
-  project: Type.Optional(Type.Any()),
-  projects: Type.Optional(Type.Array(Type.Any())),
-}, { additionalProperties: false });
+function toolResult(details: unknown) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(details) }],
+    details,
+  };
+}
 
-export default defineToolPlugin({
+function renderRoleMessage(role: string, context: Record<string, unknown>) {
+  return [
+    `You are executing the Ariad ${role} role.`,
+    'Return only one JSON object with executionStatus, outcome, and optional result/failure fields.',
+    'Do not communicate with other agents or the user. Complete only the assigned work and return the structured result.',
+    `Context: ${JSON.stringify(context)}`,
+  ].join('\n\n');
+}
+
+export default definePluginEntry({
   id: 'ariad',
   name: 'Ariad',
   description: 'Create and manage isolated Ariad autonomous engineering projects.',
   configSchema,
-  tools: (tool) => [
-    tool({
+  register(api) {
+    const config = (api.pluginConfig ?? {}) as {
+      projectsRoot?: string;
+      subagentAgentId?: string;
+      subagentProvider?: string;
+      subagentModel?: string;
+      ciRuntimeProbeEnabled?: boolean;
+    };
+    const projectsRoot = config.projectsRoot || defaultProjectsRoot(homedir());
+    const manager = new AriadProjectManager({ projectsRoot });
+    const runtimeAdapter = new OpenClawRuntimeAdapter({
+      subagent: api.runtime.subagent,
+      agentId: config.subagentAgentId ?? 'main',
+      provider: config.subagentProvider,
+      model: config.subagentModel,
+      renderMessage: renderRoleMessage,
+      cancelRun: async (runId) => {
+        const runs = (api.runtime.tasks.async as any)?.runs;
+        if (typeof runs?.cancel === 'function') await runs.cancel(runId);
+      },
+    });
+
+    const supervisor = new AriadSupervisor({
+      manager,
+      createController: (project) => {
+        let active = false;
+        return {
+          async start() {
+            await runtimeAdapter.install();
+            const health = await runtimeAdapter.probe();
+            if (health.health === 'UNHEALTHY') throw new Error('OpenClaw runtime is unhealthy');
+            active = true;
+          },
+          async stop() { active = false; },
+          status() { return { active, runtime: runtimeAdapter.id, projectId: project.id }; },
+        };
+      },
+    });
+
+    api.registerService({
+      id: 'ariad-supervisor',
+      async start() { await supervisor.start(); },
+      async stop() { await supervisor.stop(); },
+    });
+
+    api.registerTool((toolContext) => ({
       name: 'ariad_project',
-      description: 'Create, list, inspect, start, or stop isolated Ariad projects. Each project owns its workspace, state database, daemon pid/lock, heartbeat, and log files.',
+      description: 'Create, list, inspect, start, or stop isolated Ariad projects. The current conversation becomes the project agent binding for newly created projects.',
       parameters: Type.Object({
         action: Type.Union([
-          Type.Literal('create'),
-          Type.Literal('list'),
-          Type.Literal('status'),
-          Type.Literal('start'),
-          Type.Literal('stop'),
+          Type.Literal('create'), Type.Literal('list'), Type.Literal('status'), Type.Literal('start'), Type.Literal('stop'),
         ]),
         name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
         goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
       }, { additionalProperties: false }),
-      outputSchema,
-      execute: ({ action, name, goal }, config) => {
-        const projectsRoot = config.projectsRoot || defaultProjectsRoot(homedir());
-        const daemonEntry = fileURLToPath(new URL('../runtime/daemon-worker.js', import.meta.url));
-        const manager = new AriadProjectManager({ projectsRoot, daemonEntry });
-
-        if (action === 'list') return { action, projects: manager.list() };
+      async execute(_id, params) {
+        const { action, name, goal } = params as { action: string; name?: string; goal?: string };
+        if (action === 'list') return toolResult({ action, projects: supervisor.list() });
         if (!name) throw new Error(`name is required for action ${action}`);
-        if (action === 'create') return { action, project: manager.create(name, { goal: goal ?? null }) };
-        if (action === 'status') return { action, project: manager.status(name) };
-        if (action === 'start') return { action, project: manager.start(name) };
-        if (action === 'stop') return { action, project: manager.stop(name) };
+        if (action === 'create') {
+          const ctx = toolContext as any;
+          const project = manager.create(name, {
+            goal: goal ?? null,
+            projectAgent: {
+              host: 'openclaw',
+              agentId: ctx.agentId ?? null,
+              sessionKey: ctx.sessionKey ?? ctx.session?.key ?? null,
+            },
+          });
+          return toolResult({ action, project: supervisor.status(project.id) });
+        }
+        if (action === 'status') return toolResult({ action, project: supervisor.status(name) });
+        if (action === 'start') return toolResult({ action, project: await supervisor.ensureRunning(name) });
+        if (action === 'stop') return toolResult({ action, project: await supervisor.ensureStopped(name) });
         throw new Error(`unsupported Ariad action: ${action}`);
       },
-    }),
-  ],
+    }));
+
+    if (config.ciRuntimeProbeEnabled) {
+      api.registerGatewayMethod('ariad.ci.roleRun', async ({ params, respond }) => {
+        try {
+          const input = (params ?? {}) as { role?: string; context?: Record<string, unknown> };
+          if (!input.role) throw new Error('role is required');
+          const runId = `ci-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const handle = await runtimeAdapter.start({ runId, role: input.role, context: input.context ?? {} });
+          let result: any = { state: 'RUNNING' };
+          for (let i = 0; i < 200 && result.state === 'RUNNING'; i += 1) {
+            result = await runtimeAdapter.poll(handle);
+          }
+          respond(true, { handle, result });
+        } catch (error) {
+          respond(false, undefined, { code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
+        }
+      }, { scope: 'operator.admin' });
+    }
+  },
 });
