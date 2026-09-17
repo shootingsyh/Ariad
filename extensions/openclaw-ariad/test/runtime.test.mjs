@@ -53,7 +53,7 @@ test('OpenClawRuntimeAdapter treats observation timeout as nonterminal', async (
   assert.deepEqual(await adapter.poll(handle), { state: 'RUNNING' });
 });
 
-test('AriadSupervisor reconciles durable desired RUNNING projects after host restart', async () => {
+test('AriadSupervisor owns controller lifecycle by reconciling durable desired state', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-'));
   try {
     const manager = new AriadProjectManager({ projectsRoot: dir });
@@ -63,6 +63,7 @@ test('AriadSupervisor reconciles durable desired RUNNING projects after host res
     const events = [];
     const supervisor = new AriadSupervisor({
       manager,
+      reconcileIntervalMs: 60_000,
       createController: (project) => ({
         async start() { events.push(`start:${project.id}`); },
         async stop() { events.push(`stop:${project.id}`); },
@@ -72,8 +73,17 @@ test('AriadSupervisor reconciles durable desired RUNNING projects after host res
     await supervisor.start();
     assert.equal(supervisor.status('alpha').active, true);
     assert.equal(supervisor.status('beta').active, false);
+
     await supervisor.ensureRunning('beta');
+    assert.equal(supervisor.status('beta').active, false, 'request path only records desired state');
+    await supervisor.reconcile();
+    assert.equal(supervisor.status('beta').active, true);
+
     await supervisor.ensureStopped('alpha');
+    assert.equal(supervisor.status('alpha').active, true, 'request path does not directly stop controller');
+    await supervisor.reconcile();
+    assert.equal(supervisor.status('alpha').active, false);
+
     assert.deepEqual(events, ['start:alpha', 'start:beta', 'stop:alpha']);
     assert.equal(manager.status('alpha').desiredState, 'STOPPED');
     assert.equal(manager.status('beta').desiredState, 'RUNNING');
