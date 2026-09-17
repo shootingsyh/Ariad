@@ -12,6 +12,7 @@ import { SQLiteWorkflowStateStore } from '../../../src/sqlite-workflow-state-sto
 import { TransitionEngine } from '../../../src/transition-engine.js';
 import { WorkflowTransitionService } from '../../../src/workflow-transition-service.js';
 import { EffectExecutor } from '../../../src/effect-executor.js';
+import { ProjectAgentNotifier } from './project-agent-notifier.js';
 
 const ROLE_RUNTIME_MAP = Object.freeze({
   developer: 'openclaw',
@@ -127,7 +128,7 @@ function hasExistingProjectContent(workspace) {
 }
 
 export class AriadProjectController {
-  constructor({ project, runtimeAdapter, finalizeSourceControl = async (_input) => ({ ok: true }), onError = (error) => error }) {
+  constructor({ project, runtimeAdapter, projectAgentAdapter = null, finalizeSourceControl = async (_input) => ({ ok: true }), onError = (error) => error }) {
     if (!project?.id || !project?.stateDb || !project?.root) throw new Error('project manifest is required');
     if (!runtimeAdapter) throw new Error('runtimeAdapter is required');
     this.project = project;
@@ -137,6 +138,7 @@ export class AriadProjectController {
     this.projectModelDir = join(project.root, '.ariad', 'project');
     this.graphPath = join(project.root, '.ariad', 'task-graph.json');
     this.projectGraphPath = join(this.projectModelDir, 'task-graph.json');
+    this.projectAgentNotifier = new ProjectAgentNotifier({ project, adapter: projectAgentAdapter, onError });
     this.active = false;
     this.phase = 'STOPPED';
     this.result = null;
@@ -208,6 +210,16 @@ export class AriadProjectController {
     return { currentState: readJson(paths.currentState), architecture: readJson(paths.architecture), contracts: readJson(paths.contracts), technicalDirection: readJson(paths.technicalDirection), decomposition: readJson(paths.decomposition), tasks: existsSync(this.projectGraphPath) ? readJson(this.projectGraphPath).tasks : [] };
   }
 
+  async #notifyNeedsHuman(sourceRole, phase, result, projectModel = null) {
+    await this.projectAgentNotifier.notify('NEEDS_HUMAN', {
+      sourceRole,
+      phase,
+      reason: result?.result?.reason ?? result?.reason ?? null,
+      questions: result?.result?.questions ?? [],
+      currentState: projectModel?.currentState ?? null,
+    });
+  }
+
   async #runTechLead(runtimeExecutor, context, { requireTasks }) {
     const result = await runtimeExecutor.run('tech_lead', { ...context, workspace: this.project.workspace });
     if (result.executionStatus !== 'COMPLETED') throw new Error(`Tech Lead failed: ${result.failure ?? 'unknown failure'}`);
@@ -240,14 +252,27 @@ export class AriadProjectController {
       const discovery = await this.#runTechLead(runtimeExecutor, {
         taskId: '__project_discovery__', projectId: this.project.id, planningPhase: 'EXISTING_PROJECT_DISCOVERY', projectBrief: brief, workspaceSurvey, productReviewGuidance: guidance,
       }, { requireTasks: false });
-      if (discovery.needsHuman) return { status: 'NEEDS_HUMAN', model: null };
+      if (discovery.needsHuman) {
+        await this.#notifyNeedsHuman('tech_lead', 'EXISTING_PROJECT_DISCOVERY', discovery.result);
+        return { status: 'NEEDS_HUMAN', model: null };
+      }
 
       this.phase = 'PRODUCT_REVIEW';
       const review = await this.#runPmReview(runtimeExecutor, {
         taskId: '__project_current_state_review__', projectId: this.project.id, productPhase: 'CURRENT_STATE_REVIEW', projectBrief: brief, currentProjectModel: discovery.model,
       }, 'current-state-review.json', ['CURRENT_STATE_ACKNOWLEDGED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN']);
-      if (review.outcome === 'CURRENT_STATE_ACKNOWLEDGED') return { status: 'READY', model: discovery.model };
-      if (review.outcome === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', model: discovery.model };
+      if (review.outcome === 'CURRENT_STATE_ACKNOWLEDGED') {
+        await this.projectAgentNotifier.notify('CURRENT_STATE_READY', {
+          currentState: discovery.model.currentState,
+          customerOutcomeSummary: review.result?.customerOutcomeSummary ?? null,
+          reason: review.result?.reason ?? null,
+        });
+        return { status: 'READY', model: discovery.model };
+      }
+      if (review.outcome === 'NEEDS_HUMAN') {
+        await this.#notifyNeedsHuman('pm', 'CURRENT_STATE_REVIEW', review, discovery.model);
+        return { status: 'NEEDS_HUMAN', model: discovery.model };
+      }
       guidance = review.result?.guidance ?? review.result?.reason ?? 'PM requested a more accurate current-state reconstruction.';
     }
     throw new Error('Tech Lead current-state discovery did not satisfy PM review after 3 revisions');
@@ -272,13 +297,19 @@ export class AriadProjectController {
       const planned = await this.#runTechLead(runtimeExecutor, {
         taskId: '__project_plan__', projectId: this.project.id, planningPhase: 'REQUIREMENT_PLAN', projectBrief: brief, currentProjectModel: baseModel, productReviewGuidance: guidance,
       }, { requireTasks: true });
-      if (planned.needsHuman) return { status: 'NEEDS_HUMAN', tasks: null, projectModel: baseModel };
+      if (planned.needsHuman) {
+        await this.#notifyNeedsHuman('tech_lead', 'REQUIREMENT_PLAN', planned.result, baseModel);
+        return { status: 'NEEDS_HUMAN', tasks: null, projectModel: baseModel };
+      }
 
       this.phase = 'PRODUCT_REVIEW';
       const review = await this.#runPmReview(runtimeExecutor, {
         taskId: '__project_plan_review__', projectId: this.project.id, productPhase: 'PLAN_REVIEW', projectBrief: brief, currentProjectModel: planned.model,
       }, 'plan-review.json');
-      if (review.outcome === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN', tasks: null, projectModel: planned.model };
+      if (review.outcome === 'NEEDS_HUMAN') {
+        await this.#notifyNeedsHuman('pm', 'PLAN_REVIEW', review, planned.model);
+        return { status: 'NEEDS_HUMAN', tasks: null, projectModel: planned.model };
+      }
       if (review.outcome === 'PLAN_REVISION_REQUIRED') {
         guidance = review.result?.guidance ?? review.result?.reason ?? 'PM requested product-plan revision.';
         baseModel = planned.model;
@@ -331,7 +362,22 @@ export class AriadProjectController {
       const runner = new GraphRunner({ graph, workBuilder, coordinator, stateStore, maxTicks: 200 });
 
       this.phase = 'RUNNING';
-      return await runner.run();
+      const result = await runner.run();
+      if (result.status === 'STOPPED') {
+        const needsHuman = Object.entries(result.states ?? {}).find(([, state]) => state?.status === 'NEEDS_HUMAN');
+        if (needsHuman) {
+          const [taskId, state] = needsHuman;
+          await this.projectAgentNotifier.notify('NEEDS_HUMAN', {
+            sourceRole: state.stage ?? null,
+            phase: 'TASK_WORKFLOW',
+            taskId,
+            reason: state.context?.lastDiagnosis ?? state.context?.reason ?? null,
+            questions: state.context?.questions ?? [],
+            currentState: projectModel?.currentState ?? null,
+          });
+        }
+      }
+      return result;
     } finally {
       stateStore.close();
       runStore.close();
