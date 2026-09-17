@@ -9,28 +9,41 @@ export interface ProjectController {
 type SupervisorOptions = {
   manager: AriadProjectManager;
   createController: (project: AriadProjectStatus) => ProjectController;
+  reconcileIntervalMs?: number;
 };
 
 export class AriadSupervisor {
   private readonly manager: AriadProjectManager;
   private readonly createController: SupervisorOptions['createController'];
+  private readonly reconcileIntervalMs: number;
   private readonly controllers = new Map<string, ProjectController>();
   private started = false;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private reconcilePromise: Promise<void> | null = null;
 
   constructor(options: SupervisorOptions) {
     this.manager = options.manager;
     this.createController = options.createController;
+    this.reconcileIntervalMs = options.reconcileIntervalMs ?? 250;
   }
 
   async start() {
+    if (this.started) return;
     this.started = true;
-    for (const project of this.manager.list()) {
-      if (project.desiredState === 'RUNNING') await this.ensureRunning(project.id);
-    }
+    await this.reconcile();
+    this.timer = setInterval(() => {
+      void this.reconcile();
+    }, this.reconcileIntervalMs);
+    this.timer.unref?.();
   }
 
   async stop() {
     this.started = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.reconcilePromise) await this.reconcilePromise;
     const entries = [...this.controllers.entries()];
     this.controllers.clear();
     await Promise.all(entries.map(async ([, controller]) => controller.stop()));
@@ -38,23 +51,35 @@ export class AriadSupervisor {
 
   async ensureRunning(name: string) {
     const project = this.manager.setDesiredState(name, 'RUNNING');
-    let controller = this.controllers.get(project.id);
-    if (!controller) {
-      controller = this.createController(project);
-      this.controllers.set(project.id, controller);
-      await controller.start();
-    }
     return this.status(project.id);
   }
 
   async ensureStopped(name: string) {
     const project = this.manager.setDesiredState(name, 'STOPPED');
-    const controller = this.controllers.get(project.id);
-    if (controller) {
-      await controller.stop();
-      this.controllers.delete(project.id);
-    }
     return this.status(project.id);
+  }
+
+  async reconcile() {
+    if (!this.started) return;
+    if (this.reconcilePromise) return this.reconcilePromise;
+
+    this.reconcilePromise = (async () => {
+      for (const project of this.manager.list()) {
+        const controller = this.controllers.get(project.id);
+        if (project.desiredState === 'RUNNING' && !controller) {
+          const next = this.createController(project);
+          this.controllers.set(project.id, next);
+          await next.start();
+        } else if (project.desiredState === 'STOPPED' && controller) {
+          await controller.stop();
+          this.controllers.delete(project.id);
+        }
+      }
+    })().finally(() => {
+      this.reconcilePromise = null;
+    });
+
+    return this.reconcilePromise;
   }
 
   status(name: string) {
