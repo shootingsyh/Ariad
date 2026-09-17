@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -41,6 +42,13 @@ export class AriadProjectManager {
     if (existsSync(p.manifest)) throw new Error(`Ariad project already exists: ${p.id}`);
     mkdirSync(p.workspace, { recursive: true });
     mkdirSync(p.ariad, { recursive: true });
+    if (!existsSync(join(p.workspace, '.git'))) {
+      try {
+        execFileSync('git', ['init', '-b', 'main'], { cwd: p.workspace, stdio: 'ignore' });
+      } catch (error) {
+        throw new Error(`failed to initialize Git workspace for ${p.id}: ${error?.message ?? String(error)}`);
+      }
+    }
     const createdAt = this.now().toISOString();
     writeJson(p.manifest, {
       id: p.id,
