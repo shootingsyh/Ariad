@@ -26,6 +26,11 @@ function hasToolResult(request) {
   return (request.messages ?? []).some((message) => message?.role === 'tool');
 }
 
+function isProjectExecutionRole(request) {
+  const role = requestRole(request);
+  return /"taskId":"T1"/.test(requestText(request)) && ['developer', 'tester', 'reviewer'].includes(role);
+}
+
 function toolCallFor(request) {
   if (!hasWorkspace(request) || hasToolResult(request)) return null;
   const role = requestRole(request);
@@ -48,6 +53,13 @@ function toolCallFor(request) {
 function roleReply(request) {
   const cycle = requestCycle(request);
   const role = requestRole(request);
+
+  if (isProjectExecutionRole(request) && (!hasWorkspace(request) || !hasToolResult(request))) {
+    return {
+      executionStatus: 'FAILED',
+      failure: !hasWorkspace(request) ? 'FAKE_E2E_WORKSPACE_MISSING' : 'FAKE_E2E_TOOL_RESULT_MISSING',
+    };
+  }
 
   if (role === 'pm') {
     return {
