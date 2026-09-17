@@ -83,6 +83,15 @@ class ScriptedRuntimeAdapter {
   }
 }
 
+function recordingProjectAgentAdapter(notifications) {
+  return {
+    id: 'recording-project-agent',
+    async bindProject(binding) { return binding; },
+    async notify(input) { notifications.push(structuredClone(input)); return { ok: true }; },
+    async submitDecision(input) { return input; },
+  };
+}
+
 async function waitForController(controller) {
   await controller.start();
   while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -119,7 +128,7 @@ test('AriadProjectController persists TL project model, obtains PM approval, the
   }
 });
 
-test('existing workspace is discovered and PM sees current state before requirement planning', async () => {
+test('existing workspace current state is journaled and delivered to the bound Project Agent before planning continues', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ariad-existing-project-'));
   try {
     const ariad = join(root, '.ariad');
@@ -129,7 +138,15 @@ test('existing workspace is discovered and PM sees current state before requirem
     writeFileSync(join(workspace, 'README.md'), '# Existing app\n');
     const stateDb = join(ariad, 'state.db');
     const adapter = new ScriptedRuntimeAdapter();
-    const controller = new AriadProjectController({ project: { id: 'existing', root, workspace, stateDb, goal: 'add a health feature' }, runtimeAdapter: adapter });
+    const notifications = [];
+    const controller = new AriadProjectController({
+      project: {
+        id: 'existing', root, workspace, stateDb, goal: 'add a health feature',
+        projectAgent: { host: 'test', agentId: 'project-agent', sessionKey: 'project-session' },
+      },
+      runtimeAdapter: adapter,
+      projectAgentAdapter: recordingProjectAgentAdapter(notifications),
+    });
 
     await waitForController(controller);
     assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
@@ -143,6 +160,62 @@ test('existing workspace is discovered and PM sees current state before requirem
     assert.equal(calls[1].context.currentProjectModel.currentState.existingProject, true);
     const currentReview = JSON.parse(readFileSync(join(ariad, 'project', 'current-state-review.json'), 'utf8'));
     assert.equal(currentReview.outcome, 'CURRENT_STATE_ACKNOWLEDGED');
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].event.type, 'CURRENT_STATE_READY');
+    assert.equal(notifications[0].binding.sessionKey, 'project-session');
+    assert.equal(notifications[0].event.payload.currentState.existingProject, true);
+    const journal = readFileSync(join(ariad, 'project', 'project-agent-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(journal[0].type, 'CURRENT_STATE_READY');
+    assert.equal(journal[0].delivery, 'PENDING');
+    assert.equal(journal[1].eventId, journal[0].id);
+    assert.equal(journal[1].delivery, 'DELIVERED');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PM NEEDS_HUMAN is routed to Project Agent and blocks Developer execution', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-needs-human-'));
+  try {
+    const ariad = join(root, '.ariad');
+    const workspace = join(root, 'workspace');
+    mkdirSync(ariad, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    const adapter = new ScriptedRuntimeAdapter();
+    const originalPoll = adapter.poll.bind(adapter);
+    adapter.poll = async (handle) => {
+      const input = adapter.runs.get(handle.externalId);
+      if (input.role === 'pm' && input.context?.productPhase === 'PLAN_REVIEW') {
+        return {
+          state: 'COMPLETED',
+          outcome: 'NEEDS_HUMAN',
+          result: { reason: 'Product choice required', guidance: '', customerOutcomeSummary: '', questions: ['Should the health state be public?'] },
+        };
+      }
+      return originalPoll(handle);
+    };
+    const notifications = [];
+    const controller = new AriadProjectController({
+      project: {
+        id: 'human', root, workspace, stateDb: join(ariad, 'state.db'), goal: 'build',
+        projectAgent: { host: 'test', agentId: 'project-agent', sessionKey: 'project-session' },
+      },
+      runtimeAdapter: adapter,
+      projectAgentAdapter: recordingProjectAgentAdapter(notifications),
+    });
+
+    await waitForController(controller);
+    assert.equal(controller.status().phase, 'NEEDS_HUMAN');
+    assert.equal([...adapter.runs.values()].some((run) => run.role === 'developer'), false);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].event.type, 'NEEDS_HUMAN');
+    assert.equal(notifications[0].event.payload.sourceRole, 'pm');
+    assert.equal(notifications[0].event.payload.phase, 'PLAN_REVIEW');
+    assert.deepEqual(notifications[0].event.payload.questions, ['Should the health state be public?']);
+    const journal = readFileSync(join(ariad, 'project', 'project-agent-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(journal[0].type, 'NEEDS_HUMAN');
+    assert.equal(journal[1].delivery, 'DELIVERED');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
