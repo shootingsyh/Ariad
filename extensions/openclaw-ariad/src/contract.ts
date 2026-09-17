@@ -5,7 +5,7 @@ export const contract = defineFeatureContract({
   pluginId: 'ariad',
   operations: {
     project: {
-      kind: 'mutation',
+      kind: 'action',
       description: 'Create, list, inspect, start, or stop isolated Ariad projects. The creating conversation becomes the project agent binding.',
       input: Type.Object({
         action: Type.Union([
