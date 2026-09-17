@@ -102,6 +102,24 @@ export class TransitionEngine {
     throw new Error(`unsupported workflow role ${role}`);
   }
 
+  resumeHumanDecision(state, decision) {
+    requireState(state);
+    if (state.status !== 'NEEDS_HUMAN') throw new Error('human decision requires NEEDS_HUMAN workflow state');
+    if (!decision || typeof decision !== 'object') throw new Error('human decision record is required');
+    const history = Array.isArray(state.context?.humanDecisionHistory) ? state.context.humanDecisionHistory : [];
+    return {
+      patch: {
+        status: 'RUNNING',
+        context: {
+          ...(state.context ?? {}),
+          humanDecision: decision,
+          humanDecisionHistory: [...history, decision],
+        },
+      },
+      effect: null,
+    };
+  }
+
   completeSourceControl(state, result = {}) {
     requireState(state);
     if (state.status !== 'AWAITING_SOURCE_CONTROL') throw new Error('source control completion requires AWAITING_SOURCE_CONTROL');
