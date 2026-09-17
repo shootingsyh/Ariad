@@ -35,9 +35,7 @@ test('reviewer NOT_PASS loops back to Developer and increments only the developm
     step('reviewer', { taskId: 'F1', strategyEpoch: 1, devCycle: 2 }, completed('PASS')),
   ]);
   const engine = new WorkflowEngine(new LLMWorkflowRoleExecutor(llm));
-
   const result = await engine.runFeature('F1');
-
   assert.equal(result.status, 'SUCCEEDED');
   assert.equal(result.devCycle, 2);
   assert.equal(result.strategyEpoch, 1);
@@ -45,7 +43,7 @@ test('reviewer NOT_PASS loops back to Developer and increments only the developm
   llm.assertExhausted();
 });
 
-test('three semantic failures escalate to Project Debugger then PM replan', async () => {
+test('three semantic failures escalate to Project Debugger then Tech Lead replan', async () => {
   const script = [];
   for (let cycle = 1; cycle <= 3; cycle += 1) {
     script.push(
@@ -55,18 +53,18 @@ test('three semantic failures escalate to Project Debugger then PM replan', asyn
   }
   script.push(
     step('project_debugger', { taskId: 'F2', strategyEpoch: 1, devCycle: 3 }, completed('TASK_TOO_LARGE', { reason: 'too broad' })),
-    step('pm', { taskId: 'F2', strategyEpoch: 1, devCycle: 3, diagnosis: 'TASK_TOO_LARGE' }, completed('REPLANNED', { tasks: ['A', 'B'] })),
+    step('tech_lead', { taskId: 'F2', strategyEpoch: 1, devCycle: 3, diagnosis: 'TASK_TOO_LARGE' }, completed('REPLANNED', { tasks: ['A', 'B'] })),
   );
 
   const llm = new ScriptedLLM(script);
   const engine = new WorkflowEngine(new LLMWorkflowRoleExecutor(llm));
   const result = await engine.runFeature('F2');
-
   assert.equal(result.status, 'WAITING_REPLAN');
   assert.equal(result.devCycle, 3);
   assert.equal(result.strategyEpoch, 1);
   assert.equal(result.history.filter((x) => x.role === 'developer').length, 3);
   assert.equal(result.history.filter((x) => x.role === 'project_debugger').length, 1);
+  assert.equal(result.history.filter((x) => x.role === 'tech_lead').length, 1);
   llm.assertExhausted();
 });
 
@@ -78,9 +76,7 @@ test('system failure retries the same role without incrementing devCycle', async
     step('reviewer', { taskId: 'F3', strategyEpoch: 1, devCycle: 1 }, completed('PASS')),
   ]);
   const engine = new WorkflowEngine(new LLMWorkflowRoleExecutor(llm), { maxSystemRetries: 2 });
-
   const result = await engine.runFeature('F3');
-
   assert.equal(result.status, 'SUCCEEDED');
   assert.equal(result.devCycle, 1);
   assert.equal(result.history.filter((x) => x.role === 'tester').length, 2);
@@ -103,11 +99,9 @@ test('wrong implementation approach starts a new strategy epoch and resets devCy
     step('tester', { taskId: 'F4', strategyEpoch: 2, devCycle: 1 }, completed('PASS')),
     step('reviewer', { taskId: 'F4', strategyEpoch: 2, devCycle: 1 }, completed('PASS')),
   );
-
   const llm = new ScriptedLLM(script);
   const engine = new WorkflowEngine(new LLMWorkflowRoleExecutor(llm));
   const result = await engine.runFeature('F4');
-
   assert.equal(result.status, 'SUCCEEDED');
   assert.equal(result.strategyEpoch, 2);
   assert.equal(result.devCycle, 1);
