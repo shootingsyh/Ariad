@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenClawRuntimeAdapter } from '../dist/openclaw-runtime-adapter.js';
+import { OpenClawProjectAgentAdapter } from '../dist/openclaw-project-agent-adapter.js';
 import { AriadSupervisor } from '../dist/ariad-supervisor.js';
 import { AriadProjectManager } from '../runtime/project-manager.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -64,6 +65,40 @@ test('OpenClawRuntimeAdapter treats observation timeout as nonterminal', async (
   });
   const handle = await adapter.start({ runId: 'r2', role: 'developer', context: {} });
   assert.deepEqual(await adapter.poll(handle), { state: 'RUNNING' });
+});
+
+test('OpenClawProjectAgentAdapter routes durable Ariad events to the bound project conversation', async () => {
+  const calls = [];
+  const adapter = new OpenClawProjectAgentAdapter({
+    gateway: {
+      async request(method, params, options) {
+        calls.push({ method, params, options });
+        return { ok: true };
+      },
+    },
+  });
+  const event = {
+    version: 1,
+    id: 'p1:1:1',
+    projectId: 'p1',
+    type: 'NEEDS_HUMAN',
+    createdAt: '2026-09-17T00:00:00.001Z',
+    payload: { questions: ['Choose A or B'] },
+  };
+
+  await adapter.notify({
+    binding: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:project-thread' },
+    event,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sessions.send');
+  assert.equal(calls[0].params.key, 'agent:main:project-thread');
+  assert.equal(calls[0].params.agentId, 'main');
+  assert.equal(calls[0].params.idempotencyKey, 'ariad:p1:1:1');
+  assert.match(calls[0].params.message, /minimum concrete question/);
+  assert.match(calls[0].params.message, /Choose A or B/);
+  assert.equal(calls[0].options.timeoutMs, 35_000);
 });
 
 test('AriadSupervisor owns controller lifecycle by reconciling durable desired state', async () => {
