@@ -1,7 +1,50 @@
 import http from 'node:http';
 
 const port = Number(process.env.ARIAD_FAKE_PROVIDER_PORT || 18081);
-const reply = JSON.stringify({ executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } });
+
+function requestText(request) {
+  return (request.messages ?? []).map((message) => {
+    if (typeof message?.content === 'string') return message.content;
+    if (Array.isArray(message?.content)) return message.content.map((part) => part?.text ?? '').join(' ');
+    return '';
+  }).join('\n');
+}
+
+function roleReply(request) {
+  const text = requestText(request);
+  const cycle = Number(text.match(/"devCycle":(\d+)/)?.[1] ?? 0);
+  const role = text.match(/Ariad(?:'s| the)?\s+(developer|tester|reviewer|project_debugger|pm|system_debugger|artist)\s+role/i)?.[1]?.toLowerCase();
+
+  if (role === 'pm') {
+    return {
+      executionStatus: 'COMPLETED',
+      outcome: 'REPLANNED',
+      result: {
+        source: 'fake-provider',
+        tasks: [{
+          id: 'T1',
+          title: 'Implement fake health endpoint',
+          description: 'A deterministic CI task used to exercise the full Ariad workflow.',
+          acceptanceCriteria: ['implementation is reviewed successfully after one semantic retry'],
+          dependsOn: [],
+        }],
+      },
+    };
+  }
+  if (role === 'developer') {
+    return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle } };
+  }
+  if (role === 'tester') {
+    return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle } };
+  }
+  if (role === 'reviewer' && cycle === 1) {
+    return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, findings: ['intentional first-cycle rejection'] } };
+  }
+  if (role === 'reviewer') {
+    return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle } };
+  }
+  return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } };
+}
 
 function json(res, value) {
   res.writeHead(200, { 'content-type': 'application/json' });
@@ -17,6 +60,7 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     const request = JSON.parse(body || '{}');
+    const reply = JSON.stringify(roleReply(request));
     if (request.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       const id = `chatcmpl-${Date.now()}`;
