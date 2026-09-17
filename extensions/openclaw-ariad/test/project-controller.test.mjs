@@ -25,6 +25,24 @@ function projectModel({ existingProject = false } = {}) {
       purpose: 'Expose health state',
       interface: 'health.txt contains status and cycle',
       testBoundary: 'Read health.txt and verify status',
+      maturity: 'PROVISIONAL',
+      justifiedByVerticals: ['health-slice'],
+    }],
+    dependencies: [{
+      from: 'runtime',
+      to: 'health-feature',
+      contractId: 'health-contract',
+      implementationRequired: false,
+      rationale: 'Runtime consumes the health boundary; the walking skeleton can use the minimal implementation.',
+    }],
+    verticalSlices: [{
+      id: 'health-slice',
+      name: 'Health walking skeleton',
+      goal: 'Deliver the smallest user-visible health path end to end.',
+      componentIds: ['runtime', 'health-feature'],
+      contractIds: ['health-contract'],
+      skeletonTest: 'Read the final health.txt through the same boundary used by the feature.',
+      taskIds: ['T1'],
     }],
     technicalDirection: {
       summary: 'Use the existing Node runtime and file-based deterministic fixture.',
@@ -43,6 +61,7 @@ function projectModel({ existingProject = false } = {}) {
       id: 'T1',
       title: 'Implement deterministic health state',
       componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
       acceptanceCriteria: ['passes after one review retry'],
       testStrategy: 'Read health.txt and verify the final healthy state',
       atomic: true,
@@ -97,7 +116,7 @@ async function waitForController(controller) {
   while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
-test('AriadProjectController persists TL project model, obtains PM approval, then converges', async () => {
+test('AriadProjectController persists TL living architecture, obtains PM approval, then converges', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ariad-project-controller-'));
   try {
     const ariad = join(root, '.ariad');
@@ -111,17 +130,23 @@ test('AriadProjectController persists TL project model, obtains PM approval, the
     assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
 
     const modelDir = join(ariad, 'project');
-    for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'technical-direction.json', 'decomposition.json', 'project-model.json', 'plan-review.json', 'task-graph.json']) {
+    for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'dependencies.json', 'vertical-slices.json', 'technical-direction.json', 'decomposition.json', 'project-model.json', 'plan-review.json', 'task-graph.json']) {
       assert.equal(existsSync(join(modelDir, name)), true, `${name} must be durable`);
     }
     assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
+    assert.equal(JSON.parse(readFileSync(join(modelDir, 'contracts.json'), 'utf8'))[0].maturity, 'PROVISIONAL');
+    assert.equal(JSON.parse(readFileSync(join(modelDir, 'vertical-slices.json'), 'utf8'))[0].skeletonTest.length > 0, true);
 
     const db = new DatabaseSync(stateDb, { readOnly: true });
-    const state = db.prepare('SELECT dev_cycle, status FROM workflow_state WHERE task_id = ?').get('T1');
+    const state = db.prepare('SELECT dev_cycle, status, context_json FROM workflow_state WHERE task_id = ?').get('T1');
     const runs = db.prepare('SELECT role, attempt, state FROM runs ORDER BY seq').all();
     db.close();
     assert.equal(state.status, 'SUCCEEDED');
     assert.equal(state.dev_cycle, 2);
+    const context = JSON.parse(state.context_json);
+    assert.equal(context.task.verticalSliceId, 'health-slice');
+    assert.equal(context.dependencies[0].contractId, 'health-contract');
+    assert.equal(context.verticalSlices[0].id, 'health-slice');
     assert.deepEqual(runs.map((run) => run.role), ['tech_lead', 'pm', 'developer', 'tester', 'reviewer', 'developer', 'tester', 'reviewer']);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -252,6 +277,33 @@ test('Tech Lead project model rejects a task that is not an atomic decomposition
     await waitForController(controller);
     assert.equal(controller.status().phase, 'FAILED');
     assert.match(controller.status().error, /must be a leaf in decomposition/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Tech Lead project model rejects speculative contracts not justified by a vertical slice', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-contract-pressure-'));
+  try {
+    const ariad = join(root, '.ariad');
+    const workspace = join(root, 'workspace');
+    mkdirSync(ariad, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    const adapter = new ScriptedRuntimeAdapter();
+    const originalPoll = adapter.poll.bind(adapter);
+    adapter.poll = async (handle) => {
+      const input = adapter.runs.get(handle.externalId);
+      if (input.role === 'tech_lead') {
+        const model = projectModel();
+        model.contracts[0].justifiedByVerticals = ['future-maybe-slice'];
+        return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: model } };
+      }
+      return originalPoll(handle);
+    };
+    const controller = new AriadProjectController({ project: { id: 'speculative', root, workspace, stateDb: join(ariad, 'state.db'), goal: 'build' }, runtimeAdapter: adapter });
+    await waitForController(controller);
+    assert.equal(controller.status().phase, 'FAILED');
+    assert.match(controller.status().error, /justified by unknown vertical slice/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
