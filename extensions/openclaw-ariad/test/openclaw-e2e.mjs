@@ -36,20 +36,7 @@ const config = {
   plugins: {
     load: { paths: [pluginDir] },
     entries: {
-      ariad: {
-        enabled: true,
-        config: {
-          projectsRoot,
-          subagentAgentId: 'main',
-          subagentProvider: 'ariadfake',
-          subagentModel: 'fake',
-          ciRuntimeProbeEnabled: true,
-        },
-        subagent: {
-          allowModelOverride: true,
-          allowedModels: ['ariadfake/fake'],
-        },
-      },
+      ariad: { enabled: true },
     },
   },
 };
@@ -60,6 +47,8 @@ const env = {
   OPENCLAW_STATE_DIR: stateDir,
   OPENCLAW_CONFIG_PATH: configPath,
   OPENCLAW_OFFLINE: '1',
+  ARIAD_PROJECTS_ROOT: projectsRoot,
+  ARIAD_CI_RUNTIME_PROBE: '1',
   NO_COLOR: '1',
 };
 
