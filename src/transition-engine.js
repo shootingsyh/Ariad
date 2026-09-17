@@ -74,20 +74,26 @@ export class TransitionEngine {
           effect: { type: 'APPLY_STRATEGY_GUIDANCE', guidance: result.guidance ?? null },
         };
       }
-      if (result.outcome === 'TASK_TOO_LARGE' || result.outcome === 'TASK_CONTRADICTORY') {
+      if (result.outcome === 'TASK_TOO_LARGE') {
         return {
-          patch: { stage: 'pm', status: 'RUNNING' },
-          effect: { type: 'PM_REPLAN_REQUIRED', diagnosis: result.outcome },
+          patch: { stage: 'tech_lead', status: 'RUNNING' },
+          effect: { type: 'TECH_LEAD_REPLAN_REQUIRED', diagnosis: result.outcome },
+        };
+      }
+      if (result.outcome === 'TASK_CONTRADICTORY') {
+        return {
+          patch: { status: 'NEEDS_HUMAN' },
+          effect: { type: 'PRODUCT_REQUIREMENT_CONFLICT', diagnosis: result.outcome },
         };
       }
       return { patch: { status: 'NEEDS_HUMAN' }, effect: { type: 'UNKNOWN_PROJECT_CAUSE' } };
     }
 
-    if (role === 'pm') {
+    if (role === 'tech_lead') {
       if (result.outcome === 'NEEDS_HUMAN') {
         return { patch: { status: 'NEEDS_HUMAN' }, effect: null };
       }
-      if (result.outcome === 'REPLANNED') {
+      if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
         return { patch: { status: 'WAITING_REPLAN' }, effect: { type: 'WORKFLOW_GRAPH_MUTATION_REQUIRED' } };
       }
       return { patch: { status: 'NEEDS_HUMAN' }, effect: { type: 'INVALID_BUSINESS_OUTCOME' } };
