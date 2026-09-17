@@ -12,8 +12,10 @@ type ProjectAgentBinding = {
 
 type ProjectAgentEvent = {
   version: 1;
+  id: string;
   projectId: string;
   type: 'CURRENT_STATE_READY' | 'NEEDS_HUMAN';
+  createdAt: string;
   payload: Record<string, unknown>;
 };
 
@@ -55,7 +57,7 @@ export class OpenClawProjectAgentAdapter {
       ...(binding.agentId ? { agentId: binding.agentId } : {}),
       message: renderEvent(input.event),
       timeoutMs: 30_000,
-      idempotencyKey: `ariad:${input.event.projectId}:${input.event.type}:${JSON.stringify(input.event.payload)}`,
+      idempotencyKey: `ariad:${input.event.id}`,
     }, { timeoutMs: 35_000 });
   }
 
