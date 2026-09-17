@@ -45,12 +45,13 @@ function validatePlannedTasks(tasks) {
 }
 
 export class AriadProjectController {
-  constructor({ project, runtimeAdapter, finalizeSourceControl = async () => ({ ok: true }) }) {
+  constructor({ project, runtimeAdapter, finalizeSourceControl = async () => ({ ok: true }), onError = null }) {
     if (!project?.id || !project?.stateDb || !project?.root) throw new Error('project manifest is required');
     if (!runtimeAdapter) throw new Error('runtimeAdapter is required');
     this.project = project;
     this.runtimeAdapter = runtimeAdapter;
     this.finalizeSourceControl = finalizeSourceControl;
+    this.onError = typeof onError === 'function' ? onError : null;
     this.graphPath = join(project.root, '.ariad', 'task-graph.json');
     this.active = false;
     this.phase = 'STOPPED';
@@ -73,6 +74,7 @@ export class AriadProjectController {
       .catch((error) => {
         this.error = error instanceof Error ? error.message : String(error);
         this.phase = 'FAILED';
+        try { this.onError?.(error); } catch {}
         throw error;
       })
       .finally(() => {
