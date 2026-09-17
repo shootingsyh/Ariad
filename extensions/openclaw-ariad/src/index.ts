@@ -1,16 +1,9 @@
 import { homedir } from 'node:os';
-import { Type } from 'typebox';
-import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
+import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
 import { AriadSupervisor } from './ariad-supervisor.js';
+import { contract } from './contract.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
-
-function toolResult(details: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(details) }],
-    details,
-  };
-}
 
 function renderRoleMessage(role: string, context: Record<string, unknown>) {
   return [
@@ -21,25 +14,16 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
   ].join('\n\n');
 }
 
-export default definePluginEntry({
-  id: 'ariad',
+export default defineFeaturePlugin({
+  contract,
   name: 'Ariad',
   description: 'Create and manage isolated Ariad autonomous engineering projects.',
-  register(api) {
-    const config = (api.pluginConfig ?? {}) as {
-      projectsRoot?: string;
-      subagentAgentId?: string;
-      subagentProvider?: string;
-      subagentModel?: string;
-      ciRuntimeProbeEnabled?: boolean;
-    };
-    const projectsRoot = config.projectsRoot || defaultProjectsRoot(homedir());
+  setup(api) {
+    const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
     const manager = new AriadProjectManager({ projectsRoot });
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
-      agentId: config.subagentAgentId ?? 'main',
-      provider: config.subagentProvider,
-      model: config.subagentModel,
+      agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
       cancelRun: async (runId) => {
         const runs = (api.runtime.tasks as any)?.runs;
@@ -69,41 +53,7 @@ export default definePluginEntry({
       async stop() { await supervisor.stop(); },
     });
 
-    api.registerTool((toolContext) => ({
-      name: 'ariad_project',
-      label: 'Ariad project',
-      description: 'Create, list, inspect, start, or stop isolated Ariad projects. The current conversation becomes the project agent binding for newly created projects.',
-      parameters: Type.Object({
-        action: Type.Union([
-          Type.Literal('create'), Type.Literal('list'), Type.Literal('status'), Type.Literal('start'), Type.Literal('stop'),
-        ]),
-        name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
-        goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
-      }, { additionalProperties: false }),
-      async execute(_id, params) {
-        const { action, name, goal } = params as { action: string; name?: string; goal?: string };
-        if (action === 'list') return toolResult({ action, projects: supervisor.list() });
-        if (!name) throw new Error(`name is required for action ${action}`);
-        if (action === 'create') {
-          const ctx = toolContext as any;
-          const project = manager.create(name, {
-            goal: goal ?? null,
-            projectAgent: {
-              host: 'openclaw',
-              agentId: ctx.agentId ?? null,
-              sessionKey: ctx.sessionKey ?? ctx.session?.key ?? null,
-            },
-          });
-          return toolResult({ action, project: supervisor.status(project.id) });
-        }
-        if (action === 'status') return toolResult({ action, project: supervisor.status(name) });
-        if (action === 'start') return toolResult({ action, project: await supervisor.ensureRunning(name) });
-        if (action === 'stop') return toolResult({ action, project: await supervisor.ensureStopped(name) });
-        throw new Error(`unsupported Ariad action: ${action}`);
-      },
-    }));
-
-    if (config.ciRuntimeProbeEnabled) {
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
       api.registerGatewayMethod('ariad.ci.roleRun', async ({ params, respond }) => {
         try {
           const input = (params ?? {}) as { role?: string; context?: Record<string, unknown> };
@@ -120,5 +70,38 @@ export default definePluginEntry({
         }
       }, { scope: 'operator.admin' });
     }
+
+    return {
+      async project(input, invocation) {
+        const { action, name, goal } = input;
+        let details: unknown;
+        if (action === 'list') {
+          details = { action, projects: supervisor.list() };
+        } else {
+          if (!name) throw new Error(`name is required for action ${action}`);
+          if (action === 'create') {
+            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+            const project = manager.create(name, {
+              goal: goal ?? null,
+              projectAgent: {
+                host: 'openclaw',
+                agentId: toolContext?.agentId ?? null,
+                sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
+              },
+            });
+            details = { action, project: supervisor.status(project.id) };
+          } else if (action === 'status') {
+            details = { action, project: supervisor.status(name) };
+          } else if (action === 'start') {
+            details = { action, project: await supervisor.ensureRunning(name) };
+          } else if (action === 'stop') {
+            details = { action, project: await supervisor.ensureStopped(name) };
+          } else {
+            throw new Error(`unsupported Ariad action: ${action}`);
+          }
+        }
+        return { action, payloadJson: JSON.stringify(details) };
+      },
+    };
   },
 });
