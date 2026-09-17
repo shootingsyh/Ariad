@@ -1,11 +1,12 @@
 {
   "name": "@ariad/openclaw-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "files": ["dist", "runtime", "openclaw.plugin.json", "README.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run typecheck && esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js",
     "test": "npm run build && node --test test/runtime.test.mjs",
     "test:e2e": "npm run build && node test/openclaw-e2e.mjs",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
@@ -18,6 +19,7 @@
     "openclaw": ">=2026.9.4"
   },
   "devDependencies": {
+    "esbuild": "^0.25.9",
     "openclaw": "2026.9.4",
     "typescript": "^5.9.2"
   },
