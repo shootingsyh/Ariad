@@ -26,7 +26,7 @@ const config = {
         baseUrl: `http://127.0.0.1:${providerPort}/v1`,
         apiKey: 'fake-key',
         api: 'openai-completions',
-        models: [{ id: 'fake', name: 'Ariad CI Fake', contextWindow: 8192, maxTokens: 1024, input: ['text'] }],
+        models: [{ id: 'fake', name: 'Ariad CI Fake', contextWindow: 32768, maxTokens: 8192, input: ['text'] }],
       },
     },
   },
