@@ -34,6 +34,10 @@ function isRequirementPlan(request) {
   return requestRole(request) === 'tech_lead' && /"planningPhase":"REQUIREMENT_PLAN"/.test(requestText(request));
 }
 
+function isCurrentStateReview(request) {
+  return requestRole(request) === 'pm' && /"productPhase":"CURRENT_STATE_REVIEW"/.test(requestText(request));
+}
+
 function isProjectExecutionRole(request) {
   const role = requestRole(request);
   return /"taskId":"T1"/.test(requestText(request)) && ['developer', 'tester', 'reviewer'].includes(role);
@@ -116,16 +120,12 @@ function roleReply(request) {
 
   if (role === 'tech_lead') {
     const existingProject = isDiscovery(request) || /"existingProject":true/.test(requestText(request));
-    return {
-      executionStatus: 'COMPLETED',
-      outcome: isRequirementPlan(request) ? 'PLANNED' : 'PLANNED',
-      result: { source: 'fake-provider', projectModel: fakeProjectModel({ existingProject }) },
-    };
+    return { executionStatus: 'COMPLETED', outcome: 'PLANNED', result: { source: 'fake-provider', projectModel: fakeProjectModel({ existingProject }) } };
   }
   if (role === 'pm') {
     return {
       executionStatus: 'COMPLETED',
-      outcome: 'PLAN_ACCEPTED',
+      outcome: isCurrentStateReview(request) ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED',
       result: {
         source: 'fake-provider',
         reason: 'The current-state reconstruction and implementation plan preserve the requested customer outcome.',
