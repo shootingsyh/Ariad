@@ -148,8 +148,8 @@ test('whole task graph resumes after process-style restart without rerunning com
     assert.equal(result.states.I.devCycle, 2, 'business rejection after restart should advance only I to cycle 2');
     assert.deepEqual(
       phase2Calls.filter(call => call.taskId === 'I' && call.role === 'developer').map(call => call.devCycle),
-      [2],
-      'I should resume current state, then only re-enter developer for business cycle 2',
+      [1, 2],
+      'I should start its durable cycle 1 after restart, then re-enter developer for business cycle 2',
     );
 
     const allCalls = [...phase1Calls.map(call => ({ ...call, phase: 1 })), ...phase2Calls.map(call => ({ ...call, phase: 2 }))];
