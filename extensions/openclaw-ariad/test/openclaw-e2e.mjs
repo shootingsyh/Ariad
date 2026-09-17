@@ -25,6 +25,7 @@ const config = {
     },
   },
   models: {
+    catalogRefresh: { enabled: false },
     providers: {
       ariadfake: {
         baseUrl: `http://127.0.0.1:${providerPort}/v1`,
