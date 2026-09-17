@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 const root = mkdtempSync(join(tmpdir(), 'ariad-openclaw-e2e-'));
 const stateDir = join(root, 'state');
@@ -35,9 +36,7 @@ const config = {
   },
   plugins: {
     load: { paths: [pluginDir] },
-    entries: {
-      ariad: { enabled: true },
-    },
+    entries: { ariad: { enabled: true } },
   },
 };
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -70,7 +69,7 @@ provider.stderr.on('data', (chunk) => { providerLog += chunk; });
 gateway.stdout.on('data', (chunk) => { gatewayLog += chunk; });
 gateway.stderr.on('data', (chunk) => { gatewayLog += chunk; });
 
-async function waitFor(check, label, timeoutMs = 30000) {
+async function waitFor(check, label, timeoutMs = 45000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -81,6 +80,16 @@ async function waitFor(check, label, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${label}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
 }
 
+function gatewayCall(method, params) {
+  const call = spawnSync(openclaw, [
+    'gateway', 'call', method,
+    '--params', JSON.stringify(params),
+    '--port', String(gatewayPort), '--token', token, '--json', '--timeout', '30000',
+  ], { cwd: pluginDir, env, encoding: 'utf8', timeout: 45000 });
+  assert.equal(call.status, 0, `gateway call ${method} failed\nstdout:\n${call.stdout}\nstderr:\n${call.stderr}\ngateway:\n${gatewayLog}`);
+  return `${call.stdout}\n${call.stderr}`;
+}
+
 try {
   await waitFor(() => providerLog.includes('ARIAD_FAKE_PROVIDER_READY'), 'fake provider');
   await waitFor(async () => {
@@ -88,18 +97,60 @@ try {
     return response.ok;
   }, 'OpenClaw Gateway');
 
-  const call = spawnSync(openclaw, [
-    'gateway', 'call', 'ariad.ci.roleRun',
-    '--params', JSON.stringify({ role: 'reviewer', context: { taskId: 'T1', acceptanceCriteria: ['fake provider must return PASS'] } }),
-    '--port', String(gatewayPort), '--token', token, '--json', '--timeout', '30000',
-  ], { cwd: pluginDir, env, encoding: 'utf8', timeout: 45000 });
+  const roleOutput = gatewayCall('ariad.ci.roleRun', {
+    role: 'reviewer',
+    context: { taskId: 'probe', acceptanceCriteria: ['fake provider must return PASS'] },
+  });
+  assert.match(roleOutput, /fake-provider/, roleOutput);
+  assert.match(roleOutput, /COMPLETED/, roleOutput);
+  assert.match(roleOutput, /PASS/, roleOutput);
 
-  assert.equal(call.status, 0, `gateway call failed\nstdout:\n${call.stdout}\nstderr:\n${call.stderr}\ngateway:\n${gatewayLog}`);
-  const output = `${call.stdout}\n${call.stderr}`;
-  assert.match(output, /fake-provider/, output);
-  assert.match(output, /COMPLETED/, output);
-  assert.match(output, /PASS/, output);
-  console.log('ARIAD_OPENCLAW_E2E_OK');
+  gatewayCall('ariad.ci.project', {
+    action: 'create',
+    name: 'full-e2e',
+    goal: 'Create a tiny deterministic health endpoint and verify it.',
+  });
+  gatewayCall('ariad.ci.project', { action: 'start', name: 'full-e2e' });
+
+  let lastStatus = '';
+  await waitFor(() => {
+    lastStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'full-e2e' });
+    if (/"phase"\s*:\s*"FAILED"/.test(lastStatus)) {
+      throw new Error(`project controller failed: ${lastStatus}`);
+    }
+    return /"phase"\s*:\s*"SUCCEEDED"/.test(lastStatus);
+  }, 'full Ariad project success');
+
+  const projectRoot = join(projectsRoot, 'full-e2e');
+  const graphPath = join(projectRoot, '.ariad', 'task-graph.json');
+  const dbPath = join(projectRoot, '.ariad', 'state.db');
+  assert.equal(existsSync(graphPath), true, 'PM task graph must be durable');
+  const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+  assert.deepEqual(graph.tasks.map((task) => task.id), ['T1']);
+
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const state = db.prepare('SELECT stage, dev_cycle, strategy_epoch, status FROM workflow_state WHERE task_id = ?').get('T1');
+  assert.equal(state.status, 'SUCCEEDED');
+  assert.equal(state.dev_cycle, 2, 'reviewer NOT_PASS must cause semantic cycle 2');
+  assert.equal(state.strategy_epoch, 1);
+
+  const runs = db.prepare('SELECT task_id, role, attempt, state FROM runs ORDER BY seq').all();
+  db.close();
+  assert.deepEqual(
+    runs.map((run) => `${run.task_id}:${run.role}:${run.state}`),
+    [
+      '__project_plan__:pm:COMPLETED',
+      'T1:developer:COMPLETED',
+      'T1:tester:COMPLETED',
+      'T1:reviewer:COMPLETED',
+      'T1:developer:COMPLETED',
+      'T1:tester:COMPLETED',
+      'T1:reviewer:COMPLETED',
+    ],
+  );
+  assert.deepEqual(runs.filter((run) => run.role === 'reviewer').map((run) => run.attempt), [1, 2]);
+
+  console.log('ARIAD_OPENCLAW_FULL_PROJECT_E2E_OK');
 } finally {
   gateway.kill('SIGTERM');
   provider.kill('SIGTERM');
