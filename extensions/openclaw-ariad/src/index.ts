@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
 import { PromptRenderer } from '../../../src/llm/prompt-renderer.js';
+import { GitSourceControlFinalizer } from '../../../src/git-source-control-finalizer.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
 import { AriadProjectController } from '../runtime/project-controller.js';
 import { AriadSupervisor } from './ariad-supervisor.js';
@@ -22,6 +23,7 @@ export default defineFeaturePlugin({
   description: 'Create and manage isolated Ariad autonomous engineering projects.',
   setup(api) {
     const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
+    const pushSourceControl = process.env.ARIAD_SOURCE_CONTROL_PUSH !== '0';
     const manager = new AriadProjectManager({ projectsRoot });
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
@@ -35,14 +37,18 @@ export default defineFeaturePlugin({
 
     const supervisor = new AriadSupervisor({
       manager,
-      createController: (project) => new AriadProjectController({
-        project,
-        runtimeAdapter,
-        // Source-control ownership remains outside Reviewer. This callback is the
-        // current host integration seam until the concrete SCM finalizer is wired.
-        finalizeSourceControl: async () => ({ ok: true }),
-        onError: (error: unknown) => api.logger.error(`Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`),
-      }),
+      createController: (project) => {
+        const sourceControl = new GitSourceControlFinalizer({
+          workspace: project.workspace,
+          push: pushSourceControl,
+        });
+        return new AriadProjectController({
+          project,
+          runtimeAdapter,
+          finalizeSourceControl: (input) => sourceControl.finalize(input),
+          onError: (error: unknown) => api.logger.error(`Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`),
+        });
+      },
     });
 
     api.registerService({
