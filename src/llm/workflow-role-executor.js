@@ -1,15 +1,7 @@
+import { PromptRenderer } from './prompt-renderer.js';
+
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${name} must be an object`);
-}
-
-function baseMessages(role, context) {
-  return [
-    {
-      role: 'system',
-      content: `You are Ariad's ${role} role. Return only one JSON object. Do not wrap it in markdown. Preserve the distinction between execution failure and business outcome.`,
-    },
-    { role: 'user', content: JSON.stringify(context) },
-  ];
 }
 
 function validate(role, result) {
@@ -31,14 +23,16 @@ function validate(role, result) {
 }
 
 export class LLMWorkflowRoleExecutor {
-  constructor(llm) {
+  constructor(llm, { renderer = new PromptRenderer() } = {}) {
     if (!llm || typeof llm.complete !== 'function') throw new Error('llm.complete is required');
+    if (!renderer || typeof renderer.render !== 'function') throw new Error('renderer.render is required');
     this.llm = llm;
+    this.renderer = renderer;
     this.calls = [];
   }
 
   async run(role, context) {
-    const request = { json: true, messages: baseMessages(role, context) };
+    const request = this.renderer.render(role, context);
     this.calls.push({ role, context: structuredClone(context) });
     const result = await this.llm.complete(request);
     return validate(role, result);
