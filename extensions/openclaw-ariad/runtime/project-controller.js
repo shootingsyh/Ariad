@@ -111,6 +111,7 @@ export class AriadProjectController {
       projectId: this.project.id,
       projectGoal: this.project.goal,
       planningPhase: 'INITIAL_PLAN',
+      workspace: this.project.workspace,
     });
     if (plan.executionStatus !== 'COMPLETED') throw new Error(`PM planning failed: ${plan.failure ?? 'unknown failure'}`);
     if (plan.outcome !== 'REPLANNED') throw new Error(`PM planning returned unexpected outcome: ${plan.outcome}`);
@@ -163,7 +164,7 @@ export class AriadProjectController {
       const scheduler = new Scheduler({
         resourceManager: { tryAcquire() { return null; } },
         isRuntimeHealthy: () => true,
-        dispatch: (work) => runtimeExecutor.run(work.role, work.context),
+        dispatch: (work) => runtimeExecutor.run(work.role, { ...work.context, workspace: this.project.workspace }),
       });
       const coordinator = new Coordinator({
         scheduler,
