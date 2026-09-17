@@ -7,6 +7,7 @@ import { AriadProjectManager } from '../runtime/project-manager.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 test('OpenClawRuntimeAdapter translates Ariad Run lifecycle to subagent lifecycle', async () => {
   const calls = [];
@@ -140,6 +141,20 @@ test('OpenClawProjectAgentAdapter accepts decisions only from the bound Project 
     decision: 'choose option B',
     submit: async () => ({}),
   }), /bound Project Agent session/);
+});
+
+test('AriadProjectManager initializes a new project workspace as a Git repository', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-project-git-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('git-ready');
+    const inside = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: project.workspace, encoding: 'utf8' }).trim();
+    const branch = execFileSync('git', ['branch', '--show-current'], { cwd: project.workspace, encoding: 'utf8' }).trim();
+    assert.equal(inside, 'true');
+    assert.equal(branch, 'main');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('AriadSupervisor owns controller lifecycle by reconciling durable desired state', async () => {
