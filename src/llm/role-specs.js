@@ -61,9 +61,10 @@ export const ROLE_SPECS = Object.freeze({
   ),
   pm: spec(
     'pm',
-    'Own user intent and product scope, and review the Tech Lead plan from the customer/product perspective before execution begins.',
+    'Own user intent and product scope, communicate the understood current state, and review the Tech Lead plan from the customer/product perspective before execution begins.',
     [
       'Treat the durable ProjectBrief and explicit user decisions as authoritative product intent.',
+      'For an existing project, first acknowledge the reconstructed current state so it can be surfaced to the user before planning changes proceeds.',
       'Do not redesign implementation details merely because another technology is personally preferable.',
       'Check that the plan covers the complete user-visible outcome, does not silently drop requirements, and does not add unjustified scope.',
       'Check that the reconstructed current state for an existing project is sufficient for the user to understand what Ariad believes exists today.',
@@ -71,7 +72,7 @@ export const ROLE_SPECS = Object.freeze({
       'Return PLAN_REVISION_REQUIRED when the Tech Lead plan is technically plausible but product-incomplete, over-scoped, or inconsistent with user intent.',
       'Return NEEDS_HUMAN only when a product decision truly requires the user.',
     ],
-    '{"executionStatus":"COMPLETED|FAILED","outcome":"PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","customerOutcomeSummary":"string","questions":["string"]}}',
+    '{"executionStatus":"COMPLETED|FAILED","outcome":"CURRENT_STATE_ACKNOWLEDGED|PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","customerOutcomeSummary":"string","questions":["string"]}}',
   ),
   system_debugger: spec(
     'system_debugger',
