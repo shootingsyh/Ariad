@@ -17,8 +17,8 @@ function stack(dbFile, options = {}) {
   return { store, transitions, effects };
 }
 
-test('PM replan diagnosis is persisted and survives restart', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ariad-effect-pm-'));
+test('Tech Lead replan diagnosis is persisted and survives restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-effect-tl-'));
   const dbFile = join(dir, 'state.db');
   try {
     const first = stack(dbFile);
@@ -32,7 +32,7 @@ test('PM replan diagnosis is persisted and survives restart', async () => {
     first.store.close();
 
     const reopened = new SQLiteWorkflowStateStore(dbFile);
-    assert.equal(reopened.get('T1').stage, 'pm');
+    assert.equal(reopened.get('T1').stage, 'tech_lead');
     assert.equal(reopened.get('T1').context.diagnosis, 'TASK_TOO_LARGE');
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
