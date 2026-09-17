@@ -41,6 +41,7 @@ export default defineFeaturePlugin({
         // Source-control ownership remains outside Reviewer. This callback is the
         // current host integration seam until the concrete SCM finalizer is wired.
         finalizeSourceControl: async () => ({ ok: true }),
+        onError: (error) => api.logger.error(`Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`),
       }),
     });
 
