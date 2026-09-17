@@ -6,7 +6,7 @@
   "files": ["dist", "runtime", "openclaw.plugin.json", "README.md"],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/ariad-supervisor.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
+    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-project-agent-adapter.ts src/ariad-supervisor.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
     "test": "npm run build && node --test test/runtime.test.mjs test/project-controller.test.mjs",
     "test:e2e": "npm run build && node test/openclaw-e2e.mjs",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
