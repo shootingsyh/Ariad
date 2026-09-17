@@ -6,6 +6,7 @@ import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-man
 import { AriadProjectController } from '../runtime/project-controller.js';
 import { AriadSupervisor } from './ariad-supervisor.js';
 import { contract } from './contract.js';
+import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 
 const promptRenderer = new PromptRenderer();
@@ -34,6 +35,7 @@ export default defineFeaturePlugin({
         if (typeof runs?.cancel === 'function') await runs.cancel(runId);
       },
     });
+    const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
 
     const supervisor = new AriadSupervisor({
       manager,
@@ -45,6 +47,7 @@ export default defineFeaturePlugin({
         return new AriadProjectController({
           project,
           runtimeAdapter,
+          projectAgentAdapter,
           finalizeSourceControl: (input) => sourceControl.finalize(input),
           onError: (error: unknown) => api.logger.error(`Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`),
         });
@@ -82,7 +85,7 @@ export default defineFeaturePlugin({
             if (!input.name) throw new Error('name is required');
             const project = manager.create(input.name, {
               goal: input.goal ?? null,
-              projectAgent: { host: 'openclaw', agentId: 'ci', sessionKey: 'ci' },
+              projectAgent: null,
             });
             respond(true, { project: supervisor.status(project.id) });
             return;
