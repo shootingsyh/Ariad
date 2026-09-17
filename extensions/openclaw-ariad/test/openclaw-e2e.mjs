@@ -151,7 +151,7 @@ try {
   assert.equal(state.dev_cycle, 2, 'reviewer NOT_PASS must cause semantic cycle 2');
   assert.equal(state.strategy_epoch, 1);
 
-  const runs = db.prepare('SELECT task_id, role, attempt, state FROM runs ORDER BY seq').all();
+  const runs = db.prepare('SELECT task_id, role, attempt, state, result_json FROM runs ORDER BY seq').all();
   db.close();
   assert.deepEqual(
     runs.map((run) => `${run.task_id}:${run.role}:${run.state}`),
@@ -166,17 +166,27 @@ try {
     ],
   );
   assert.deepEqual(runs.filter((run) => run.role === 'reviewer').map((run) => run.attempt), [1, 2]);
+  for (const run of runs.filter((candidate) => candidate.task_id === 'T1')) {
+    const result = JSON.parse(run.result_json);
+    assert.equal(result?.result?.toolExecuted, true, `${run.role} attempt ${run.attempt} must complete only after an OpenClaw tool result`);
+  }
 
   assert.equal(readFileSync(join(workspace, 'health.txt'), 'utf8'), 'status=healthy\ncycle=2\n', 'cycle 2 Developer tool call must produce the reviewed artifact');
-  for (const expected of [
+  const expectedToolCalls = [
     'role=developer cycle=1 tool=write',
     'role=tester cycle=1 tool=read',
     'role=reviewer cycle=1 tool=read',
     'role=developer cycle=2 tool=write',
     'role=tester cycle=2 tool=read',
     'role=reviewer cycle=2 tool=read',
-  ]) {
-    assert.match(providerLog, new RegExp(`ARIAD_FAKE_TOOL_CALL ${expected}`), `missing fake-provider tool request: ${expected}\n${providerLog}`);
+  ];
+  await waitFor(
+    () => expectedToolCalls.every((expected) => providerLog.includes(`ARIAD_FAKE_TOOL_CALL ${expected}`)),
+    'fake-provider tool trace flush',
+    5000,
+  );
+  for (const expected of expectedToolCalls) {
+    assert.match(providerLog, new RegExp(`ARIAD_FAKE_TOOL_CALL ${expected}`));
   }
 
   const finalCommit = git(workspace, ['rev-parse', 'HEAD']);
