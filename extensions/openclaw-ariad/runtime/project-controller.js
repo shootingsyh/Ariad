@@ -45,7 +45,7 @@ function validatePlannedTasks(tasks) {
 }
 
 export class AriadProjectController {
-  constructor({ project, runtimeAdapter, finalizeSourceControl = async () => ({ ok: true }), onError = (error) => error }) {
+  constructor({ project, runtimeAdapter, finalizeSourceControl = async (_input) => ({ ok: true }), onError = (error) => error }) {
     if (!project?.id || !project?.stateDb || !project?.root) throw new Error('project manifest is required');
     if (!runtimeAdapter) throw new Error('runtimeAdapter is required');
     this.project = project;
