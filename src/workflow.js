@@ -2,7 +2,7 @@ import { TransitionEngine } from './transition-engine.js';
 import { ReliabilityExecutionExecutor } from './reliability-execution-executor.js';
 
 function normalizeLegacyResult(role, result) {
-  if (role === 'pm' && result?.outcome === 'REPLAN_READY') {
+  if (role === 'tech_lead' && result?.outcome === 'REPLAN_READY') {
     return { ...result, outcome: 'REPLANNED' };
   }
   return result;
@@ -67,15 +67,11 @@ export class WorkflowEngine {
         strategyEpoch: state.strategyEpoch,
         devCycle: state.devCycle,
       };
-      if (role === 'pm' && pendingDiagnosis) context.diagnosis = pendingDiagnosis;
+      if (role === 'tech_lead' && pendingDiagnosis) context.diagnosis = pendingDiagnosis;
 
       let result = await this.executor.run(role, context, {
         onAttempt: attemptResult => {
-          history.push({
-            role,
-            context: structuredClone(context),
-            result: structuredClone(attemptResult),
-          });
+          history.push({ role, context: structuredClone(context), result: structuredClone(attemptResult) });
         },
       });
       result = normalizeLegacyResult(role, result);
@@ -83,9 +79,9 @@ export class WorkflowEngine {
       const transition = this.transitions.next(state, role, result);
       state = { ...state, ...transition.patch };
 
-      if (transition.effect?.type === 'PM_REPLAN_REQUIRED') {
+      if (transition.effect?.type === 'TECH_LEAD_REPLAN_REQUIRED') {
         pendingDiagnosis = transition.effect.diagnosis;
-      } else if (role === 'pm') {
+      } else if (role === 'tech_lead') {
         pendingDiagnosis = null;
       }
     }
