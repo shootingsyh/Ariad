@@ -70,6 +70,7 @@ function fakeProjectModel({ existingProject }) {
     { id: 'T1', title: 'Skeleton', kind: 'VERTICAL_SKELETON', componentId: 'health-feature', verticalSliceId: 'health-slice', acceptanceCriteria: ['health.txt status=healthy'], testStrategy: 'read health.txt', atomic: true, dependsOn: ['T_FAKE'] },
   ];
   return {
+    transportProbe: 'x'.repeat(5000),
     currentState: { existingProject, summary: existingProject ? 'Existing project' : 'Greenfield', keyFiles: existingProject ? ['README.md'] : [], knownConstraints: [] },
     architecture: {
       horizontals: [{ id: 'runtime', name: 'Runtime', responsibility: 'app shell' }],
