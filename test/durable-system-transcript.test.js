@@ -14,19 +14,13 @@ import { TransitionEngine } from '../src/transition-engine.js';
 import { WorkflowTransitionService } from '../src/workflow-transition-service.js';
 import { ScriptedLLM } from '../src/llm/scripted.js';
 import { LLMWorkflowRoleExecutor } from '../src/llm/workflow-role-executor.js';
+import { PromptRenderer } from '../src/llm/prompt-renderer.js';
 import { LLMRuntimeAdapter } from '../src/adapters/llm-runtime.js';
 
+const promptRenderer = new PromptRenderer();
+
 function requestFor(role, context) {
-  return {
-    json: true,
-    messages: [
-      {
-        role: 'system',
-        content: `You are Ariad's ${role} role. Return only one JSON object. Do not wrap it in markdown. Preserve the distinction between execution failure and business outcome.`,
-      },
-      { role: 'user', content: JSON.stringify(context) },
-    ],
-  };
+  return promptRenderer.render(role, context);
 }
 
 function makeStack({ dbFile, llm, taskId }) {
