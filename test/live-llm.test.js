@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { llmFromEnv } from '../src/llm/openai-compatible.js';
 import { evalPmDecomposition, evalReviewer, evalProjectDebugger } from '../src/llm/role-evals.js';
+import { LLMWorkflowRoleExecutor } from '../src/llm/workflow-role-executor.js';
 
 const llm = llmFromEnv();
 const live = llm ? test : test.skip;
@@ -26,4 +27,47 @@ live('live Reviewer catches a spec violation even when tests pass', async () => 
 live('live Project Debugger classifies an obviously oversized task', async () => {
   const result = await evalProjectDebugger(llm, `A single feature task asks one developer cycle to: redesign the database schema, migrate production data, rewrite the frontend, replace authentication, add a mobile app, and deploy new infrastructure. Three cycles failed because each only completed one subsystem; no infrastructure errors occurred.`);
   assert.equal(result.kind, 'TASK_TOO_LARGE');
+});
+
+live('live workflow Reviewer obeys the actual Ariad RoleSpec', async () => {
+  const executor = new LLMWorkflowRoleExecutor(llm);
+  const result = await executor.run('reviewer', {
+    taskId: 'live-reviewer-role-spec',
+    specification: 'Adding a cache entry must preserve prior entries until capacity 10 is exceeded.',
+    acceptanceCriteria: ['Adding the second entry leaves the first entry readable.'],
+    evidence: 'Tests report green, but implementation calls map.clear() before every set(), so adding entry B removes entry A.',
+  });
+  assert.equal(result.executionStatus, 'COMPLETED');
+  assert.equal(result.outcome, 'NOT_PASS');
+});
+
+live('live workflow Project Debugger obeys the actual Ariad RoleSpec', async () => {
+  const executor = new LLMWorkflowRoleExecutor(llm);
+  const result = await executor.run('project_debugger', {
+    taskId: 'live-debugger-role-spec',
+    devCycle: 3,
+    failureHistory: [
+      'Cycle 1 completed database redesign only.',
+      'Cycle 2 completed frontend rewrite only.',
+      'Cycle 3 completed authentication replacement only.',
+    ],
+    task: 'In one task: redesign DB, migrate production data, rewrite frontend, replace auth, add mobile app, and deploy infrastructure.',
+    infrastructureHealthy: true,
+  });
+  assert.equal(result.executionStatus, 'COMPLETED');
+  assert.equal(result.outcome, 'TASK_TOO_LARGE');
+});
+
+live('live workflow PM treats Developer Tester Reviewer as stages rather than planned tasks', async () => {
+  const executor = new LLMWorkflowRoleExecutor(llm);
+  const result = await executor.run('pm', {
+    requirement: 'Build a tiny health endpoint returning {status:"ok"}, with tests and run documentation.',
+    instruction: 'Create or revise a small task graph.',
+  });
+  assert.equal(result.executionStatus, 'COMPLETED');
+  assert.equal(result.outcome, 'REPLANNED');
+  assert.ok(Array.isArray(result.result?.tasks));
+  assert.ok(result.result.tasks.length >= 1);
+  const titles = result.result.tasks.map(task => task.title.toLowerCase());
+  assert.equal(titles.some(title => /developer|tester|reviewer/.test(title)), false);
 });
