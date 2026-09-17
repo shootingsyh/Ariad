@@ -24,7 +24,7 @@ export class EffectExecutor {
       return { ...transition, result };
     }
 
-    if (effect.type === 'PM_REPLAN_REQUIRED') {
+    if (effect.type === 'TECH_LEAD_REPLAN_REQUIRED') {
       const next = this.transitionService.mergeContext(taskId, { diagnosis: effect.diagnosis });
       return { state: next, effect: null, result: { persisted: true } };
     }
