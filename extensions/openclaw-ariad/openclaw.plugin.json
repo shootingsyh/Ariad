@@ -5,7 +5,8 @@
   "version": "0.2.0",
   "configSchema": {
     "type": "object",
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {}
   },
   "activation": {
     "onStartup": true
