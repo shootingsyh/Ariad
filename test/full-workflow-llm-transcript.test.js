@@ -12,7 +12,7 @@ function step(role, expectedContext, output) {
       const user = request.messages?.[1]?.content ?? '';
       if (!system.includes(`Ariad's ${role} role`)) return false;
       try {
-        assert.deepEqual(JSON.parse(user), expectedContext);
+        if (expectedContext !== null) assert.deepEqual(JSON.parse(user), expectedContext);
         return request.json === true;
       } catch {
         return false;
@@ -53,7 +53,7 @@ test('three semantic failures escalate to Project Debugger then Tech Lead replan
   }
   script.push(
     step('project_debugger', { taskId: 'F2', strategyEpoch: 1, devCycle: 3 }, completed('TASK_TOO_LARGE', { reason: 'too broad' })),
-    step('tech_lead', { taskId: 'F2', strategyEpoch: 1, devCycle: 3, diagnosis: 'TASK_TOO_LARGE' }, completed('REPLANNED', { tasks: ['A', 'B'] })),
+    step('tech_lead', null, completed('REPLANNED', { tasks: ['A', 'B'] })),
   );
 
   const llm = new ScriptedLLM(script);
@@ -65,6 +65,9 @@ test('three semantic failures escalate to Project Debugger then Tech Lead replan
   assert.equal(result.history.filter((x) => x.role === 'developer').length, 3);
   assert.equal(result.history.filter((x) => x.role === 'project_debugger').length, 1);
   assert.equal(result.history.filter((x) => x.role === 'tech_lead').length, 1);
+  assert.deepEqual(result.history.find((x) => x.role === 'tech_lead').context, {
+    taskId: 'F2', strategyEpoch: 1, devCycle: 3, diagnosis: 'TASK_TOO_LARGE',
+  });
   llm.assertExhausted();
 });
 
