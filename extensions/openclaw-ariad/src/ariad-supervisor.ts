@@ -1,3 +1,4 @@
+import { HumanDecisionResumer } from '../runtime/human-decision-resumer.js';
 import type { AriadProjectManager, AriadProjectStatus } from '../runtime/project-manager.js';
 
 export interface ProjectController {
@@ -57,6 +58,22 @@ export class AriadSupervisor {
   async ensureStopped(name: string) {
     const project = this.manager.setDesiredState(name, 'STOPPED');
     return this.status(project.id);
+  }
+
+  async submitDecision(name: string, decision: string) {
+    const project = this.manager.setDesiredState(name, 'RUNNING');
+    const current = this.controllers.get(project.id);
+    if (current) {
+      await current.stop();
+      this.controllers.delete(project.id);
+    }
+
+    const resumed = new HumanDecisionResumer({ project }).submit(decision);
+    const nextProject = this.manager.status(project.id);
+    const next = this.createController(nextProject);
+    this.controllers.set(project.id, next);
+    await next.start();
+    return { resumed, project: this.status(project.id) };
   }
 
   async reconcile() {
