@@ -16,29 +16,17 @@ function state(overrides = {}) {
 
 test('developer completion advances to tester', () => {
   const engine = new TransitionEngine();
-  assert.deepEqual(
-    engine.next(state(), 'developer', { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTED' }),
-    { patch: { stage: 'tester', status: 'RUNNING' }, effect: null },
-  );
+  assert.deepEqual(engine.next(state(), 'developer', { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTED' }), { patch: { stage: 'tester', status: 'RUNNING' }, effect: null });
 });
 
 test('tester NOT_PASS increments dev cycle until max', () => {
   const engine = new TransitionEngine();
-  assert.deepEqual(
-    engine.next(state({ stage: 'tester', devCycle: 1 }), 'tester', { executionStatus: 'COMPLETED', outcome: 'NOT_PASS' }),
-    { patch: { stage: 'developer', devCycle: 2, status: 'RUNNING' }, effect: null },
-  );
+  assert.deepEqual(engine.next(state({ stage: 'tester', devCycle: 1 }), 'tester', { executionStatus: 'COMPLETED', outcome: 'NOT_PASS' }), { patch: { stage: 'developer', devCycle: 2, status: 'RUNNING' }, effect: null });
 });
 
 test('third NOT_PASS escalates to project debugger without incrementing beyond max', () => {
   const engine = new TransitionEngine();
-  assert.deepEqual(
-    engine.next(state({ stage: 'reviewer', devCycle: 3 }), 'reviewer', { executionStatus: 'COMPLETED', outcome: 'NOT_PASS' }),
-    {
-      patch: { stage: 'project_debugger', status: 'RUNNING' },
-      effect: { type: 'ESCALATED_TO_PROJECT_DEBUGGER' },
-    },
-  );
+  assert.deepEqual(engine.next(state({ stage: 'reviewer', devCycle: 3 }), 'reviewer', { executionStatus: 'COMPLETED', outcome: 'NOT_PASS' }), { patch: { stage: 'project_debugger', status: 'RUNNING' }, effect: { type: 'ESCALATED_TO_PROJECT_DEBUGGER' } });
 });
 
 test('execution failure pauses system and never mutates dev cycle', () => {
@@ -54,67 +42,49 @@ test('execution failure pauses system and never mutates dev cycle', () => {
 test('reviewer PASS requires source control finalization before success', () => {
   const engine = new TransitionEngine();
   const transition = engine.next(state({ stage: 'reviewer' }), 'reviewer', { executionStatus: 'COMPLETED', outcome: 'PASS' });
-  assert.deepEqual(transition, {
-    patch: { status: 'AWAITING_SOURCE_CONTROL' },
-    effect: { type: 'FINALIZE_SOURCE_CONTROL' },
-  });
-  assert.deepEqual(engine.completeSourceControl({ ...state({ stage: 'reviewer' }), status: 'AWAITING_SOURCE_CONTROL' }, { ok: true }), {
-    patch: { status: 'SUCCEEDED' },
-    effect: null,
-  });
+  assert.deepEqual(transition, { patch: { status: 'AWAITING_SOURCE_CONTROL' }, effect: { type: 'FINALIZE_SOURCE_CONTROL' } });
+  assert.deepEqual(engine.completeSourceControl({ ...state({ stage: 'reviewer' }), status: 'AWAITING_SOURCE_CONTROL' }, { ok: true }), { patch: { status: 'SUCCEEDED' }, effect: null });
 });
 
 test('wrong implementation approach starts a new strategy epoch and resets cycle', () => {
   const engine = new TransitionEngine();
-  assert.deepEqual(
-    engine.next(state({ stage: 'project_debugger', devCycle: 3, strategyEpoch: 1 }), 'project_debugger', {
-      executionStatus: 'COMPLETED',
-      outcome: 'WRONG_IMPLEMENTATION_APPROACH',
-      guidance: 'replace polling with events',
-    }),
-    {
-      patch: { stage: 'developer', strategyEpoch: 2, devCycle: 1, status: 'RUNNING' },
-      effect: { type: 'APPLY_STRATEGY_GUIDANCE', guidance: 'replace polling with events' },
-    },
-  );
+  assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3, strategyEpoch: 1 }), 'project_debugger', {
+    executionStatus: 'COMPLETED', outcome: 'WRONG_IMPLEMENTATION_APPROACH', guidance: 'replace polling with events',
+  }), {
+    patch: { stage: 'developer', strategyEpoch: 2, devCycle: 1, status: 'RUNNING' },
+    effect: { type: 'APPLY_STRATEGY_GUIDANCE', guidance: 'replace polling with events' },
+  });
 });
 
 test('strategy epoch exhaustion needs human instead of looping forever', () => {
   const engine = new TransitionEngine({ maxStrategyEpochs: 3 });
-  assert.deepEqual(
-    engine.next(state({ stage: 'project_debugger', devCycle: 3, strategyEpoch: 3 }), 'project_debugger', {
-      executionStatus: 'COMPLETED',
-      outcome: 'WRONG_IMPLEMENTATION_APPROACH',
-    }),
-    { patch: { status: 'NEEDS_HUMAN' }, effect: { type: 'STRATEGY_EPOCHS_EXHAUSTED' } },
-  );
+  assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3, strategyEpoch: 3 }), 'project_debugger', { executionStatus: 'COMPLETED', outcome: 'WRONG_IMPLEMENTATION_APPROACH' }), { patch: { status: 'NEEDS_HUMAN' }, effect: { type: 'STRATEGY_EPOCHS_EXHAUSTED' } });
 });
 
-test('project debugger routes oversized or contradictory tasks to PM', () => {
+test('project debugger routes oversized task to Tech Lead', () => {
   const engine = new TransitionEngine();
-  for (const diagnosis of ['TASK_TOO_LARGE', 'TASK_CONTRADICTORY']) {
-    assert.deepEqual(
-      engine.next(state({ stage: 'project_debugger', devCycle: 3 }), 'project_debugger', {
-        executionStatus: 'COMPLETED',
-        outcome: diagnosis,
-      }),
-      { patch: { stage: 'pm', status: 'RUNNING' }, effect: { type: 'PM_REPLAN_REQUIRED', diagnosis } },
-    );
-  }
+  assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3 }), 'project_debugger', { executionStatus: 'COMPLETED', outcome: 'TASK_TOO_LARGE' }), {
+    patch: { stage: 'tech_lead', status: 'RUNNING' },
+    effect: { type: 'TECH_LEAD_REPLAN_REQUIRED', diagnosis: 'TASK_TOO_LARGE' },
+  });
 });
 
-test('PM replanned result stops at WAITING_REPLAN for graph mutation', () => {
+test('project debugger routes contradictory requirement to human-facing PM decision path', () => {
   const engine = new TransitionEngine();
-  assert.deepEqual(
-    engine.next(state({ stage: 'pm' }), 'pm', { executionStatus: 'COMPLETED', outcome: 'REPLANNED' }),
-    { patch: { status: 'WAITING_REPLAN' }, effect: { type: 'WORKFLOW_GRAPH_MUTATION_REQUIRED' } },
-  );
+  assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3 }), 'project_debugger', { executionStatus: 'COMPLETED', outcome: 'TASK_CONTRADICTORY' }), {
+    patch: { status: 'NEEDS_HUMAN' },
+    effect: { type: 'PRODUCT_REQUIREMENT_CONFLICT', diagnosis: 'TASK_CONTRADICTORY' },
+  });
+});
+
+test('Tech Lead replanned result stops at WAITING_REPLAN for graph mutation', () => {
+  const engine = new TransitionEngine();
+  assert.deepEqual(engine.next(state({ stage: 'tech_lead' }), 'tech_lead', { executionStatus: 'COMPLETED', outcome: 'REPLANNED' }), {
+    patch: { status: 'WAITING_REPLAN' }, effect: { type: 'WORKFLOW_GRAPH_MUTATION_REQUIRED' },
+  });
 });
 
 test('role must match durable stage', () => {
   const engine = new TransitionEngine();
-  assert.throws(
-    () => engine.next(state({ stage: 'tester' }), 'reviewer', { executionStatus: 'COMPLETED', outcome: 'PASS' }),
-    /does not match workflow stage/,
-  );
+  assert.throws(() => engine.next(state({ stage: 'tester' }), 'reviewer', { executionStatus: 'COMPLETED', outcome: 'PASS' }), /does not match workflow stage/);
 });
