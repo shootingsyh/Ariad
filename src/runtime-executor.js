@@ -53,7 +53,9 @@ export class RuntimeExecutor {
       }
       this.runStore.update(run.id, {
         state: result.state,
-        result: Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : null,
+        result: result.state === 'COMPLETED'
+          ? { outcome: result.outcome ?? null, result: Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : null }
+          : null,
         failure: result.failure || null,
       });
       if (result.state === 'COMPLETED') {
