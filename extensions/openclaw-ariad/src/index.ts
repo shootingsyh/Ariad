@@ -5,14 +5,6 @@ import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-man
 import { AriadSupervisor } from './ariad-supervisor.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 
-const configSchema = Type.Object({
-  projectsRoot: Type.Optional(Type.String({ description: 'Root directory containing isolated Ariad projects.' })),
-  subagentAgentId: Type.Optional(Type.String({ description: 'Configured OpenClaw agent used to own Ariad subagent runs.' })),
-  subagentProvider: Type.Optional(Type.String()),
-  subagentModel: Type.Optional(Type.String()),
-  ciRuntimeProbeEnabled: Type.Optional(Type.Boolean({ description: 'Enable the CI-only ariad.ci.roleRun gateway probe.' })),
-}, { additionalProperties: false });
-
 function toolResult(details: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(details) }],
@@ -33,7 +25,6 @@ export default definePluginEntry({
   id: 'ariad',
   name: 'Ariad',
   description: 'Create and manage isolated Ariad autonomous engineering projects.',
-  configSchema,
   register(api) {
     const config = (api.pluginConfig ?? {}) as {
       projectsRoot?: string;
@@ -51,7 +42,7 @@ export default definePluginEntry({
       model: config.subagentModel,
       renderMessage: renderRoleMessage,
       cancelRun: async (runId) => {
-        const runs = (api.runtime.tasks.async as any)?.runs;
+        const runs = (api.runtime.tasks as any)?.runs;
         if (typeof runs?.cancel === 'function') await runs.cancel(runId);
       },
     });
@@ -63,8 +54,7 @@ export default definePluginEntry({
         return {
           async start() {
             await runtimeAdapter.install();
-            const health = await runtimeAdapter.probe();
-            if (health.health === 'UNHEALTHY') throw new Error('OpenClaw runtime is unhealthy');
+            await runtimeAdapter.probe();
             active = true;
           },
           async stop() { active = false; },
@@ -81,6 +71,7 @@ export default definePluginEntry({
 
     api.registerTool((toolContext) => ({
       name: 'ariad_project',
+      label: 'Ariad project',
       description: 'Create, list, inspect, start, or stop isolated Ariad projects. The current conversation becomes the project agent binding for newly created projects.',
       parameters: Type.Object({
         action: Type.Union([
