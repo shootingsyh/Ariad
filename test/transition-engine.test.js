@@ -61,6 +61,22 @@ test('strategy epoch exhaustion needs human instead of looping forever', () => {
   assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3, strategyEpoch: 3 }), 'project_debugger', { executionStatus: 'COMPLETED', outcome: 'WRONG_IMPLEMENTATION_APPROACH' }), { patch: { status: 'NEEDS_HUMAN' }, effect: { type: 'STRATEGY_EPOCHS_EXHAUSTED' } });
 });
 
+test('human decision resumes the same durable stage and records decision context', () => {
+  const engine = new TransitionEngine();
+  const decision = { eventId: 'e1', decision: 'Keep the public API stable and change internals only.' };
+  const transition = engine.resumeHumanDecision(state({
+    stage: 'project_debugger',
+    devCycle: 3,
+    status: 'NEEDS_HUMAN',
+    context: { reason: 'requirements conflict' },
+  }), decision);
+  assert.equal(transition.patch.status, 'RUNNING');
+  assert.equal(Object.hasOwn(transition.patch, 'stage'), false, 'resume must not invent a new role');
+  assert.deepEqual(transition.patch.context.humanDecision, decision);
+  assert.deepEqual(transition.patch.context.humanDecisionHistory, [decision]);
+  assert.equal(transition.patch.context.reason, 'requirements conflict');
+});
+
 test('project debugger routes oversized task to Tech Lead', () => {
   const engine = new TransitionEngine();
   assert.deepEqual(engine.next(state({ stage: 'project_debugger', devCycle: 3 }), 'project_debugger', { executionStatus: 'COMPLETED', outcome: 'TASK_TOO_LARGE' }), {
