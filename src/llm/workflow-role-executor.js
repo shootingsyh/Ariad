@@ -19,7 +19,9 @@ function validate(role, result) {
   } else if (role === 'tech_lead') {
     if (!['PLANNED', 'REPLANNED', 'NEEDS_HUMAN'].includes(result.outcome)) throw new Error('tech_lead outcome must be PLANNED, REPLANNED, or NEEDS_HUMAN');
   } else if (role === 'pm') {
-    if (!['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN'].includes(result.outcome)) throw new Error('pm outcome must be PLAN_ACCEPTED, PLAN_REVISION_REQUIRED, or NEEDS_HUMAN');
+    if (!['CURRENT_STATE_ACKNOWLEDGED', 'PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN'].includes(result.outcome)) {
+      throw new Error('pm returned an invalid product outcome');
+    }
   }
   return result;
 }
