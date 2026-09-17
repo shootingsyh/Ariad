@@ -80,6 +80,24 @@ function fakeProjectModel({ existingProject }) {
       purpose: 'Expose deterministic health state',
       interface: 'health.txt contains status and cycle fields',
       testBoundary: 'Read health.txt and verify status=healthy',
+      maturity: 'PROVISIONAL',
+      justifiedByVerticals: ['health-slice'],
+    }],
+    dependencies: [{
+      from: 'runtime',
+      to: 'health-feature',
+      contractId: 'health-contract',
+      implementationRequired: false,
+      rationale: 'The application shell consumes the health contract; the vertical can be exercised before a richer provider exists.',
+    }],
+    verticalSlices: [{
+      id: 'health-slice',
+      name: 'Health state walking skeleton',
+      goal: 'Exercise the user-visible health path end to end with the smallest implementation.',
+      componentIds: ['runtime', 'health-feature'],
+      contractIds: ['health-contract'],
+      skeletonTest: 'Developer writes health.txt; Tester and Reviewer read it through OpenClaw and verify the observable state.',
+      taskIds: ['T1'],
     }],
     technicalDirection: {
       summary: 'Preserve the existing Node/Git project and use a deterministic file contract for the CI feature.',
@@ -96,9 +114,10 @@ function fakeProjectModel({ existingProject }) {
     },
     tasks: [{
       id: 'T1',
-      title: 'Implement fake health endpoint',
+      title: 'Implement health walking skeleton',
       description: 'A deterministic CI task used to exercise the full Ariad workflow.',
       componentId: 'health-feature',
+      verticalSliceId: 'health-slice',
       acceptanceCriteria: ['health.txt contains status=healthy after one semantic retry'],
       testStrategy: 'Tester and Reviewer read health.txt through OpenClaw tools',
       atomic: true,
@@ -128,9 +147,9 @@ function roleReply(request) {
       outcome: isCurrentStateReview(request) ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED',
       result: {
         source: 'fake-provider',
-        reason: 'The current-state reconstruction and implementation plan preserve the requested customer outcome.',
+        reason: 'The current-state reconstruction and next vertical slice preserve the requested customer outcome without speculative infrastructure.',
         guidance: '',
-        customerOutcomeSummary: 'Existing project understood; health feature is scoped and ready to implement.',
+        customerOutcomeSummary: 'Existing project understood; the health walking skeleton is scoped and ready to implement.',
         questions: [],
       },
     };
