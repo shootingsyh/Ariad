@@ -1,10 +1,55 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { AriadProjectController } from '../runtime/project-controller.js';
+
+function projectModel({ existingProject = false } = {}) {
+  return {
+    currentState: {
+      existingProject,
+      summary: existingProject ? 'Existing small Node project with a README.' : 'Greenfield project.',
+      keyFiles: existingProject ? ['README.md'] : [],
+      knownConstraints: [],
+    },
+    architecture: {
+      horizontals: [{ id: 'runtime', name: 'Runtime', responsibility: 'Shared runtime and app shell' }],
+      verticals: [{ id: 'health-feature', name: 'Health feature', responsibility: 'Expose deterministic health state' }],
+    },
+    contracts: [{
+      id: 'health-contract',
+      provider: 'health-feature',
+      consumers: ['runtime'],
+      purpose: 'Expose health state',
+      interface: 'health.txt contains status and cycle',
+      testBoundary: 'Read health.txt and verify status',
+    }],
+    technicalDirection: {
+      summary: 'Use the existing Node runtime and file-based deterministic fixture.',
+      foundations: ['Node.js'],
+      languages: [{ scope: 'application', language: 'JavaScript', rationale: 'Matches the existing project' }],
+      decisions: [{ decision: 'Keep a single-process test fixture', rationale: 'Minimize complexity' }],
+    },
+    decomposition: {
+      nodes: [
+        { id: 'runtime', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
+        { id: 'health-feature', parentId: null, kind: 'component', componentId: 'health-feature', children: ['T1'], taskId: null },
+        { id: 'T1-node', parentId: 'health-feature', kind: 'task', componentId: 'health-feature', children: [], taskId: 'T1' },
+      ],
+    },
+    tasks: [{
+      id: 'T1',
+      title: 'Implement deterministic health state',
+      componentId: 'health-feature',
+      acceptanceCriteria: ['passes after one review retry'],
+      testStrategy: 'Read health.txt and verify the final healthy state',
+      atomic: true,
+      dependsOn: [],
+    }],
+  };
+}
 
 class ScriptedRuntimeAdapter {
   id = 'scripted-project';
@@ -23,8 +68,11 @@ class ScriptedRuntimeAdapter {
   async poll(handle) {
     const input = this.runs.get(handle.externalId);
     const cycle = input.context?.devCycle ?? 0;
+    if (input.role === 'tech_lead') {
+      return { state: 'COMPLETED', outcome: 'PLANNED', result: { projectModel: projectModel({ existingProject: input.context?.planningPhase === 'EXISTING_PROJECT_DISCOVERY' }) } };
+    }
     if (input.role === 'pm') {
-      return { state: 'COMPLETED', outcome: 'REPLANNED', result: { tasks: [{ id: 'T1', acceptanceCriteria: ['passes after one review retry'], dependsOn: [] }] } };
+      return { state: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'covers the requested customer outcome', guidance: '', customerOutcomeSummary: 'Ready to implement', questions: [] } };
     }
     if (input.role === 'developer') return { state: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { cycle } };
     if (input.role === 'tester') return { state: 'COMPLETED', outcome: 'PASS', result: { cycle } };
@@ -34,14 +82,16 @@ class ScriptedRuntimeAdapter {
   }
 }
 
-test('AriadProjectController plans then converges through reviewer retry', async () => {
+test('AriadProjectController persists TL project model, obtains PM approval, then converges', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ariad-project-controller-'));
   try {
     const ariad = join(root, '.ariad');
+    const workspace = join(root, 'workspace');
     mkdirSync(ariad, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
     const stateDb = join(ariad, 'state.db');
     const controller = new AriadProjectController({
-      project: { id: 'p1', root, stateDb, goal: 'build a tiny feature' },
+      project: { id: 'p1', root, workspace, stateDb, goal: 'build a tiny feature' },
       runtimeAdapter: new ScriptedRuntimeAdapter(),
     });
 
@@ -49,13 +99,51 @@ test('AriadProjectController plans then converges through reviewer retry', async
     while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
 
+    const modelDir = join(ariad, 'project');
+    for (const name of ['brief.json', 'current-state.json', 'architecture.json', 'contracts.json', 'technical-direction.json', 'decomposition.json', 'plan-review.json', 'task-graph.json']) {
+      assert.equal(existsSync(join(modelDir, name)), true, `${name} must be durable`);
+    }
+    assert.equal(JSON.parse(readFileSync(join(modelDir, 'plan-review.json'), 'utf8')).outcome, 'PLAN_ACCEPTED');
+
     const db = new DatabaseSync(stateDb, { readOnly: true });
     const state = db.prepare('SELECT dev_cycle, status FROM workflow_state WHERE task_id = ?').get('T1');
     const runs = db.prepare('SELECT role, attempt, state FROM runs ORDER BY seq').all();
     db.close();
     assert.equal(state.status, 'SUCCEEDED');
     assert.equal(state.dev_cycle, 2);
-    assert.deepEqual(runs.map((run) => run.role), ['pm', 'developer', 'tester', 'reviewer', 'developer', 'tester', 'reviewer']);
+    assert.deepEqual(runs.map((run) => run.role), ['tech_lead', 'pm', 'developer', 'tester', 'reviewer', 'developer', 'tester', 'reviewer']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('existing workspace is discovered and PM sees current state before requirement planning', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-existing-project-'));
+  try {
+    const ariad = join(root, '.ariad');
+    const workspace = join(root, 'workspace');
+    mkdirSync(ariad, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, 'README.md'), '# Existing app\n');
+    const stateDb = join(ariad, 'state.db');
+    const adapter = new ScriptedRuntimeAdapter();
+    const controller = new AriadProjectController({
+      project: { id: 'existing', root, workspace, stateDb, goal: 'add a health feature' },
+      runtimeAdapter: adapter,
+    });
+
+    await controller.start();
+    while (controller.status().active) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(controller.status().phase, 'SUCCEEDED', JSON.stringify(controller.status()));
+
+    const calls = [...adapter.runs.values()].map((run) => ({ role: run.role, context: run.context }));
+    assert.deepEqual(calls.slice(0, 4).map((call) => call.role), ['tech_lead', 'pm', 'tech_lead', 'pm']);
+    assert.equal(calls[0].context.planningPhase, 'EXISTING_PROJECT_DISCOVERY');
+    assert.equal(calls[1].context.productPhase, 'CURRENT_STATE_REVIEW');
+    assert.equal(calls[2].context.planningPhase, 'REQUIREMENT_PLAN');
+    assert.equal(calls[3].context.productPhase, 'PLAN_REVIEW');
+    assert.equal(calls[1].context.currentProjectModel.currentState.existingProject, true);
+    assert.equal(existsSync(join(ariad, 'project', 'current-state-review.json')), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
