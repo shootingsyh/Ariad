@@ -4,7 +4,7 @@ import { OpenClawRuntimeAdapter } from '../dist/openclaw-runtime-adapter.js';
 import { OpenClawProjectAgentAdapter } from '../dist/openclaw-project-agent-adapter.js';
 import { AriadSupervisor } from '../dist/ariad-supervisor.js';
 import { AriadProjectManager } from '../runtime/project-manager.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -97,8 +97,29 @@ test('OpenClawProjectAgentAdapter routes durable Ariad events to the bound proje
   assert.equal(calls[0].params.agentId, 'main');
   assert.equal(calls[0].params.idempotencyKey, 'ariad:p1:1:1');
   assert.match(calls[0].params.message, /minimum concrete question/);
+  assert.match(calls[0].params.message, /action="decide"/);
   assert.match(calls[0].params.message, /Choose A or B/);
   assert.equal(calls[0].options.timeoutMs, 35_000);
+});
+
+test('OpenClawProjectAgentAdapter accepts decisions only from the bound Project Agent session', async () => {
+  const adapter = new OpenClawProjectAgentAdapter({ gateway: { async request() { return { ok: true }; } } });
+  const binding = { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:project-thread' };
+  let submitted = null;
+  const result = await adapter.submitDecision({
+    binding,
+    requester: { agentId: 'main', sessionKey: 'agent:main:project-thread' },
+    decision: '  choose option A  ',
+    submit: async (decision) => { submitted = decision; return { resumed: true }; },
+  });
+  assert.equal(submitted, 'choose option A');
+  assert.deepEqual(result, { resumed: true });
+  await assert.rejects(() => adapter.submitDecision({
+    binding,
+    requester: { agentId: 'main', sessionKey: 'agent:main:other-thread' },
+    decision: 'choose option B',
+    submit: async () => ({}),
+  }), /bound Project Agent session/);
 });
 
 test('AriadSupervisor owns controller lifecycle by reconciling durable desired state', async () => {
@@ -138,6 +159,45 @@ test('AriadSupervisor owns controller lifecycle by reconciling durable desired s
     await supervisor.stop();
     assert.deepEqual(events, ['start:alpha', 'start:beta', 'stop:alpha', 'stop:beta']);
     assert.equal(manager.status('beta').desiredState, 'RUNNING', 'host shutdown must not rewrite project intent');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AriadSupervisor replaces a settled controller after recording a human decision', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-decision-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('decision', {
+      goal: 'ship it',
+      projectAgent: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:decision' },
+    });
+    const projectDir = join(project.root, '.ariad', 'project');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project-agent-events.jsonl'), `${JSON.stringify({
+      version: 1,
+      id: 'decision:e1',
+      projectId: project.id,
+      type: 'NEEDS_HUMAN',
+      createdAt: '2026-09-17T18:00:00.000Z',
+      payload: { phase: 'PLAN_REVIEW' },
+      delivery: 'PENDING',
+    })}\n`);
+    const events = [];
+    const supervisor = new AriadSupervisor({
+      manager,
+      reconcileIntervalMs: 60_000,
+      createController: (value) => ({
+        async start() { events.push(`start:${value.id}`); },
+        async stop() { events.push(`stop:${value.id}`); },
+      }),
+    });
+    manager.setDesiredState(project.id, 'RUNNING');
+    await supervisor.start();
+    const response = await supervisor.submitDecision(project.id, 'Keep the public API stable.');
+    assert.equal(response.resumed.record.decision, 'Keep the public API stable.');
+    assert.deepEqual(events, ['start:decision', 'stop:decision', 'start:decision']);
+    await supervisor.stop();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
