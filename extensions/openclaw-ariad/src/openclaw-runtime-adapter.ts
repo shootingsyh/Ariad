@@ -101,20 +101,38 @@ export class OpenClawRuntimeAdapter {
     if (status === 'error') return { state: 'FAILED', failure: String(observed?.error ?? observed?.stopReason ?? 'OPENCLAW_RUN_FAILED') };
     if (status !== 'ok') return { state: 'FAILED', failure: `UNKNOWN_OPENCLAW_STATUS:${status}` };
 
-    let text = extractText(observed?.terminalReply);
-    if (!text) {
-      const key = this.sessions.get(handle.externalId);
-      if (key && this.subagent.getSessionMessages) {
-        const session = await this.subagent.getSessionMessages({ sessionKey: key, limit: 10 });
-        text = extractText(session?.messages ?? null);
-      }
-    }
-    if (!text) return { state: 'FAILED', failure: 'OPENCLAW_RUN_COMPLETED_WITHOUT_RESULT' };
-
-    try {
+    const parseResult = (text: string) => {
       const result = parseJsonText(text);
       if (result?.executionStatus === 'FAILED') return { state: 'FAILED', failure: result.failure ?? 'ROLE_EXECUTION_FAILED' };
       return { state: 'COMPLETED', outcome: result?.outcome ?? null, result: result?.result ?? result };
+    };
+
+    const terminalText = extractText(observed?.terminalReply);
+    if (terminalText) {
+      try {
+        return parseResult(terminalText);
+      } catch {
+        // OpenClaw terminalReply may be display-truncated. Fall through to the durable
+        // session transcript, which preserves the full assistant message.
+      }
+    }
+
+    const key = this.sessions.get(handle.externalId);
+    if (key && this.subagent.getSessionMessages) {
+      const session = await this.subagent.getSessionMessages({ sessionKey: key, limit: 10 });
+      const sessionText = extractText(session?.messages ?? null);
+      if (sessionText) {
+        try {
+          return parseResult(sessionText);
+        } catch (error) {
+          return { state: 'FAILED', failure: `INVALID_ROLE_RESULT:${error instanceof Error ? error.message : String(error)}` };
+        }
+      }
+    }
+
+    if (!terminalText) return { state: 'FAILED', failure: 'OPENCLAW_RUN_COMPLETED_WITHOUT_RESULT' };
+    try {
+      return parseResult(terminalText);
     } catch (error) {
       return { state: 'FAILED', failure: `INVALID_ROLE_RESULT:${error instanceof Error ? error.message : String(error)}` };
     }
