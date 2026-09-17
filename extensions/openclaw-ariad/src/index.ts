@@ -47,7 +47,7 @@ export default defineFeaturePlugin({
         return new AriadProjectController({
           project,
           runtimeAdapter,
-          projectAgentAdapter,
+          projectAgentAdapter: projectAgentAdapter as any,
           finalizeSourceControl: (input) => sourceControl.finalize(input),
           onError: (error: unknown) => api.logger.error(`Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`),
         });
