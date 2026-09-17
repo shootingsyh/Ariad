@@ -44,6 +44,26 @@ test('OpenClawRuntimeAdapter translates Ariad Run lifecycle to subagent lifecycl
   assert.deepEqual(result, { state: 'COMPLETED', outcome: 'PASS', result: { ok: true } });
 });
 
+test('OpenClawRuntimeAdapter falls back to full session message when terminal reply is truncated', async () => {
+  const full = JSON.stringify({
+    executionStatus: 'COMPLETED',
+    outcome: 'PLANNED',
+    result: { projectModel: { payload: 'x'.repeat(5000) } },
+  });
+  const adapter = new OpenClawRuntimeAdapter({
+    subagent: {
+      async run(input) { return { runId: 'oc-truncated', sessionKey: input.sessionKey }; },
+      async waitForRun() { return { status: 'ok', terminalReply: { text: full.slice(0, 4096) } }; },
+      async getSessionMessages() { return { messages: [{ role: 'assistant', content: full }] }; },
+    },
+  });
+  const handle = await adapter.start({ runId: 'r-truncated', role: 'tech_lead', context: {} });
+  const result = await adapter.poll(handle);
+  assert.equal(result.state, 'COMPLETED');
+  assert.equal(result.outcome, 'PLANNED');
+  assert.equal(result.result.projectModel.payload.length, 5000);
+});
+
 test('OpenClawRuntimeAdapter omits cwd when no project workspace is supplied', async () => {
   let inputSeen = null;
   const adapter = new OpenClawRuntimeAdapter({
