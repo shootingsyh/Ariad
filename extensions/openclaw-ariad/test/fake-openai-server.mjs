@@ -34,10 +34,6 @@ function isDiscovery(request) {
   return requestRole(request) === 'tech_lead' && /"planningPhase":"EXISTING_PROJECT_DISCOVERY"/.test(requestText(request));
 }
 
-function isRequirementPlan(request) {
-  return requestRole(request) === 'tech_lead' && /"planningPhase":"REQUIREMENT_PLAN"/.test(requestText(request));
-}
-
 function isCurrentStateReview(request) {
   return requestRole(request) === 'pm' && /"productPhase":"CURRENT_STATE_REVIEW"/.test(requestText(request));
 }
@@ -68,104 +64,28 @@ function toolCallFor(request) {
 
 function fakeProjectModel({ existingProject }) {
   const tasks = [
-    {
-      id: 'T_INTERFACE',
-      title: 'Implement the health contract interface',
-      kind: 'CONTRACT_INTERFACE',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['The executable interface matches the TL-designed health contract'],
-      testStrategy: 'Load the interface and verify the declared health boundary',
-      atomic: true,
-      dependsOn: [],
-    },
-    {
-      id: 'T_CONTRACT_TEST',
-      title: 'Implement executable health contract tests',
-      kind: 'CONTRACT_TEST',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['The contract suite detects a violating provider'],
-      testStrategy: 'Run the contract suite against deterministic fixtures',
-      atomic: true,
-      dependsOn: ['T_INTERFACE'],
-    },
-    {
-      id: 'T_FAKE',
-      title: 'Implement minimal fake health provider',
-      kind: 'FAKE_PROVIDER',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['The fake provider conforms to health-contract'],
-      testStrategy: 'Run health contract tests against the fake provider',
-      atomic: true,
-      dependsOn: ['T_INTERFACE', 'T_CONTRACT_TEST'],
-    },
-    {
-      id: 'T1',
-      title: 'Implement health walking skeleton',
-      kind: 'VERTICAL_SKELETON',
-      description: 'A deterministic CI task used to exercise the full Ariad workflow.',
-      componentId: 'health-feature',
-      verticalSliceId: 'health-slice',
-      acceptanceCriteria: ['health.txt contains status=healthy after one semantic retry'],
-      testStrategy: 'Tester and Reviewer read health.txt through OpenClaw tools',
-      atomic: true,
-      dependsOn: ['T_FAKE', 'T_CONTRACT_TEST'],
-    },
+    { id: 'T_INTERFACE', title: 'Interface', kind: 'CONTRACT_INTERFACE', componentId: 'health-feature', verticalSliceId: 'health-slice', acceptanceCriteria: ['matches contract'], testStrategy: 'load interface', atomic: true, dependsOn: [] },
+    { id: 'T_CONTRACT_TEST', title: 'Contract test', kind: 'CONTRACT_TEST', componentId: 'health-feature', verticalSliceId: 'health-slice', acceptanceCriteria: ['detect violation'], testStrategy: 'run contract test', atomic: true, dependsOn: ['T_INTERFACE'] },
+    { id: 'T_FAKE', title: 'Fake provider', kind: 'FAKE_PROVIDER', componentId: 'health-feature', verticalSliceId: 'health-slice', acceptanceCriteria: ['conforms'], testStrategy: 'run contract test', atomic: true, dependsOn: ['T_CONTRACT_TEST'] },
+    { id: 'T1', title: 'Skeleton', kind: 'VERTICAL_SKELETON', componentId: 'health-feature', verticalSliceId: 'health-slice', acceptanceCriteria: ['health.txt status=healthy'], testStrategy: 'read health.txt', atomic: true, dependsOn: ['T_FAKE'] },
   ];
   return {
-    currentState: {
-      existingProject,
-      summary: existingProject ? 'Existing Node-style project with a README and Git history.' : 'Greenfield project.',
-      keyFiles: existingProject ? ['README.md'] : [],
-      knownConstraints: ['Keep the implementation deterministic and small'],
-    },
+    currentState: { existingProject, summary: existingProject ? 'Existing project' : 'Greenfield', keyFiles: existingProject ? ['README.md'] : [], knownConstraints: [] },
     architecture: {
-      horizontals: [{ id: 'runtime', name: 'Runtime', responsibility: 'Shared runtime and application shell' }],
-      verticals: [{ id: 'health-feature', name: 'Health feature', responsibility: 'Provide the user-visible health state' }],
+      horizontals: [{ id: 'runtime', name: 'Runtime', responsibility: 'app shell' }],
+      verticals: [{ id: 'health-feature', name: 'Health', responsibility: 'health state' }],
     },
     contracts: [{
-      id: 'health-contract',
-      provider: 'health-feature',
-      consumers: ['runtime'],
-      purpose: 'Expose deterministic health state',
-      interface: 'health.txt contains status and cycle fields',
-      testBoundary: 'Read health.txt and verify status=healthy',
-      maturity: 'PROVISIONAL',
-      justifiedByVerticals: ['health-slice'],
-      interfaceTaskId: 'T_INTERFACE',
-      contractTestTaskId: 'T_CONTRACT_TEST',
-      fakeTaskId: 'T_FAKE',
+      id: 'health-contract', provider: 'health-feature', consumers: ['runtime'], purpose: 'health state', interface: 'health.txt status/cycle', testBoundary: 'read health.txt', maturity: 'PROVISIONAL', justifiedByVerticals: ['health-slice'], interfaceTaskId: 'T_INTERFACE', contractTestTaskId: 'T_CONTRACT_TEST', fakeTaskId: 'T_FAKE',
     }],
-    dependencies: [{
-      from: 'runtime',
-      to: 'health-feature',
-      contractId: 'health-contract',
-      implementationRequired: false,
-      rationale: 'The application shell consumes the health contract; the vertical can be exercised against the fake provider before a richer provider exists.',
-    }],
-    verticalSlices: [{
-      id: 'health-slice',
-      name: 'Health state walking skeleton',
-      goal: 'Exercise the user-visible health path end to end with the smallest implementation.',
-      componentIds: ['runtime', 'health-feature'],
-      contractIds: ['health-contract'],
-      skeletonTest: 'Developer writes health.txt; Tester and Reviewer read it through OpenClaw and verify the observable state.',
-      skeletonTaskId: 'T1',
-      taskIds: tasks.map((task) => task.id),
-    }],
-    technicalDirection: {
-      summary: 'Preserve the existing Node/Git project and use a deterministic file contract for the CI feature.',
-      foundations: ['Node.js', 'Git'],
-      languages: [{ scope: 'application', language: 'JavaScript', rationale: 'Matches the existing project and CI harness' }],
-      decisions: [{ decision: 'Use the existing single-project workspace', rationale: 'Avoid unnecessary infrastructure' }],
-    },
+    dependencies: [{ from: 'runtime', to: 'health-feature', contractId: 'health-contract', implementationRequired: false, rationale: 'fake sufficient' }],
+    verticalSlices: [{ id: 'health-slice', name: 'Health slice', goal: 'health end to end', componentIds: ['runtime', 'health-feature'], contractIds: ['health-contract'], skeletonTest: 'read health.txt', skeletonTaskId: 'T1', taskIds: tasks.map((task) => task.id) }],
+    technicalDirection: { summary: 'Node file fixture', foundations: ['Node.js'], languages: [{ scope: 'app', language: 'JavaScript', rationale: 'existing stack' }], decisions: [] },
     decomposition: {
       nodes: [
         { id: 'runtime', parentId: null, kind: 'component', componentId: 'runtime', children: [], taskId: null },
         { id: 'health-feature', parentId: null, kind: 'component', componentId: 'health-feature', children: tasks.map((task) => `${task.id}-node`), taskId: null },
-        ...tasks.map((task) => ({ id: `${task.id}-node`, parentId: 'health-feature', kind: 'task', componentId: task.componentId, children: [], taskId: task.id })),
+        ...tasks.map((task) => ({ id: `${task.id}-node`, parentId: 'health-feature', kind: 'task', componentId: 'health-feature', children: [], taskId: task.id })),
       ],
     },
     tasks,
@@ -192,18 +112,12 @@ function roleReply(request) {
     return {
       executionStatus: 'COMPLETED',
       outcome: isCurrentStateReview(request) ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED',
-      result: {
-        source: 'fake-provider',
-        reason: 'The current-state reconstruction and next vertical slice preserve the requested customer outcome without speculative infrastructure.',
-        guidance: '',
-        customerOutcomeSummary: 'Existing project understood; TL design is materialized into implementation tasks before the health walking skeleton runs.',
-        questions: [],
-      },
+      result: { source: 'fake-provider', reason: 'plan covers requested outcome', guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
     };
   }
   if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
-  if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['health endpoint still needs the semantic fix'] } };
+  if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['needs semantic fix'] } };
   if (role === 'reviewer') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } };
 }
