@@ -108,7 +108,7 @@ export default defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal } = input;
+        const { action, name, goal, decision } = input;
         let details: unknown;
         if (action === 'list') {
           details = { action, projects: supervisor.list() };
@@ -131,6 +131,23 @@ export default defineFeaturePlugin({
             details = { action, project: await supervisor.ensureRunning(name) };
           } else if (action === 'stop') {
             details = { action, project: await supervisor.ensureStopped(name) };
+          } else if (action === 'decide') {
+            if (!decision) throw new Error('decision is required for action decide');
+            const project = manager.status(name);
+            if (!project.projectAgent) throw new Error('project has no bound Project Agent');
+            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+            details = {
+              action,
+              result: await projectAgentAdapter.submitDecision({
+                binding: project.projectAgent,
+                requester: {
+                  agentId: toolContext?.agentId ?? null,
+                  sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
+                },
+                decision,
+                submit: (value) => supervisor.submitDecision(name, value),
+              }),
+            };
           } else {
             throw new Error(`unsupported Ariad action: ${action}`);
           }
