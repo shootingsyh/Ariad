@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { SQLiteRunStore } from '../../../src/sqlite-run-store.js';
 
 test('OpenClawRuntimeAdapter translates Ariad Run lifecycle to subagent lifecycle', async () => {
   const calls = [];
@@ -233,6 +234,44 @@ test('AriadSupervisor replaces a settled controller after recording a human deci
     assert.equal(response.resumed.record.decision, 'Keep the public API stable.');
     assert.deepEqual(events, ['start:decision', 'stop:decision', 'start:decision']);
     await supervisor.stop();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('AriadSupervisor status surfaces the latest durable run failure without a live controller', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-status-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('failed-status');
+    const store = new SQLiteRunStore(project.stateDb);
+    const run = store.create({
+      taskId: '__project_plan__',
+      role: 'tech_lead',
+      runtimeKey: 'openclaw',
+      runtimeId: 'openclaw-subagent',
+      context: {},
+    });
+    store.update(run.id, { state: 'FAILED', failure: 'POLL_TIMEOUT' });
+    store.close();
+
+    const supervisor = new AriadSupervisor({
+      manager,
+      createController: () => ({ async start() {}, async stop() {} }),
+    });
+    const status = supervisor.status(project.id);
+
+    assert.equal(status.active, false);
+    assert.equal(status.lastRun.id, run.id);
+    assert.equal(status.lastRun.role, 'tech_lead');
+    assert.equal(status.lastRun.failure, 'POLL_TIMEOUT');
+    assert.deepEqual(status.failure, {
+      source: 'run',
+      runId: run.id,
+      role: 'tech_lead',
+      failure: 'POLL_TIMEOUT',
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
