@@ -11,6 +11,7 @@ type RuntimeAdapterOptions = {
   model?: string;
   renderMessage?: (role: string, context: Record<string, unknown>) => string;
   cancelRun?: (runId: string) => Promise<unknown> | unknown;
+  pollTimeoutMs?: number;
 };
 
 function parseJsonText(text: string): any {
@@ -48,6 +49,7 @@ export class OpenClawRuntimeAdapter {
   private readonly model?: string;
   private readonly renderMessage: (role: string, context: Record<string, unknown>) => string;
   private readonly cancelRun?: (runId: string) => Promise<unknown> | unknown;
+  private readonly pollTimeoutMs: number;
   private readonly sessions = new Map<string, string>();
 
   constructor(options: RuntimeAdapterOptions) {
@@ -58,6 +60,7 @@ export class OpenClawRuntimeAdapter {
     this.model = options.model;
     this.renderMessage = options.renderMessage ?? ((role, context) => JSON.stringify({ role, context }));
     this.cancelRun = options.cancelRun;
+    this.pollTimeoutMs = options.pollTimeoutMs ?? 5_000;
   }
 
   async install() {
@@ -95,7 +98,7 @@ export class OpenClawRuntimeAdapter {
   }
 
   async poll(handle: { externalId: string }) {
-    const observed = await this.subagent.waitForRun({ runId: handle.externalId, timeoutMs: 25 });
+    const observed = await this.subagent.waitForRun({ runId: handle.externalId, timeoutMs: this.pollTimeoutMs });
     const status = String(observed?.status ?? 'pending');
     if (status === 'pending' || status === 'timeout') return { state: 'RUNNING' };
     if (status === 'error') return { state: 'FAILED', failure: String(observed?.error ?? observed?.stopReason ?? 'OPENCLAW_RUN_FAILED') };
