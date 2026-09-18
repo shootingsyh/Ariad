@@ -110,3 +110,67 @@ test('Run ids are unique and attempts increment per task and role', async () => 
   assert.notEqual(runs[0].id, runs[1].id);
   assert.deepEqual(runs.map(run => run.attempt), [1, 2]);
 });
+
+
+test('runtime executor is bounded by wall-clock time rather than a fixed poll count', async () => {
+  const registry = new RuntimeRegistry();
+  let polls = 0;
+  const runtime = {
+    id: 'many-polls-runtime',
+    config: {},
+    async start(request) { return { runtimeId: this.id, runId: request.runId, externalId: 'many-polls', state: 'RUNNING' }; },
+    async poll() {
+      polls += 1;
+      if (polls <= 450) return { state: 'RUNNING' };
+      return { state: 'COMPLETED', outcome: 'PASS', result: { polls } };
+    },
+    async cancel() { return { state: 'CANCELLED' }; },
+  };
+  registry.register('engineering', runtime);
+  const runStore = new InMemoryRunStore();
+  const executor = new RuntimeExecutor({
+    registry,
+    runStore,
+    roleRuntimeMap: { tester: 'engineering' },
+    maxDurationMs: 2_000,
+    pollIntervalMs: 0,
+  });
+
+  const result = await executor.run('tester', { taskId: 'T-many-polls' });
+
+  assert.equal(result.executionStatus, 'COMPLETED');
+  assert.equal(result.result.polls, 451);
+  assert.equal(runStore.list()[0].state, 'COMPLETED');
+});
+
+test('runtime executor marks and cancels a run when its wall-clock deadline expires', async () => {
+  const registry = new RuntimeRegistry();
+  let cancelled = false;
+  const runtime = {
+    id: 'slow-runtime',
+    config: {},
+    async start(request) { return { runtimeId: this.id, runId: request.runId, externalId: 'slow', state: 'RUNNING' }; },
+    async poll() {
+      await new Promise((resolve) => setTimeout(resolve, 6));
+      return { state: 'RUNNING' };
+    },
+    async cancel() { cancelled = true; return { state: 'CANCELLED' }; },
+  };
+  registry.register('engineering', runtime);
+  const runStore = new InMemoryRunStore();
+  const executor = new RuntimeExecutor({
+    registry,
+    runStore,
+    roleRuntimeMap: { tech_lead: 'engineering' },
+    maxDurationMs: 10,
+    pollIntervalMs: 0,
+  });
+
+  const result = await executor.run('tech_lead', { taskId: 'T-timeout' });
+
+  assert.equal(result.executionStatus, 'FAILED');
+  assert.equal(result.failure, 'POLL_TIMEOUT');
+  assert.equal(cancelled, true);
+  assert.equal(runStore.list()[0].state, 'FAILED');
+  assert.equal(runStore.list()[0].failure, 'POLL_TIMEOUT');
+});
