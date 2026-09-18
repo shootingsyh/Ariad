@@ -118,7 +118,10 @@ test('runtime executor is bounded by wall-clock time rather than a fixed poll co
   const runtime = {
     id: 'many-polls-runtime',
     config: {},
+    async install() { return { state: 'INSTALLED' }; },
+    async probe() { return { health: 'HEALTHY' }; },
     async start(request) { return { runtimeId: this.id, runId: request.runId, externalId: 'many-polls', state: 'RUNNING' }; },
+    async resume(request) { return this.start(request); },
     async poll() {
       polls += 1;
       if (polls <= 450) return { state: 'RUNNING' };
@@ -149,7 +152,10 @@ test('runtime executor marks and cancels a run when its wall-clock deadline expi
   const runtime = {
     id: 'slow-runtime',
     config: {},
+    async install() { return { state: 'INSTALLED' }; },
+    async probe() { return { health: 'HEALTHY' }; },
     async start(request) { return { runtimeId: this.id, runId: request.runId, externalId: 'slow', state: 'RUNNING' }; },
+    async resume(request) { return this.start(request); },
     async poll() {
       await new Promise((resolve) => setTimeout(resolve, 6));
       return { state: 'RUNNING' };
