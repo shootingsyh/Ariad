@@ -3,6 +3,9 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "files": ["dist", "runtime", "openclaw.plugin.json", "README.md"],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -13,15 +16,15 @@
     "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js"
   },
   "dependencies": {
-    "typebox": "^1.1.38"
+    "typebox": "1.1.38"
   },
   "peerDependencies": {
     "openclaw": ">=2026.9.4"
   },
   "devDependencies": {
-    "esbuild": "^0.25.9",
+    "esbuild": "0.25.9",
     "openclaw": "2026.9.4",
-    "typescript": "^5.9.2"
+    "typescript": "5.9.2"
   },
   "openclaw": {
     "extensions": ["./dist/index.js"],
