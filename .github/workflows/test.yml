@@ -2,6 +2,8 @@ name: test
 on:
   push:
   pull_request:
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,9 +13,21 @@ jobs:
         with:
           node-version: 24
       - run: npm test
+      - name: Bootstrap OpenClaw plugin lockfile
+        if: github.event_name == 'push'
+        working-directory: extensions/openclaw-ariad
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts
+            git config user.name "Ariad CI"
+            git config user.email "ariad-ci@localhost"
+            git add package-lock.json
+            git commit -m "build: lock OpenClaw plugin dependencies"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
       - name: Install OpenClaw plugin dependencies
         working-directory: extensions/openclaw-ariad
-        run: npm install
+        run: npm ci
       - name: Test OpenClaw Ariad host/runtime adapters
         working-directory: extensions/openclaw-ariad
         run: npm test
