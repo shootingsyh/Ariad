@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { HumanDecisionResumer } from '../runtime/human-decision-resumer.js';
 import type { AriadProjectManager, AriadProjectStatus } from '../runtime/project-manager.js';
 
@@ -12,6 +14,43 @@ type SupervisorOptions = {
   createController: (project: AriadProjectStatus) => ProjectController;
   reconcileIntervalMs?: number;
 };
+
+function decodeJson(value: unknown) {
+  if (typeof value !== 'string') return value ?? null;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function readLastRun(stateDb: string | undefined) {
+  if (!stateDb || !existsSync(stateDb)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(stateDb, { readOnly: true });
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runs'").get();
+    if (!table) return null;
+    const row = db.prepare(`
+      SELECT id, task_id, role, attempt, state, external_id, failure_json, created_at, updated_at
+      FROM runs
+      ORDER BY seq DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      role: row.role,
+      attempt: row.attempt,
+      state: row.state,
+      externalId: row.external_id,
+      failure: decodeJson(row.failure_json),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
 
 export class AriadSupervisor {
   private readonly manager: AriadProjectManager;
@@ -107,10 +146,19 @@ export class AriadSupervisor {
   status(name: string) {
     const project = this.manager.status(name);
     const controller = this.controllers.get(project.id);
+    const controllerStatus = controller?.status?.() as { active?: boolean; phase?: string; error?: string | null } | undefined;
+    const lastRun = readLastRun(project.stateDb);
+    const failure = controllerStatus?.phase === 'FAILED'
+      ? { source: 'controller', message: controllerStatus.error ?? 'PROJECT_FAILED' }
+      : lastRun?.state === 'FAILED'
+        ? { source: 'run', runId: lastRun.id, role: lastRun.role, failure: lastRun.failure }
+        : null;
     return {
       ...project,
-      active: Boolean(controller),
-      controller: controller?.status?.() ?? null,
+      active: Boolean(controller && controllerStatus?.active !== false),
+      controller: controllerStatus ?? null,
+      lastRun,
+      failure,
       supervisorStarted: this.started,
     };
   }
