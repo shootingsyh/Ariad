@@ -123,6 +123,22 @@ The plugin id is `ariad` and it exposes one user-facing tool:
 ariad_project
 ```
 
+Ariad declares `toolMetadata.ariad_project.profiles = ["coding"]`, so the tool is automatically included when OpenClaw uses the built-in `coding` tool profile. No manual `tools.allow` entry is required for the normal coding-profile installation.
+
+Do **not** configure:
+
+```json
+{
+  "tools": {
+    "allow": ["plugin:ariad"]
+  }
+}
+```
+
+`tools.allow` is an exclusive allowlist, and `plugin:ariad` is not the Ariad tool name. A configuration like that can leave the agent with zero callable tools and cause every chat turn to fail before model execution.
+
+If an installation deliberately uses a restrictive custom policy instead of the built-in coding profile, allow the exact tool name `ariad_project` according to that policy. For the standard coding profile, prefer Ariad's manifest metadata rather than adding a manual allowlist.
+
 Restart the OpenClaw Gateway after installation using the normal mechanism for the machine.
 
 If running the Gateway manually for development, start it only after setting the environment variables described below.
