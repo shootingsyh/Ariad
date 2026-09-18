@@ -1,7 +1,7 @@
 const TERMINAL_STATES = new Set(['COMPLETED', 'FAILED', 'LOST', 'CANCELLED']);
 
 export class RuntimeExecutor {
-  constructor({ registry, runStore, checkpointStore = null, eventJournal = null, roleRuntimeMap = {}, maxPolls = 100 }) {
+  constructor({ registry, runStore, checkpointStore = null, eventJournal = null, roleRuntimeMap = {}, maxDurationMs = 10 * 60_000, pollIntervalMs = 25 }) {
     if (!registry || typeof registry.get !== 'function') throw new Error('RuntimeExecutor requires a runtime registry');
     if (!runStore || typeof runStore.create !== 'function') throw new Error('RuntimeExecutor requires a run store');
     this.registry = registry;
@@ -9,7 +9,10 @@ export class RuntimeExecutor {
     this.checkpointStore = checkpointStore;
     this.eventJournal = eventJournal;
     this.roleRuntimeMap = { ...roleRuntimeMap };
-    this.maxPolls = maxPolls;
+    if (!Number.isFinite(maxDurationMs) || maxDurationMs <= 0) throw new Error('RuntimeExecutor maxDurationMs must be a positive number');
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0) throw new Error('RuntimeExecutor pollIntervalMs must be a non-negative number');
+    this.maxDurationMs = maxDurationMs;
+    this.pollIntervalMs = pollIntervalMs;
   }
 
   #event(run, type, payload = {}) {
@@ -42,32 +45,44 @@ export class RuntimeExecutor {
   }
 
   async #pollToTerminal(run, adapter, handle) {
-    let polls = 0;
-    while (polls < this.maxPolls) {
-      polls += 1;
+    const startedAt = Date.now();
+    const deadline = startedAt + this.maxDurationMs;
+    while (true) {
       const result = await adapter.poll(handle);
       if (!result || typeof result.state !== 'string') throw new Error(`runtime ${adapter.id} returned invalid poll result`);
-      if (!TERMINAL_STATES.has(result.state)) {
-        this.runStore.update(run.id, { state: result.state });
-        continue;
+      if (TERMINAL_STATES.has(result.state)) {
+        this.runStore.update(run.id, {
+          state: result.state,
+          result: result.state === 'COMPLETED'
+            ? { outcome: result.outcome ?? null, result: Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : null }
+            : null,
+          failure: result.failure || null,
+        });
+        if (result.state === 'COMPLETED') {
+          this.#event(run, 'RUN_COMPLETED', { outcome: result.outcome ?? null });
+          return { executionStatus: 'COMPLETED', outcome: result.outcome, result: result.result ?? null, runId: run.id };
+        }
+        this.#event(run, 'RUN_FAILED', { state: result.state, failure: result.failure || result.state });
+        return { executionStatus: 'FAILED', failure: result.failure || result.state, runState: result.state, runId: run.id };
       }
-      this.runStore.update(run.id, {
-        state: result.state,
-        result: result.state === 'COMPLETED'
-          ? { outcome: result.outcome ?? null, result: Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : null }
-          : null,
-        failure: result.failure || null,
-      });
-      if (result.state === 'COMPLETED') {
-        this.#event(run, 'RUN_COMPLETED', { outcome: result.outcome ?? null });
-        return { executionStatus: 'COMPLETED', outcome: result.outcome, result: result.result ?? null, runId: run.id };
+
+      this.runStore.update(run.id, { state: result.state });
+      const now = Date.now();
+      if (now >= deadline) {
+        try {
+          if (typeof adapter.cancel === 'function') await adapter.cancel(handle);
+        } catch {}
+        const failure = 'POLL_TIMEOUT';
+        this.runStore.update(run.id, { state: 'FAILED', failure });
+        this.#event(run, 'RUN_FAILED', { state: 'FAILED', failure, elapsedMs: now - startedAt, maxDurationMs: this.maxDurationMs });
+        return { executionStatus: 'FAILED', failure, runId: run.id };
       }
-      this.#event(run, 'RUN_FAILED', { state: result.state, failure: result.failure || result.state });
-      return { executionStatus: 'FAILED', failure: result.failure || result.state, runState: result.state, runId: run.id };
+
+      if (this.pollIntervalMs > 0) {
+        const delay = Math.min(this.pollIntervalMs, Math.max(0, deadline - now));
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
-    this.runStore.update(run.id, { state: 'FAILED', failure: 'POLL_LIMIT_EXCEEDED' });
-    this.#event(run, 'RUN_FAILED', { state: 'FAILED', failure: 'POLL_LIMIT_EXCEEDED' });
-    return { executionStatus: 'FAILED', failure: 'POLL_LIMIT_EXCEEDED', runId: run.id };
   }
 
   async redispatch(runId) {
