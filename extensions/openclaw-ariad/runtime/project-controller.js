@@ -341,7 +341,7 @@ export class AriadProjectController {
     const stateStore = new SQLiteWorkflowStateStore(this.project.stateDb);
 
     try {
-      const runtimeExecutor = new RuntimeExecutor({ registry, runStore, roleRuntimeMap: ROLE_RUNTIME_MAP, maxPolls: 400 });
+      const runtimeExecutor = new RuntimeExecutor({ registry, runStore, roleRuntimeMap: ROLE_RUNTIME_MAP, maxDurationMs: 10 * 60_000 });
       const planning = await this.#ensureTaskGraph(runtimeExecutor);
       if (planning.status === 'NEEDS_HUMAN') return { status: 'NEEDS_HUMAN' };
       const { tasks, projectModel } = planning;
