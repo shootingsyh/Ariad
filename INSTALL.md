@@ -75,6 +75,16 @@ openclaw --version
 
 Node should be 24.x. OpenClaw must be 2026.9.4 or newer.
 
+Dependency policy:
+
+- `.nvmrc` pins the development Node major to 24.
+- both root and plugin `package.json` declare `engines.node >=24 <25`.
+- the OpenClaw plugin commits `package-lock.json`; install and CI use `npm ci`.
+- plugin direct npm dependencies are exact versions; transitive versions and integrity hashes come from the lockfile.
+- OpenClaw compatibility remains `>=2026.9.4`, while CI/dev validates against exact OpenClaw `2026.9.4`.
+- Git is a system dependency rather than an npm dependency; Ariad uses standard Git CLI operations and requires support for `git init -b` (Git 2.28+).
+- Ariad core currently has no third-party npm dependencies, so the root package does not need a lockfile.
+
 ## 3. Clone and verify Ariad
 
 ```bash
@@ -91,7 +101,7 @@ Do not continue if the root deterministic test suite fails.
 
 ```bash
 cd extensions/openclaw-ariad
-npm install
+npm ci
 npm test
 npm run plugin:validate
 ```
