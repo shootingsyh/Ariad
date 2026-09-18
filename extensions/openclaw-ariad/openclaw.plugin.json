@@ -13,5 +13,10 @@
   },
   "contracts": {
     "tools": ["ariad_project"]
+  },
+  "toolMetadata": {
+    "ariad_project": {
+      "profiles": ["coding"]
+    }
   }
 }
