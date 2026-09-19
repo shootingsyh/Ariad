@@ -23,19 +23,18 @@ export class OpenClawV2Provider {
       throw new Error('OpenClawV2Provider requires projectId, taskId, and role');
     }
 
-    const runId = [
-      'v2',
-      spec.projectId,
-      spec.taskId,
-      Date.now().toString(36),
-    ].join(':');
+    const runId = typeof spec.attemptId === 'string' && spec.attemptId
+      ? spec.attemptId
+      : ['v2', spec.projectId, spec.taskId].join(':');
 
     const context = {
       ...(spec.context ?? {}),
       projectId: spec.projectId,
       taskId: spec.taskId,
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
+      ...(typeof spec.context?.v2Prompt === 'string' ? { v2Prompt: spec.context.v2Prompt } : {}),
       ...(spec.workspace ? { workspace: spec.workspace } : {}),
+      ...(spec.idempotencyKey ? { idempotencyKey: spec.idempotencyKey } : {}),
     };
 
     const handle = await this.runtime.start({
