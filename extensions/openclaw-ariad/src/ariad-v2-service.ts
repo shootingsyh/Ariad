@@ -140,6 +140,9 @@ class ProjectRuntime {
         claimed: planning.filter(item => item.state === 'CLAIMED').length,
         planned: planning.filter(item => item.state === 'PLANNED').length,
       },
+      activeTasks: tasks
+        .filter(task => !['DONE', 'SKIPPED', 'OBSOLETE'].includes(task.state))
+        .map(task => ({ id: task.id, stage: task.stage, state: task.state })),
     };
   }
 
