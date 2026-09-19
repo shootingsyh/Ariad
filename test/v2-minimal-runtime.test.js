@@ -7,8 +7,9 @@ import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
-import { V2Scheduler } from '../src/v2/scheduler.js';
+import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
+import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstrap.js';
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-v2-'));
@@ -35,10 +36,22 @@ function roles() {
       ? { stage: 'reviewer', state: 'DONE' }
       : { stage: 'developer', state: 'READY' },
   });
+  registry.register('tech_lead', {
+    prepare: ({ task }) => ({ provider: 'fake', prompt: `plan ${task.input?.purpose ?? task.id}`, resources: [] }),
+    transition: ({ result }) => result.outcome === 'PASS'
+      ? { stage: 'tech_lead', state: 'DONE' }
+      : { stage: 'tech_lead', state: 'READY' },
+  });
   registry.register('pm', {
     sessionPolicy: 'persistent',
-    prepare: ({ project }) => ({ provider: 'fake', prompt: project.spec ?? '', sessionKey: project.pmBinding ?? project.id }),
-    transition: () => ({ state: 'DONE' }),
+    prepare: ({ project, task }) => ({
+      provider: 'fake',
+      prompt: task?.input?.purpose ?? project.spec ?? '',
+      sessionKey: project.pmBinding ?? project.id,
+    }),
+    transition: ({ result }) => result.outcome === 'PASS'
+      ? { stage: 'pm', state: 'DONE' }
+      : { stage: 'pm', state: 'READY' },
   });
   return registry;
 }
@@ -84,6 +97,7 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
 
     await scheduler.tick('P1');
     let task = store.getTask('T1');
+    assert.equal(task.scope, 'delivery');
     assert.equal(task.state, 'WORKING');
     assert.equal(task.stage, 'developer');
     assert.deepEqual(resources.snapshot().map(x => x.owner), ['T1']);
@@ -206,4 +220,104 @@ test('role definitions carry startup policy, including persistent PM sessions', 
   const spec = role.prepare({ project, task: null });
   assert.equal(role.sessionPolicy, 'persistent');
   assert.equal(spec.sessionKey, 'openclaw:agent:pm-1');
+});
+
+test('control tasks form independent ad-hoc graphs while delivery stays one graph', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P6' });
+    store.createTask({ id: 'D1', projectId: 'P6', stage: 'developer' });
+    store.createTask({ id: 'D2', projectId: 'P6', stage: 'developer', dependsOn: ['D1'] });
+    store.createControlFlow({
+      projectId: 'P6',
+      flowId: 'plan-1',
+      tasks: [
+        { id: 'PLAN-TL', stage: 'tech_lead' },
+        { id: 'PLAN-PM', stage: 'pm', dependsOn: ['PLAN-TL'] },
+      ],
+    });
+    store.createControlFlow({
+      projectId: 'P6',
+      flowId: 'replan-2',
+      tasks: [{ id: 'REPLAN-TL', stage: 'tech_lead' }],
+    });
+
+    const groups = partitionGraphs(store.listTasks('P6'));
+    assert.deepEqual(groups.map(x => x.key), ['delivery', 'control:plan-1', 'control:replan-2']);
+    assert.deepEqual(store.listTasks('P6', { scope: 'delivery' }).map(x => x.id), ['D1', 'D2']);
+    assert.deepEqual(store.listControlFlows('P6').map(x => x.flowId), ['plan-1', 'replan-2']);
+
+    assert.throws(() => store.createControlFlow({
+      projectId: 'P6',
+      flowId: 'bad',
+      tasks: [{ id: 'BAD', stage: 'pm', dependsOn: ['D1'] }],
+    }), /depends outside flow/);
+
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('empty project bootstrap welcomes PM without creating durable work', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P7', pmBinding: 'pm:p7' });
+    const result = bootstrapProject({ store, projectId: 'P7', directoryEmpty: true });
+    assert.equal(result.pmInvocation.kind, 'WELCOME');
+    assert.equal(result.pmInvocation.sessionKey, 'pm:p7');
+    assert.equal(result.controlFlow, null);
+    assert.deepEqual(store.listTasks('P7'), []);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('non-empty project bootstrap creates restore/discover then PM review control flow', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P8', pmBinding: 'pm:p8' });
+    const result = bootstrapProject({
+      store,
+      projectId: 'P8',
+      directoryEmpty: false,
+      flowId: 'bootstrap-1',
+    });
+    assert.equal(result.pmInvocation.kind, 'WELCOME_AND_RESTORE_STARTED');
+    assert.equal(result.controlFlow.flowId, 'bootstrap-1');
+    const tasks = store.listTasks('P8', { flowId: 'bootstrap-1' });
+    assert.deepEqual(tasks.map(x => [x.id, x.stage, x.dependsOn]), [
+      ['bootstrap-1:restore', 'tech_lead', []],
+      ['bootstrap-1:review', 'pm', ['bootstrap-1:restore']],
+    ]);
+    assert.ok(tasks.every(x => x.scope === 'control'));
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PM can open an ad-hoc planning flow without touching the delivery graph', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P9' });
+    store.createTask({ id: 'FEATURE', projectId: 'P9', stage: 'developer' });
+    const flow = createPlanningFlow({
+      store,
+      projectId: 'P9',
+      flowId: 'plan-42',
+      input: { request: 'add collaboration' },
+    });
+    assert.equal(flow.flowId, 'plan-42');
+    assert.deepEqual(store.listTasks('P9', { scope: 'delivery' }).map(x => x.id), ['FEATURE']);
+    assert.deepEqual(store.listTasks('P9', { flowId: 'plan-42' }).map(x => x.stage), ['tech_lead', 'pm']);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
