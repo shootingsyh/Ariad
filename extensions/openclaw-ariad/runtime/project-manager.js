@@ -37,7 +37,7 @@ export class AriadProjectManager {
     };
   }
 
-  create(name, { goal = null, projectAgent = null } = {}) {
+  create(name, { goal = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
     const p = this.paths(name);
     if (existsSync(p.manifest)) throw new Error(`Ariad project already exists: ${p.id}`);
     mkdirSync(p.workspace, { recursive: true });
@@ -59,7 +59,7 @@ export class AriadProjectManager {
       stateDb: p.db,
       desiredState: 'STOPPED',
       executionState: 'IDLE',
-      projectAgent,
+      frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     return this.status(p.id);
   }
@@ -75,7 +75,14 @@ export class AriadProjectManager {
     const p = this.paths(name);
     if (!existsSync(p.manifest)) throw new Error(`unknown Ariad project: ${p.id}`);
     const manifest = readJson(p.manifest);
-    return { ...manifest, executionState: manifest.executionState ?? 'IDLE', root: p.root };
+    const frontdeskBinding = manifest.frontdeskBinding ?? manifest.projectAgent ?? null;
+    const { projectAgent: _legacyProjectAgent, ...rest } = manifest;
+    return {
+      ...rest,
+      frontdeskBinding,
+      executionState: manifest.executionState ?? 'IDLE',
+      root: p.root,
+    };
   }
 
   setDesiredState(name, desiredState) {
@@ -96,11 +103,19 @@ export class AriadProjectManager {
     return this.status(p.id);
   }
 
-  bindProjectAgent(name, projectAgent) {
+  bindFrontdesk(name, frontdeskBinding) {
     const p = this.paths(name);
     const current = this.status(p.id);
-    writeJson(p.manifest, { ...current, root: undefined, projectAgent });
+    writeJson(p.manifest, { ...current, root: undefined, frontdeskBinding });
     return this.status(p.id);
+  }
+
+  unbindFrontdesk(name) {
+    return this.bindFrontdesk(name, null);
+  }
+
+  bindProjectAgent(name, projectAgent) {
+    return this.bindFrontdesk(name, projectAgent);
   }
 }
 
