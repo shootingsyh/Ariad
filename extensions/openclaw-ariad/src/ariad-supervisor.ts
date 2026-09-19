@@ -20,6 +20,28 @@ function decodeJson(value: unknown) {
   try { return JSON.parse(value); } catch { return value; }
 }
 
+function executionStateForController(status: { phase?: string } | undefined) {
+  switch (status?.phase) {
+    case 'STARTING':
+    case 'DISCOVERING':
+    case 'PRODUCT_REVIEW':
+    case 'PLANNING':
+      return 'PLANNING';
+    case 'RUNNING':
+      return 'RUNNING';
+    case 'NEEDS_HUMAN':
+      return 'NEEDS_HUMAN';
+    case 'FAILED':
+      return 'FAILED';
+    case 'SUCCEEDED':
+      return 'SUCCEEDED';
+    case 'STOPPED':
+      return 'IDLE';
+    default:
+      return null;
+  }
+}
+
 function readLastRun(stateDb: string | undefined) {
   if (!stateDb || !existsSync(stateDb)) return null;
   let db: DatabaseSync | null = null;
@@ -90,6 +112,15 @@ export class AriadSupervisor {
   }
 
   async ensureRunning(name: string) {
+    const existing = this.manager.status(name);
+    const current = this.controllers.get(existing.id);
+    const snapshot = current?.status?.() as { active?: boolean; phase?: string } | undefined;
+
+    if (current && snapshot?.active === false && snapshot.phase !== 'SUCCEEDED') {
+      await current.stop();
+      this.controllers.delete(existing.id);
+    }
+
     const project = this.manager.setDesiredState(name, 'RUNNING');
     return this.status(project.id);
   }
@@ -127,12 +158,25 @@ export class AriadSupervisor {
     this.reconcilePromise = (async () => {
       for (const project of this.manager.list()) {
         const controller = this.controllers.get(project.id);
-        if (project.desiredState === 'RUNNING' && !controller) {
-          const next = this.createController(project);
+        const snapshot = controller?.status?.() as { active?: boolean; phase?: string } | undefined;
+        const observedExecutionState = executionStateForController(snapshot);
+        if (observedExecutionState) this.manager.setExecutionState(project.id, observedExecutionState);
+
+        if (
+          project.desiredState === 'RUNNING'
+          && !controller
+          && project.executionState !== 'SUCCEEDED'
+          && project.executionState !== 'NEEDS_HUMAN'
+        ) {
+          const nextProject = this.manager.setExecutionState(project.id, 'PLANNING');
+          const next = this.createController(nextProject);
           this.controllers.set(project.id, next);
           await next.start();
         } else if (project.desiredState === 'STOPPED' && controller) {
           await controller.stop();
+          const stoppedSnapshot = controller.status?.() as { phase?: string } | undefined;
+          const stoppedExecutionState = executionStateForController(stoppedSnapshot);
+          if (stoppedExecutionState) this.manager.setExecutionState(project.id, stoppedExecutionState);
           this.controllers.delete(project.id);
         }
       }
@@ -147,6 +191,10 @@ export class AriadSupervisor {
     const project = this.manager.status(name);
     const controller = this.controllers.get(project.id);
     const controllerStatus = controller?.status?.() as { active?: boolean; phase?: string; error?: string | null } | undefined;
+    const observedExecutionState = executionStateForController(controllerStatus);
+    const effectiveProject = observedExecutionState
+      ? this.manager.setExecutionState(project.id, observedExecutionState)
+      : project;
     const lastRun = readLastRun(project.stateDb);
     const failure = controllerStatus?.phase === 'FAILED'
       ? { source: 'controller', message: controllerStatus.error ?? 'PROJECT_FAILED' }
@@ -154,7 +202,7 @@ export class AriadSupervisor {
         ? { source: 'run', runId: lastRun.id, role: lastRun.role, failure: lastRun.failure }
         : null;
     return {
-      ...project,
+      ...effectiveProject,
       active: Boolean(controller && controllerStatus?.active !== false),
       controller: controllerStatus ?? null,
       lastRun,
