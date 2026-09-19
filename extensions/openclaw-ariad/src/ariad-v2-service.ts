@@ -157,7 +157,9 @@ class ProjectRuntime {
       const delivery = tasks.filter(task => task.scope === 'delivery');
       let state = 'IDLE';
 
-      if (tasks.some(task => task.state === 'NEEDS_HUMAN')) {
+      if (tasks.some(task => task.state === 'SYSTEM_BLOCKED')) {
+        state = 'FAILED';
+      } else if (tasks.some(task => task.state === 'NEEDS_HUMAN')) {
         state = 'NEEDS_HUMAN';
       } else if (this.store.hasUnplannedPlanningRequests(this.projectId)) {
         state = 'PLANNING';
