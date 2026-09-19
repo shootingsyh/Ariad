@@ -271,7 +271,7 @@ test('empty project bootstrap welcomes PM without creating durable work', () => 
     const result = bootstrapProject({ store, projectId: 'P7', directoryEmpty: true });
     assert.equal(result.pmInvocation.kind, 'WELCOME');
     assert.equal(result.pmInvocation.sessionKey, 'pm:p7');
-    assert.equal(result.controlFlow, null);
+    assert.equal(result.planningRequest, null);
     assert.deepEqual(store.listTasks('P7'), []);
     store.close();
   } finally {
@@ -476,8 +476,8 @@ test('Tech Lead v2 plan validator catches cycle created by explicit plus virtual
     rootTaskId: 'ROOT',
     tasks: [
       { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
-      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: ['B'], acceptanceCriteria: ['a'], testStrategy: 'a' },
-      { id: 'B', title: 'B', intent: 'b', parentId: 'A', dependsOn: [], acceptanceCriteria: ['b'], testStrategy: 'b' },
+      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: [], acceptanceCriteria: ['a'], testStrategy: 'a' },
+      { id: 'B', title: 'B', intent: 'b', parentId: 'A', dependsOn: ['ROOT'], acceptanceCriteria: ['b'], testStrategy: 'b' },
     ],
   };
   assert.throws(() => validateTechLeadPlan(plan), /execution graph contains a cycle/);
