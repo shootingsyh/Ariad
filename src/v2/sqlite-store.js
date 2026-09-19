@@ -24,6 +24,34 @@ function rowToTask(row) {
   };
 }
 
+function normalizeTask(task) {
+  const scope = task.scope ?? 'delivery';
+  if (!['delivery', 'control'].includes(scope)) throw new Error(`invalid task scope: ${scope}`);
+  if (scope === 'control' && (!task.flowId || typeof task.flowId !== 'string')) {
+    throw new Error('control task requires flowId');
+  }
+  if (scope === 'delivery' && task.flowId != null) {
+    throw new Error('delivery task cannot have flowId');
+  }
+  return {
+    dependsOn: [],
+    scope,
+    stage: 'developer',
+    state: 'READY',
+    input: {},
+    history: [],
+    artifacts: [],
+    execution: null,
+    ...structuredClone(task),
+    scope,
+    flowId: scope === 'control' ? task.flowId : undefined,
+  };
+}
+
+function graphKey(task) {
+  return task.scope === 'control' ? `control:${task.flowId}` : 'delivery';
+}
+
 export class SQLiteV2Store {
   constructor(file) {
     if (!file) throw new Error('SQLiteV2Store requires a database file path');
@@ -80,19 +108,8 @@ export class SQLiteV2Store {
     return this.getProject(id);
   }
 
-  createTask(task) {
-    if (!task?.id) throw new Error('task.id is required');
-    if (!task?.projectId) throw new Error('task.projectId is required');
-    const normalized = {
-      dependsOn: [],
-      stage: 'developer',
-      state: 'READY',
-      input: {},
-      history: [],
-      artifacts: [],
-      execution: null,
-      ...structuredClone(task),
-    };
+  #insertTask(task) {
+    const normalized = normalizeTask(task);
     const now = new Date().toISOString();
     const data = { ...normalized };
     delete data.id;
@@ -105,21 +122,75 @@ export class SQLiteV2Store {
     return this.getTask(normalized.id);
   }
 
+  createTask(task) {
+    if (!task?.id) throw new Error('task.id is required');
+    if (!task?.projectId) throw new Error('task.projectId is required');
+    return this.#insertTask(task);
+  }
+
+  createControlFlow({ projectId, flowId, tasks }) {
+    if (!projectId) throw new Error('projectId is required');
+    if (!flowId) throw new Error('flowId is required');
+    if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('control flow requires tasks');
+
+    const ids = new Set(tasks.map(task => task.id));
+    if (ids.size !== tasks.length || ids.has(undefined)) throw new Error('control flow task ids must be present and unique');
+    for (const task of tasks) {
+      for (const dep of task.dependsOn ?? []) {
+        if (!ids.has(dep)) throw new Error(`control flow task ${task.id} depends outside flow ${flowId}: ${dep}`);
+      }
+    }
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const created = tasks.map(task => this.#insertTask({
+        ...task,
+        projectId,
+        scope: 'control',
+        flowId,
+      }));
+      this.db.exec('COMMIT');
+      return created;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   getTask(id) {
     return rowToTask(this.db.prepare('SELECT * FROM v2_tasks WHERE id = ?').get(id));
   }
 
-  listTasks(projectId) {
-    return this.db.prepare(
+  listTasks(projectId, filter = {}) {
+    const tasks = this.db.prepare(
       'SELECT * FROM v2_tasks WHERE project_id = ? ORDER BY rowid'
     ).all(projectId).map(rowToTask);
+    return tasks.filter(task => {
+      if (filter.scope && task.scope !== filter.scope) return false;
+      if (filter.flowId && task.flowId !== filter.flowId) return false;
+      return true;
+    });
+  }
+
+  listControlFlows(projectId) {
+    const grouped = new Map();
+    for (const task of this.listTasks(projectId, { scope: 'control' })) {
+      const items = grouped.get(task.flowId) ?? [];
+      items.push(task);
+      grouped.set(task.flowId, items);
+    }
+    return [...grouped.entries()].map(([flowId, tasks]) => ({ flowId, tasks }));
   }
 
   updateTask(id, expectedVersion, patch) {
     const current = this.getTask(id);
     if (!current) throw new Error(`unknown task: ${id}`);
     if (current.version !== expectedVersion) throw new Error(`task version conflict: ${id}`);
-    const next = { ...current, ...structuredClone(patch), id, projectId: current.projectId };
+
+    const candidate = normalizeTask({ ...current, ...structuredClone(patch), id, projectId: current.projectId });
+    if (graphKey(candidate) !== graphKey(current)) throw new Error('task graph membership is immutable');
+
+    const next = { ...candidate, id, projectId: current.projectId };
     delete next.version;
     delete next.updatedAt;
     const version = expectedVersion + 1;
@@ -148,3 +219,5 @@ export class SQLiteV2Store {
     this.db.close();
   }
 }
+
+export { graphKey };
