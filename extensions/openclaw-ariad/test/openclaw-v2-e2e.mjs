@@ -65,15 +65,19 @@ provider.stderr.on('data', chunk => { providerLog += chunk; });
 gateway.stdout.on('data', chunk => { gatewayLog += chunk; });
 gateway.stderr.on('data', chunk => { gatewayLog += chunk; });
 
+let lastProjectStatus = '';
+
 async function waitFor(check, label, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       if (await check()) return;
-    } catch {}
+    } catch (error) {
+      if (error?.fatal) throw error;
+    }
     await new Promise(resolveWait => setTimeout(resolveWait, 200));
   }
-  throw new Error(`timed out waiting for ${label}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+  throw new Error(`timed out waiting for ${label}\nstatus:\n${lastProjectStatus}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
 }
 
 function gatewayCall(method, params = {}) {
@@ -118,8 +122,11 @@ try {
   let status = '';
   await waitFor(() => {
     status = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
-    if (/"executionState"\s*:\s*"FAILED"/.test(status)) {
-      throw new Error(`v2 project failed: ${status}`);
+    lastProjectStatus = status;
+    if (/"executionState"\s*:\s*"(FAILED|NEEDS_HUMAN)"/.test(status)) {
+      const error = new Error(`v2 project stopped before success: ${status}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+      error.fatal = true;
+      throw error;
     }
     return /"executionState"\s*:\s*"SUCCEEDED"/.test(status);
   }, 'production v2 project success');
