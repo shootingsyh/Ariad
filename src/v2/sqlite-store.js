@@ -227,6 +227,87 @@ export class SQLiteV2Store {
     });
   }
 
+  applyDeliveryPlan(projectId, plan) {
+    if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
+    if (!plan?.rootTaskId || !Array.isArray(plan.tasks) || plan.tasks.length === 0) {
+      throw new Error('delivery plan requires rootTaskId and tasks');
+    }
+
+    const incoming = new Map(plan.tasks.map(task => [task.id, task]));
+    if (incoming.size !== plan.tasks.length) throw new Error('delivery plan contains duplicate task ids');
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.listTasks(projectId, { scope: 'delivery' });
+      for (const task of current) {
+        if (incoming.has(task.id)) continue;
+        if (task.state === 'WORKING') {
+          throw new Error(`cannot obsolete WORKING delivery task: ${task.id}`);
+        }
+        this.updateTask(task.id, task.version, {
+          state: 'OBSOLETE',
+          execution: null,
+        });
+      }
+
+      for (const spec of plan.tasks) {
+        const existing = this.getTask(spec.id);
+        const patch = {
+          parentId: spec.parentId ?? null,
+          dependsOn: [...(spec.dependsOn ?? [])],
+          title: spec.title,
+          intent: spec.intent,
+          acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
+          testStrategy: spec.testStrategy,
+          input: {
+            ...(existing?.input ?? {}),
+            intent: spec.intent,
+            acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
+            testStrategy: spec.testStrategy,
+          },
+        };
+
+        if (!existing) {
+          this.#insertTask({
+            id: spec.id,
+            projectId,
+            scope: 'delivery',
+            stage: 'developer',
+            state: 'READY',
+            history: [],
+            artifacts: [],
+            execution: null,
+            ...patch,
+          });
+          continue;
+        }
+
+        if (existing.projectId !== projectId || existing.scope !== 'delivery') {
+          throw new Error(`delivery plan task id collides outside project delivery graph: ${spec.id}`);
+        }
+
+        this.updateTask(existing.id, existing.version, {
+          ...patch,
+          // Preserve execution progress for stable task ids across replans.
+          state: existing.state === 'OBSOLETE' ? 'READY' : existing.state,
+        });
+      }
+
+      const project = this.getProject(projectId);
+      this.updateProject(projectId, project.version, {
+        deliveryPlanVersion: (project.deliveryPlanVersion ?? 0) + 1,
+        deliveryRootTaskId: plan.rootTaskId,
+        deliveryPlanSummary: plan.projectSummary ?? '',
+      });
+
+      this.db.exec('COMMIT');
+      return this.listTasks(projectId, { scope: 'delivery' });
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   enqueuePlanningRequest({ id, projectId, request, context = null }) {
     if (!id) throw new Error('planning request id is required');
     if (!projectId) throw new Error('planning request projectId is required');
