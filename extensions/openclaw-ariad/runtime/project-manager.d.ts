@@ -13,6 +13,7 @@ export interface AriadProjectStatus {
   stateDb: string;
   root: string;
   desiredState: 'RUNNING' | 'STOPPED';
+  executionState: 'IDLE' | 'PLANNING' | 'RUNNING' | 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED';
   projectAgent: ProjectAgentBinding | null;
 }
 
@@ -27,6 +28,7 @@ export class AriadProjectManager {
   list(): AriadProjectStatus[];
   status(name: string): AriadProjectStatus;
   setDesiredState(name: string, desiredState: 'RUNNING' | 'STOPPED'): AriadProjectStatus;
+  setExecutionState(name: string, executionState: AriadProjectStatus['executionState']): AriadProjectStatus;
   bindProjectAgent(name: string, projectAgent: ProjectAgentBinding | null): AriadProjectStatus;
 }
 
