@@ -4,7 +4,7 @@ import { OpenClawRuntimeAdapter } from '../dist/openclaw-runtime-adapter.js';
 import { OpenClawProjectAgentAdapter } from '../dist/openclaw-project-agent-adapter.js';
 import { AriadSupervisor } from '../dist/ariad-supervisor.js';
 import { AriadProjectManager } from '../runtime/project-manager.js';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -272,6 +272,109 @@ test('AriadSupervisor status surfaces the latest durable run failure without a l
       role: 'tech_lead',
       failure: 'POLL_TIMEOUT',
     });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('start clears a settled failed controller so supervisor reconciliation can restart it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-restart-failed-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('retry-failed');
+    manager.setDesiredState(project.id, 'RUNNING');
+
+    const controllers = [];
+    const supervisor = new AriadSupervisor({
+      manager,
+      reconcileIntervalMs: 60_000,
+      createController: () => {
+        const controller = {
+          active: controllers.length > 0,
+          phase: controllers.length > 0 ? 'RUNNING' : 'FAILED',
+          async start() {},
+          async stop() { this.active = false; },
+          status() { return { active: this.active, phase: this.phase, error: this.phase === 'FAILED' ? 'boom' : null }; },
+        };
+        controllers.push(controller);
+        return controller;
+      },
+    });
+
+    await supervisor.start();
+    controllers[0].active = false;
+    controllers[0].phase = 'FAILED';
+    assert.equal(supervisor.status(project.id).executionState, 'FAILED');
+
+    await supervisor.ensureRunning(project.id);
+    assert.equal(supervisor.status(project.id).active, false, 'start request must not launch controller inline');
+
+    await supervisor.reconcile();
+    assert.equal(controllers.length, 2);
+    assert.equal(supervisor.status(project.id).active, true);
+    assert.equal(supervisor.status(project.id).executionState, 'RUNNING');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('successful project execution state is durable and does not auto-rerun after supervisor restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-success-state-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('finished');
+    manager.setDesiredState(project.id, 'RUNNING');
+    let starts = 0;
+
+    const supervisor = new AriadSupervisor({
+      manager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        active: false,
+        phase: 'SUCCEEDED',
+        async start() { starts += 1; },
+        async stop() {},
+        status() { return { active: this.active, phase: this.phase, error: null }; },
+      }),
+    });
+
+    await supervisor.start();
+    assert.equal(starts, 1);
+    assert.equal(supervisor.status(project.id).executionState, 'SUCCEEDED');
+    await supervisor.stop();
+
+    const reopenedManager = new AriadProjectManager({ projectsRoot: dir });
+    assert.equal(reopenedManager.status(project.id).executionState, 'SUCCEEDED');
+
+    const restarted = new AriadSupervisor({
+      manager: reopenedManager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        async start() { starts += 1; },
+        async stop() {},
+        status() { return { active: true, phase: 'RUNNING' }; },
+      }),
+    });
+    await restarted.start();
+    assert.equal(starts, 1, 'durable SUCCEEDED project must not restart merely because desiredState remains RUNNING');
+    assert.equal(restarted.status(project.id).executionState, 'SUCCEEDED');
+    await restarted.stop();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('existing project manifests without executionState remain readable as IDLE', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-project-state-compat-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('legacy');
+    const manifestPath = join(project.root, 'project.json');
+    const legacy = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    delete legacy.executionState;
+    writeFileSync(manifestPath, `${JSON.stringify(legacy, null, 2)}\n`);
+    assert.equal(manager.status(project.id).executionState, 'IDLE');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
