@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 
@@ -18,10 +20,19 @@ function predecessorResults(store, task) {
   return (task.dependsOn ?? []).map(id => latestRoleResult(byId.get(id))).filter(Boolean);
 }
 
-function latestPlanInFlow(store, task) {
+function resolveArtifactResult(result, artifactRoot) {
+  if (!result?.artifactRef || !artifactRoot) return result;
+  const root = resolve(artifactRoot);
+  const file = resolve(root, result.artifactRef);
+  if (file !== root && !file.startsWith(root + sep)) throw new Error('artifactRef escapes Ariad artifact root');
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+function latestPlanInFlow(store, task, artifactRoot) {
   const tasks = flowTasks(store, task);
   for (let i = tasks.length - 1; i >= 0; i -= 1) {
-    const result = latestRoleResult(tasks[i])?.result;
+    const raw = latestRoleResult(tasks[i])?.result;
+    const result = resolveArtifactResult(raw, artifactRoot);
     const candidate = result?.plan ?? result;
     if (candidate?.version === 2 && Array.isArray(candidate?.tasks)) return candidate;
   }
@@ -67,7 +78,7 @@ function planningSkipIds(task, round) {
 
 function plannerPrompt({ store, project, task }) {
   const purpose = task.input?.purpose;
-  const currentPlan = latestPlanInFlow(store, task);
+  const currentPlan = latestPlanInFlow(store, task, artifactRoot);
   const context = {
     project: {
       id: project.id,
@@ -118,7 +129,7 @@ function criticPrompt({ store, project, task }) {
       project: { id: project.id, spec: project.spec ?? null },
       round: task.input?.round ?? null,
       validation,
-      plan: validation?.plan ?? latestPlanInFlow(store, task),
+      plan: validation?.plan ?? latestPlanInFlow(store, task, artifactRoot),
     }, null, 2),
   ].join('\n\n');
 }
@@ -130,7 +141,16 @@ export function createDefaultV2Roles({
   workspace,
   sourceControl = null,
   enqueuePlanning = null,
+  artifactRoot = null,
 }) {
+  if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
+
+  const plannerArtifact = task => {
+    if (!artifactRoot) return null;
+    const safe = String(task.id).replace(/[^a-zA-Z0-9._-]+/g, '-');
+    return { ref: `planner/${safe}.json`, path: resolve(artifactRoot, 'planner', `${safe}.json`) };
+  };
+
   const prepareLlm = (task, v2Prompt, extra = {}) => ({
     provider: providerId,
     workspace,
@@ -227,7 +247,25 @@ export function createDefaultV2Roles({
     },
 
     tech_lead: {
-      prepare: ({ project, task }) => prepareLlm(task, plannerPrompt({ store, project, task })),
+      prepare: ({ project, task }) => {
+        const artifact = plannerArtifact(task);
+        if (artifact) mkdirSync(resolve(artifactRoot, 'planner'), { recursive: true });
+        const base = plannerPrompt({ store, project, task });
+        const prompt = artifact ? [
+          base,
+          '',
+          'LARGE RESULT TRANSPORT',
+          `Write the COMPLETE v2 plan JSON object to this exact file path using the file write tool: ${artifact.path}`,
+          'Do not put the full plan in your final reply.',
+          'After the file is successfully written, return ONLY this small JSON object:',
+          JSON.stringify({
+            executionStatus: 'COMPLETED',
+            outcome: 'PLANNED',
+            result: { artifactRef: artifact.ref, summary: 'v2 delivery plan written' },
+          }),
+        ].join('\n') : base;
+        return prepareLlm(task, prompt);
+      },
       transition: ({ task, result }) => {
         if (task.scope === 'control') return { state: 'DONE' };
         return result.outcome === 'PLANNED' || result.outcome === 'REPLANNED'
@@ -253,7 +291,7 @@ export function createDefaultV2Roles({
       prepare: ({ task }) => ({
         provider: codeProviderId,
         execute: async () => {
-          const candidate = latestPlanInFlow(store, task);
+          const candidate = latestPlanInFlow(store, task, artifactRoot);
           if (!candidate) {
             return {
               outcome: 'NOT_PASS',
@@ -292,14 +330,14 @@ export function createDefaultV2Roles({
           '{"executionStatus":"COMPLETED","outcome":"PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","questions":["string"]}}',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null },
-            plan: validation?.plan ?? latestPlanInFlow(store, task),
+            plan: validation?.plan ?? latestPlanInFlow(store, task, artifactRoot),
           }, null, 2),
         ].join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
       },
       transition: ({ task, result }) => {
         if (result.outcome === 'PLAN_ACCEPTED') {
-          const plan = latestPlanInFlow(store, task);
+          const plan = latestPlanInFlow(store, task, artifactRoot);
           validateTechLeadPlan(plan);
           store.applyDeliveryPlan(task.projectId, plan);
           return { state: 'DONE' };
