@@ -1,5 +1,5 @@
 export function bootstrapProject({ store, projectId, directoryEmpty, flowId = `bootstrap:${projectId}` }) {
-  if (!store || typeof store.createControlFlow !== 'function') throw new Error('bootstrapProject requires store');
+  if (!store || typeof store.enqueuePlanningRequest !== 'function') throw new Error('bootstrapProject requires store');
   const project = store.getProject(projectId);
   if (!project) throw new Error(`unknown project: ${projectId}`);
 
@@ -11,59 +11,45 @@ export function bootstrapProject({ store, projectId, directoryEmpty, flowId = `b
         projectId,
         sessionKey: project.pmBinding ?? projectId,
       },
-      controlFlow: null,
+      planningRequest: null,
     };
   }
 
-  const tasks = store.createControlFlow({
+  const planningRequest = store.enqueuePlanningRequest({
+    id: `${flowId}:restore`,
     projectId,
-    flowId,
-    tasks: [
-      {
-        id: `${flowId}:restore`,
-        stage: 'tech_lead',
-        input: { purpose: 'RESTORE_PROJECT_STATE' },
-      },
-      {
-        id: `${flowId}:review`,
-        stage: 'pm',
-        dependsOn: [`${flowId}:restore`],
-        input: { purpose: 'REVIEW_RESTORED_PROJECT_STATE' },
-      },
-    ],
+    request: {
+      purpose: 'RESTORE_PROJECT_STATE',
+      instruction: 'Inspect the existing repository, reconstruct the delivery tree and dependencies, and preserve valid existing work.',
+    },
+    context: { bootstrap: true },
   });
 
   return {
     pmInvocation: {
       role: 'pm',
-      kind: 'WELCOME_AND_RESTORE_STARTED',
+      kind: 'WELCOME_AND_PLANNING_QUEUED',
       projectId,
       sessionKey: project.pmBinding ?? projectId,
-      flowId,
+      planningRequestId: planningRequest.id,
     },
-    controlFlow: { flowId, tasks },
+    planningRequest,
   };
 }
 
+// Backward-compatible helper name. Plan and replan are now both planning requests;
+// the Planner decides how to modify the current delivery graph from repository reality.
 export function createPlanningFlow({ store, projectId, flowId, kind = 'plan', input = {} }) {
-  if (!['plan', 'replan'].includes(kind)) throw new Error(`unsupported planning flow kind: ${kind}`);
-  const prefix = flowId ?? `${kind}:${Date.now()}`;
-  const tasks = store.createControlFlow({
+  if (!['plan', 'replan'].includes(kind)) throw new Error(`unsupported planning request kind: ${kind}`);
+  const id = flowId ?? `planning:${Date.now()}`;
+  const planningRequest = store.enqueuePlanningRequest({
+    id,
     projectId,
-    flowId: prefix,
-    tasks: [
-      {
-        id: `${prefix}:tl`,
-        stage: 'tech_lead',
-        input: { purpose: kind === 'plan' ? 'PLAN' : 'REPLAN', ...structuredClone(input) },
-      },
-      {
-        id: `${prefix}:pm-review`,
-        stage: 'pm',
-        dependsOn: [`${prefix}:tl`],
-        input: { purpose: 'PLAN_REVIEW' },
-      },
-    ],
+    request: {
+      purpose: 'UPDATE_DELIVERY_PLAN',
+      ...structuredClone(input),
+    },
+    context: { sourceKind: kind },
   });
-  return { flowId: prefix, tasks };
+  return { planningRequest };
 }
