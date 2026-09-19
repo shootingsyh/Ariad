@@ -54,10 +54,15 @@ export class OpenClawV2Provider {
     const status = await this.runtime.poll(handle);
     if (status.state !== 'COMPLETED') return status;
 
-    const result = status.result as Record<string, unknown> | null | undefined;
+    const completed = status as {
+      state: 'COMPLETED';
+      outcome?: unknown;
+      result?: unknown;
+    };
+    const result = completed.result as Record<string, unknown> | null | undefined;
     return {
       state: 'COMPLETED',
-      outcome: status.outcome ?? 'PASS',
+      outcome: typeof completed.outcome === 'string' ? completed.outcome : 'PASS',
       summary: typeof result?.summary === 'string' ? result.summary : '',
       keyPoints: Array.isArray(result?.keyPoints) ? result.keyPoints : [],
       artifacts: Array.isArray(result?.artifacts) ? result.artifacts : [],
