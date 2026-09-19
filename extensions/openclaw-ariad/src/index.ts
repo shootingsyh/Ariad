@@ -15,6 +15,7 @@ import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
+import { AriadDashboardService } from './dashboard-service.js';
 
 const promptRenderer = new PromptRenderer();
 
@@ -45,6 +46,12 @@ export default defineFeaturePlugin({
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter);
+    const dashboard = new AriadDashboardService({
+      manager,
+      host: process.env.ARIAD_DASHBOARD_HOST || '127.0.0.1',
+      port: Number(process.env.ARIAD_DASHBOARD_PORT || 18791),
+      logger: api.logger,
+    });
 
     const v2Service = new AriadV2Service({
       manager,
@@ -80,6 +87,28 @@ export default defineFeaturePlugin({
       id: 'ariad-v2-service',
       async start() { await v2Service.start(); },
       async stop() { await v2Service.stop(); },
+    });
+
+    api.registerService({
+      id: 'ariad-dashboard-service',
+      async start() {
+        try {
+          await dashboard.start();
+        } catch (error) {
+          api.logger?.warn?.(
+            `Ariad dashboard unavailable: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      },
+      async stop() {
+        try {
+          await dashboard.stop();
+        } catch (error) {
+          api.logger?.warn?.(
+            `Ariad dashboard stop failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      },
     });
 
     if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
