@@ -100,8 +100,8 @@ try {
   let lastStatus = '';
   await waitFor(() => {
     lastStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'full-e2e' });
-    if (/"phase"\s*:\s*"FAILED"/.test(lastStatus)) throw new Error(`project controller failed: ${lastStatus}`);
-    return /"phase"\s*:\s*"SUCCEEDED"/.test(lastStatus);
+    if (/"executionState"\s*:\s*"FAILED"/.test(lastStatus)) throw new Error(`project execution failed: ${lastStatus}`);
+    return /"executionState"\s*:\s*"SUCCEEDED"/.test(lastStatus);
   }, 'full Ariad project success');
 
   const graphPath = join(projectRoot, '.ariad', 'task-graph.json');
