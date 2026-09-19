@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 const root = mkdtempSync(join(tmpdir(), 'ariad-openclaw-v2-e2e-'));
 const stateDir = join(root, 'state');
@@ -64,13 +65,13 @@ provider.stderr.on('data', chunk => { providerLog += chunk; });
 gateway.stdout.on('data', chunk => { gatewayLog += chunk; });
 gateway.stderr.on('data', chunk => { gatewayLog += chunk; });
 
-async function waitFor(check, label, timeoutMs = 45_000) {
+async function waitFor(check, label, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       if (await check()) return;
     } catch {}
-    await new Promise(resolveWait => setTimeout(resolveWait, 150));
+    await new Promise(resolveWait => setTimeout(resolveWait, 200));
   }
   throw new Error(`timed out waiting for ${label}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
 }
@@ -97,16 +98,52 @@ function gatewayCall(method, params = {}) {
   return `${call.stdout}\n${call.stderr}`;
 }
 
+function git(cwd, args) {
+  const call = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(call.status, 0, `git ${args.join(' ')} failed\n${call.stderr}`);
+  return call.stdout.trim();
+}
+
 try {
   await waitFor(() => providerLog.includes('ARIAD_FAKE_PROVIDER_READY'), 'fake provider');
   await waitFor(async () => (await fetch(`http://127.0.0.1:${gatewayPort}/readyz`)).ok, 'OpenClaw Gateway');
 
-  const output = gatewayCall('ariad.ci.v2Task');
+  gatewayCall('ariad.ci.project', {
+    action: 'create',
+    name: 'v2-production',
+    goal: 'Create a tiny deterministic health endpoint and verify it.',
+  });
+  gatewayCall('ariad.ci.project', { action: 'start', name: 'v2-production' });
 
-  assert.match(output, /"state"\s*:\s*"DONE"/, output);
-  assert.match(output, /"role"\s*:\s*"reviewer"/, output);
-  assert.match(output, /"outcome"\s*:\s*"PASS"/, output);
-  assert.match(output, /fake-provider/, output);
+  let status = '';
+  await waitFor(() => {
+    status = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
+    if (/"executionState"\s*:\s*"FAILED"/.test(status)) {
+      throw new Error(`v2 project failed: ${status}`);
+    }
+    return /"executionState"\s*:\s*"SUCCEEDED"/.test(status);
+  }, 'production v2 project success');
+
+  assert.match(status, /"runtime"\s*:\s*"v2"/);
+
+  const projectRoot = join(projectsRoot, 'v2-production');
+  const workspace = join(projectRoot, 'workspace');
+  const dbPath = join(projectRoot, '.ariad', 'state.db');
+
+  assert.equal(existsSync(join(workspace, 'health.txt')), true);
+  assert.equal(readFileSync(join(workspace, 'health.txt'), 'utf8'), 'status=healthy\ncycle=2\n');
+
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const planning = db.prepare('SELECT state, COUNT(*) count FROM v2_planning_requests GROUP BY state').all();
+  const taskRows = db.prepare('SELECT id, data_json FROM v2_tasks ORDER BY rowid').all();
+  db.close();
+
+  assert.equal(planning.some(row => row.state === 'PLANNED' && row.count >= 1), true);
+  const tasks = taskRows.map(row => ({ id: row.id, ...JSON.parse(row.data_json) }));
+  assert.equal(tasks.find(task => task.id === 'T1')?.state, 'DONE');
+  assert.equal(tasks.find(task => task.id === 'ROOT')?.state, 'DONE');
+  assert.equal(tasks.some(task => task.input?.purpose === 'PLANNER_CRITIC' && task.state === 'DONE'), true);
+  assert.equal(tasks.some(task => task.input?.round === 2 && task.state === 'SKIPPED'), true, 'clean critic should skip later rounds');
 
   await waitFor(
     () => providerLog.includes('ARIAD_FAKE_TOOL_CALL role=reviewer cycle=2 tool=read'),
@@ -114,7 +151,10 @@ try {
     5_000
   );
 
-  console.log('ARIAD_OPENCLAW_V2_GATEWAY_E2E_OK');
+  assert.notEqual(git(workspace, ['rev-list', '--count', 'HEAD']), '0');
+  assert.equal(git(workspace, ['status', '--porcelain']), '');
+
+  console.log('ARIAD_OPENCLAW_V2_PRODUCTION_E2E_OK');
 } finally {
   gateway.kill('SIGTERM');
   provider.kill('SIGTERM');
