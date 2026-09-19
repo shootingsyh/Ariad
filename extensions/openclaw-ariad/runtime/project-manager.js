@@ -58,6 +58,7 @@ export class AriadProjectManager {
       workspace: p.workspace,
       stateDb: p.db,
       desiredState: 'STOPPED',
+      executionState: 'IDLE',
       projectAgent,
     });
     return this.status(p.id);
@@ -81,6 +82,16 @@ export class AriadProjectManager {
     const p = this.paths(name);
     const current = this.status(p.id);
     writeJson(p.manifest, { ...current, root: undefined, desiredState });
+    return this.status(p.id);
+  }
+
+  setExecutionState(name, executionState) {
+    const allowed = ['IDLE', 'PLANNING', 'RUNNING', 'NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'];
+    if (!allowed.includes(executionState)) throw new Error(`invalid execution state: ${executionState}`);
+    const p = this.paths(name);
+    const current = this.status(p.id);
+    if (current.executionState === executionState) return current;
+    writeJson(p.manifest, { ...current, root: undefined, executionState });
     return this.status(p.id);
   }
 
