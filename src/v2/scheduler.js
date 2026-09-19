@@ -1,46 +1,13 @@
 import { graphKey } from './sqlite-store.js';
+import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 
 function topologicalOrder(tasks) {
-  const byId = new Map(tasks.map(task => [task.id, task]));
-  const indegree = new Map(tasks.map(task => [task.id, 0]));
-  const outgoing = new Map(tasks.map(task => [task.id, []]));
-  for (const task of tasks) {
-    for (const dep of task.dependsOn ?? []) {
-      if (!byId.has(dep)) throw new Error(`task ${task.id} depends outside graph ${graphKey(task)}: ${dep}`);
-      indegree.set(task.id, indegree.get(task.id) + 1);
-      outgoing.get(dep).push(task.id);
-    }
-  }
-  const queue = [...tasks.filter(task => indegree.get(task.id) === 0)].sort((a, b) => a.id.localeCompare(b.id));
-  const result = [];
-  while (queue.length) {
-    const task = queue.shift();
-    result.push(task);
-    for (const nextId of outgoing.get(task.id)) {
-      indegree.set(nextId, indegree.get(nextId) - 1);
-      if (indegree.get(nextId) === 0) {
-        queue.push(byId.get(nextId));
-        queue.sort((a, b) => a.id.localeCompare(b.id));
-      }
-    }
-  }
-  if (result.length !== tasks.length) throw new Error(`task graph contains a cycle in ${tasks[0] ? graphKey(tasks[0]) : 'empty'}`);
-  return result;
+  const graph = buildExecutionGraph(tasks);
+  return graph.order.map(id => graph.byId.get(id));
 }
 
 function partitionGraphs(tasks) {
-  const groups = new Map();
-  for (const task of tasks) {
-    const key = graphKey(task);
-    const items = groups.get(key) ?? [];
-    items.push(task);
-    groups.set(key, items);
-  }
-  return [...groups.entries()].map(([key, items]) => ({ key, tasks: items }));
-}
-
-function dependenciesDone(task, byId) {
-  return (task.dependsOn ?? []).every(id => byId.get(id)?.state === 'DONE');
+  return partitionExecutionGraphs(tasks).map(({ key, graph }) => ({ key, tasks: graph.tasks }));
 }
 
 function latestResult(task) {
@@ -80,15 +47,39 @@ export class V2Scheduler {
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
     const allTasks = this.store.listTasks(projectId);
-    const ordered = partitionGraphs(allTasks)
-      .flatMap(group => topologicalOrder(group.tasks));
-    const byId = new Map(allTasks.map(task => [task.id, task]));
+    const candidates = [];
+
+    for (const { key, graph } of partitionExecutionGraphs(allTasks)) {
+      for (const task of graph.tasks) {
+        if (!graph.isRunnable(task)) continue;
+        candidates.push({
+          task,
+          graphKey: key,
+          impact: graph.downstreamImpact(task.id),
+        });
+      }
+    }
+
+    // Prefer work that can unblock the largest unfinished downstream region.
+    // Stable deterministic tie-breakers keep scheduling reproducible.
+    candidates.sort((a, b) =>
+      b.impact - a.impact
+      || a.graphKey.localeCompare(b.graphKey)
+      || a.task.id.localeCompare(b.task.id)
+    );
+
     const started = [];
 
-    for (const snapshot of ordered) {
-      const task = this.store.getTask(snapshot.id);
+    for (const candidate of candidates) {
+      const task = this.store.getTask(candidate.task.id);
       if (task.state !== 'READY') continue;
-      if (!dependenciesDone(task, byId)) continue;
+
+      // Rebuild the task's graph from fresh durable state before claiming it.
+      const sameGraphTasks = this.store.listTasks(projectId)
+        .filter(item => graphKey(item) === graphKey(task));
+      const graph = buildExecutionGraph(sameGraphTasks);
+      const fresh = graph.byId.get(task.id);
+      if (!graph.isRunnable(fresh)) continue;
 
       const role = this.roles.get(task.stage);
       const spec = role.prepare({ project, task });
