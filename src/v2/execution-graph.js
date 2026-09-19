@@ -69,7 +69,7 @@ export function buildExecutionGraph(tasks) {
     isRunnable(task) {
       if (!task || task.state !== 'READY') return false;
       return [...(prerequisites.get(task.id) ?? [])]
-        .every(id => byId.get(id)?.state === 'DONE');
+        .every(id => ['DONE', 'SKIPPED'].includes(byId.get(id)?.state));
     },
     downstreamImpact(taskId) {
       const seen = new Set();
