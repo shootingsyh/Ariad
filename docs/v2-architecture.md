@@ -128,3 +128,47 @@ cancel(handle)
 OpenClaw-specific agent/session/subagent details stay inside the OpenClaw provider. The durable Task only records the provider key and external execution id required for restart recovery.
 
 This v2 implementation initially lives alongside v1 so the old execution path remains intact while vertical slices migrate.
+
+
+## Planning queue and delivery gate
+
+Planning is a project-scoped queue, not a collection of competing plan/replan control graphs.
+
+PM, bootstrap restore, and later replanning requests append durable planning requests in arrival order:
+
+```text
+Planning queue
+  req-101
+  req-102
+  req-103
+```
+
+The Scheduler snapshots all currently PENDING requests into one planning batch. Claiming the requests and creating that batch's fixed planner control graph happen in one SQLite transaction.
+
+Requests that arrive while a batch is running remain PENDING for the next batch. They are not merged by application code; the Tech Lead sees the ordered batch and reasons about the requests together.
+
+The fixed planner graph is expanded as a DAG:
+
+```text
+decompose
+  -> dependency pass
+  -> validate 1 -> critic 1 -> repair 1
+  -> validate 2 -> critic 2 -> repair 2
+  -> validate 3 -> critic 3 -> repair 3
+  -> final validate
+  -> PM review
+```
+
+The three validation/critic/repair rounds are physically unrolled so the Scheduler remains DAG-only. Later optimization may skip clean rounds, but no cyclic scheduler semantics are required.
+
+A hard project-level scheduling invariant applies:
+
+```text
+any planning request state != PLANNED
+  => do not dispatch delivery tasks
+  => dispatch only the current planner batch
+```
+
+When the current planner batch finishes, its CLAIMED requests become PLANNED. If new PENDING requests accumulated during the batch, the Scheduler immediately snapshots them into the next planner batch. Delivery resumes only when the planning queue is completely drained.
+
+Initial planning and replanning use the same mechanism. The Planner inspects current repository and delivery-tree reality and decides whether to create, preserve, or patch work; Ariad does not maintain a separate durable plan-vs-replan state machine.
