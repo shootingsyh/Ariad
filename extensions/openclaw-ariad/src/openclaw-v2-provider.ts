@@ -34,6 +34,7 @@ export class OpenClawV2Provider {
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
       ...(typeof spec.context?.v2Prompt === 'string' ? { v2Prompt: spec.context.v2Prompt } : {}),
       ...(spec.workspace ? { workspace: spec.workspace } : {}),
+      ...(spec.sessionPolicy ? { sessionPolicy: spec.sessionPolicy } : {}),
       ...(spec.idempotencyKey ? { idempotencyKey: spec.idempotencyKey } : {}),
     };
 
