@@ -1,13 +1,22 @@
 import { homedir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
 import { PromptRenderer } from '../../../src/llm/prompt-renderer.js';
 import { GitSourceControlFinalizer } from '../../../src/git-source-control-finalizer.js';
+import { SQLiteV2Store } from '../../../src/v2/sqlite-store.js';
+import { RoleRegistry } from '../../../src/v2/role-registry.js';
+import { ProviderRegistry } from '../../../src/v2/provider-registry.js';
+import { ResourcePool } from '../../../src/v2/resource-pool.js';
+import { V2Scheduler } from '../../../src/v2/scheduler.js';
+import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
 import { AriadProjectController } from '../runtime/project-controller.js';
 import { AriadSupervisor } from './ariad-supervisor.js';
 import { contract } from './contract.js';
 import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
+import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 
 const promptRenderer = new PromptRenderer();
 
@@ -36,6 +45,7 @@ export default defineFeaturePlugin({
       },
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
+    const v2Provider = new OpenClawV2Provider(runtimeAdapter);
 
     const supervisor = new AriadSupervisor({
       manager,
@@ -74,6 +84,77 @@ export default defineFeaturePlugin({
           respond(true, { handle, result });
         } catch (error) {
           respond(false, undefined, { code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
+        }
+      }, { scope: 'operator.admin' });
+
+      api.registerGatewayMethod('ariad.ci.v2Task', async ({ respond }) => {
+        const ciRoot = join(projectsRoot, '__v2-gateway-e2e__');
+        const workspace = join(ciRoot, 'workspace');
+        const dbPath = join(ciRoot, 'state.db');
+        try {
+          rmSync(ciRoot, { recursive: true, force: true });
+          mkdirSync(workspace, { recursive: true });
+          writeFileSync(join(workspace, 'health.txt'), 'status=healthy\ncycle=2\n');
+
+          const store = new SQLiteV2Store(dbPath);
+          try {
+            store.createProject({ id: 'v2-e2e', spec: 'Verify OpenClaw v2 provider integration.' });
+            store.createTask({
+              id: 'T1',
+              projectId: 'v2-e2e',
+              stage: 'reviewer',
+              input: { acceptanceCriteria: ['health.txt reports status=healthy'] },
+            });
+
+            const roles = new RoleRegistry();
+            roles.register('reviewer', {
+              prepare: ({ task }: any) => ({
+                provider: 'openclaw-v2',
+                workspace,
+                context: {
+                  acceptanceCriteria: task.input?.acceptanceCriteria ?? [],
+                  devCycle: 2,
+                },
+              }),
+              transition: ({ result }: any) => result.outcome === 'PASS'
+                ? { stage: 'reviewer', state: 'DONE' }
+                : { stage: 'reviewer', state: 'READY' },
+            });
+
+            const providers = new ProviderRegistry();
+            providers.register(v2Provider);
+            const resources = new ResourcePool({});
+            const scheduler = new V2Scheduler({ store, roles, providers, resources });
+            const v2Supervisor = new V2Supervisor({ store, providers, resources });
+
+            const first = await scheduler.tick('v2-e2e');
+            let task = store.getTask('T1');
+            for (let i = 0; i < 40 && task?.state === 'WORKING'; i += 1) {
+              await v2Supervisor.audit('v2-e2e');
+              task = store.getTask('T1');
+            }
+            if (task?.state === 'RESULT_READY') {
+              await scheduler.tick('v2-e2e');
+              task = store.getTask('T1');
+            }
+
+            respond(true, {
+              started: first.started,
+              task: task ? {
+                id: task.id,
+                state: task.state,
+                stage: task.stage,
+                history: task.history,
+              } : null,
+            });
+          } finally {
+            store.close();
+          }
+        } catch (error) {
+          respond(false, undefined, {
+            code: 'UNAVAILABLE',
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       }, { scope: 'operator.admin' });
 
