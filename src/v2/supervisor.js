@@ -1,3 +1,14 @@
+function systemFailureCount(task) {
+  let count = 0;
+  const history = task.history ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.type === 'ROLE_RESULT') break;
+    if (entry?.type === 'SYSTEM_INTERRUPTION') count += 1;
+  }
+  return count;
+}
+
 export class V2Supervisor {
   constructor({ store, providers, resources, incidentSink = null }) {
     this.store = store;
@@ -41,7 +52,10 @@ export class V2Supervisor {
           consumeAttempt: false,
           uncertainStart: Boolean(task.execution?.attemptId),
           at: incident.at,
-        }, { state: 'READY', execution: null });
+        }, {
+          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+          execution: null,
+        });
         this.resources.release(task.id);
         continue;
       }
@@ -84,7 +98,10 @@ export class V2Supervisor {
         role: task.stage,
         failure,
         at: incident.at,
-      }, { state: 'READY', execution: null });
+      }, {
+        state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+        execution: null,
+      });
       this.resources.release(task.id);
     }
     return { incidents };
