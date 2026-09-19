@@ -38,6 +38,8 @@ export class V2Supervisor {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure: incident.failure,
+          consumeAttempt: false,
+          uncertainStart: Boolean(task.execution?.attemptId),
           at: incident.at,
         }, { state: 'READY', execution: null });
         this.resources.release(task.id);
