@@ -56,7 +56,7 @@ export class V2Scheduler {
     for (const batchId of this.store.listClaimedPlanningBatches(projectId)) {
       const flowId = `planner:${projectId}:${batchId}`;
       const tasks = this.store.listTasks(projectId, { flowId });
-      if (tasks.length > 0 && tasks.every(task => task.state === 'DONE')) {
+      if (tasks.length > 0 && tasks.every(task => ['DONE', 'SKIPPED'].includes(task.state))) {
         this.store.completePlanningBatch(projectId, batchId);
       }
     }
