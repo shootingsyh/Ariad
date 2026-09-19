@@ -34,6 +34,13 @@ function hasToolResult(request) {
   return (request.messages ?? []).some((message) => message?.role === 'tool');
 }
 
+function plannerArtifactTransport(request) {
+  const text = requestText(request);
+  const path = text.match(/exact file path using the file write tool:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  const ref = text.match(/"artifactRef":"([^"]+)"/)?.[1] ?? null;
+  return path && ref ? { path, ref } : null;
+}
+
 function isDiscovery(request) {
   return requestRole(request) === 'tech_lead' && /"planningPhase":"EXISTING_PROJECT_DISCOVERY"/.test(requestText(request));
 }
@@ -49,6 +56,16 @@ function isProjectExecutionRole(request) {
 
 function toolCallFor(request) {
   if (!hasWorkspace(request) || hasToolResult(request)) return null;
+  const artifact = plannerArtifactTransport(request);
+  if (artifact) {
+    return {
+      name: 'write',
+      arguments: {
+        path: artifact.path,
+        content: JSON.stringify(fakeV2Plan(), null, 2),
+      },
+    };
+  }
   const role = requestRole(request);
   const cycle = requestCycle(request);
   if (isDiscovery(request)) return { name: 'read', arguments: { path: 'README.md' } };
@@ -145,6 +162,17 @@ function roleReply(request) {
   const taskId = requestTaskId(request);
 
   if (isV2PlanningPrompt(request)) {
+    const artifact = plannerArtifactTransport(request);
+    if (artifact) {
+      if (!hasToolResult(request)) {
+        return { executionStatus: 'FAILED', failure: 'FAKE_E2E_PLANNER_ARTIFACT_NOT_WRITTEN' };
+      }
+      return {
+        executionStatus: 'COMPLETED',
+        outcome: 'PLANNED',
+        result: { artifactRef: artifact.ref, summary: 'v2 delivery plan written' },
+      };
+    }
     return { executionStatus: 'COMPLETED', outcome: 'PLANNED', result: fakeV2Plan() };
   }
   if (isV2CriticPrompt(request)) {
