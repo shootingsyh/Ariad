@@ -1,10 +1,12 @@
+import { graphKey } from './sqlite-store.js';
+
 function topologicalOrder(tasks) {
   const byId = new Map(tasks.map(task => [task.id, task]));
   const indegree = new Map(tasks.map(task => [task.id, 0]));
   const outgoing = new Map(tasks.map(task => [task.id, []]));
   for (const task of tasks) {
     for (const dep of task.dependsOn ?? []) {
-      if (!byId.has(dep)) throw new Error(`task ${task.id} depends on unknown task ${dep}`);
+      if (!byId.has(dep)) throw new Error(`task ${task.id} depends outside graph ${graphKey(task)}: ${dep}`);
       indegree.set(task.id, indegree.get(task.id) + 1);
       outgoing.get(dep).push(task.id);
     }
@@ -22,8 +24,19 @@ function topologicalOrder(tasks) {
       }
     }
   }
-  if (result.length !== tasks.length) throw new Error('task graph contains a cycle');
+  if (result.length !== tasks.length) throw new Error(`task graph contains a cycle in ${tasks[0] ? graphKey(tasks[0]) : 'empty'}`);
   return result;
+}
+
+function partitionGraphs(tasks) {
+  const groups = new Map();
+  for (const task of tasks) {
+    const key = graphKey(task);
+    const items = groups.get(key) ?? [];
+    items.push(task);
+    groups.set(key, items);
+  }
+  return [...groups.entries()].map(([key, items]) => ({ key, tasks: items }));
 }
 
 function dependenciesDone(task, byId) {
@@ -66,9 +79,10 @@ export class V2Scheduler {
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
-    const tasks = this.store.listTasks(projectId);
-    const byId = new Map(tasks.map(task => [task.id, task]));
-    const ordered = topologicalOrder(tasks);
+    const allTasks = this.store.listTasks(projectId);
+    const ordered = partitionGraphs(allTasks)
+      .flatMap(group => topologicalOrder(group.tasks));
+    const byId = new Map(allTasks.map(task => [task.id, task]));
     const started = [];
 
     for (const snapshot of ordered) {
@@ -82,9 +96,8 @@ export class V2Scheduler {
       const requirements = spec.resources ?? [];
       if (!this.resources.claim(requirements, task.id)) continue;
 
-      let claimed;
       try {
-        claimed = this.store.updateTask(task.id, task.version, {
+        this.store.updateTask(task.id, task.version, {
           state: 'WORKING',
           execution: {
             provider: spec.provider,
@@ -108,6 +121,8 @@ export class V2Scheduler {
           projectId,
           taskId: task.id,
           role: task.stage,
+          scope: task.scope,
+          flowId: task.flowId ?? null,
           sessionPolicy: role.sessionPolicy ?? 'fresh',
         });
         const current = this.store.getTask(task.id);
@@ -137,4 +152,4 @@ export class V2Scheduler {
   }
 }
 
-export { topologicalOrder };
+export { topologicalOrder, partitionGraphs };
