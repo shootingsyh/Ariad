@@ -8,6 +8,7 @@ import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
 import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
+import { buildExecutionGraph } from '../src/v2/execution-graph.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
 import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstrap.js';
 
@@ -316,6 +317,65 @@ test('PM can open an ad-hoc planning flow without touching the delivery graph', 
     assert.equal(flow.flowId, 'plan-42');
     assert.deepEqual(store.listTasks('P9', { scope: 'delivery' }).map(x => x.id), ['FEATURE']);
     assert.deepEqual(store.listTasks('P9', { flowId: 'plan-42' }).map(x => x.stage), ['tech_lead', 'pm']);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('parent-child hierarchy becomes a virtual child-to-parent execution dependency', () => {
+  const tasks = [
+    { id: 'ROOT', scope: 'delivery', state: 'READY' },
+    { id: 'FEATURE', scope: 'delivery', parentId: 'ROOT', state: 'READY' },
+    { id: 'LEAF', scope: 'delivery', parentId: 'FEATURE', state: 'READY' },
+  ];
+
+  let graph = buildExecutionGraph(tasks);
+  assert.deepEqual(graph.prerequisitesOf('ROOT'), ['FEATURE']);
+  assert.deepEqual(graph.prerequisitesOf('FEATURE'), ['LEAF']);
+  assert.deepEqual(graph.dependentsOf('LEAF'), ['FEATURE']);
+  assert.equal(graph.isRunnable(tasks[0]), false);
+  assert.equal(graph.isRunnable(tasks[1]), false);
+  assert.equal(graph.isRunnable(tasks[2]), true);
+
+  const progressed = tasks.map(task => task.id === 'LEAF' ? { ...task, state: 'DONE' } : task);
+  graph = buildExecutionGraph(progressed);
+  assert.equal(graph.isRunnable(graph.byId.get('FEATURE')), true);
+  assert.equal(graph.isRunnable(graph.byId.get('ROOT')), false);
+});
+
+test('scheduler prefers runnable task with largest downstream unblock impact', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P10' });
+
+    store.createTask({ id: 'BACKEND', projectId: 'P10', stage: 'developer' });
+    store.createTask({ id: 'INTERFACE', projectId: 'P10', stage: 'developer', parentId: 'BACKEND' });
+    store.createTask({ id: 'CONNECTION', projectId: 'P10', stage: 'developer', parentId: 'BACKEND', dependsOn: ['INTERFACE'] });
+
+    store.createTask({ id: 'UI', projectId: 'P10', stage: 'developer' });
+    store.createTask({ id: 'DRAWING', projectId: 'P10', stage: 'developer', parentId: 'UI' });
+    store.createTask({ id: 'LIST-BACKEND', projectId: 'P10', stage: 'developer', parentId: 'UI', dependsOn: ['INTERFACE'] });
+
+    store.createTask({ id: 'INIT', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
+    store.createTask({ id: 'LOGIN', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
+
+    const provider = fakeProvider();
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const resources = new ResourcePool({ gpu: 1 });
+    const scheduler = new V2Scheduler({ store, roles: roles(), providers, resources });
+
+    const graph = buildExecutionGraph(store.listTasks('P10'));
+    assert.ok(graph.downstreamImpact('INTERFACE') > graph.downstreamImpact('DRAWING'));
+
+    const result = await scheduler.tick('P10');
+    assert.deepEqual(result.started, ['INTERFACE']);
+    assert.equal(store.getTask('DRAWING').state, 'READY');
+    assert.equal(store.getTask('INTERFACE').state, 'WORKING');
+
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
