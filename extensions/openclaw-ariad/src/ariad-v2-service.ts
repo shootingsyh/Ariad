@@ -51,7 +51,7 @@ class ProjectRuntime {
         id: project.id,
         spec: project.goal ?? null,
         workspace: project.workspace,
-        pmBinding: project.projectAgent?.sessionKey ?? project.id,
+        pmBinding: `pm:${project.id}`,
       });
     }
 
@@ -202,6 +202,7 @@ export class AriadV2Service {
   private readonly provider: OpenClawV2Provider;
   private readonly pushSourceControl: boolean;
   private readonly logger: any;
+  private readonly onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private timer: NodeJS.Timeout | null = null;
   private reconciling = false;
@@ -211,16 +212,19 @@ export class AriadV2Service {
     provider,
     pushSourceControl,
     logger,
+    onProjectEvent,
   }: {
     manager: ProjectManager;
     provider: OpenClawV2Provider;
     pushSourceControl: boolean;
     logger?: any;
+    onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   }) {
     this.manager = manager;
     this.provider = provider;
     this.pushSourceControl = pushSourceControl;
     this.logger = logger;
+    this.onProjectEvent = onProjectEvent;
   }
 
   async start() {
@@ -315,10 +319,21 @@ export class AriadV2Service {
 
         try {
           await runtime.tick();
+          const updated = this.manager.status(project.id);
+          if (
+            updated.executionState !== project.executionState &&
+            ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(updated.executionState)
+          ) {
+            await this.onProjectEvent?.(updated, updated.executionState);
+          }
         } catch (error) {
           this.logger?.error?.(
             `Ariad v2 project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
           );
+          const updated = this.manager.status(project.id);
+          if (updated.executionState === 'FAILED' && project.executionState !== 'FAILED') {
+            await this.onProjectEvent?.(updated, 'FAILED');
+          }
         }
       }
     } finally {
