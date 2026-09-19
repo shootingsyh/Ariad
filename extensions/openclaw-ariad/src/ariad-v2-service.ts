@@ -1,4 +1,5 @@
 import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { GitSourceControlFinalizer } from '../../../src/git-source-control-finalizer.js';
 import { SQLiteV2Store } from '../../../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../../../src/v2/role-registry.js';
@@ -72,6 +73,7 @@ class ProjectRuntime {
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
       sourceControl,
+      artifactRoot: join(project.root, '.ariad', 'artifacts'),
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
         this.store.enqueuePlanningRequest({
