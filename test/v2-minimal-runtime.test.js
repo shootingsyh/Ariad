@@ -11,6 +11,8 @@ import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
 import { buildExecutionGraph } from '../src/v2/execution-graph.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
 import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstrap.js';
+import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
+import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-v2-'));
@@ -380,4 +382,117 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('Tech Lead v2 plan validator accepts a tree with precise cross-branch dependencies', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'Todo app',
+    rootTaskId: 'project-done',
+    tasks: [
+      {
+        id: 'project-done',
+        title: 'Todo app complete',
+        intent: 'Integrate all major areas and validate whole-project completion.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['Whole app passes final acceptance.'],
+        testStrategy: 'Run project-wide E2E and acceptance checks.',
+      },
+      {
+        id: 'backend',
+        title: 'Backend',
+        intent: 'Provide durable data access.',
+        parentId: 'project-done',
+        dependsOn: [],
+        acceptanceCriteria: ['Backend integration is complete.'],
+        testStrategy: 'Run backend integration tests.',
+      },
+      {
+        id: 'dao-interface',
+        title: 'DAO interface',
+        intent: 'Define the stable data-access contract.',
+        parentId: 'backend',
+        dependsOn: [],
+        acceptanceCriteria: ['Consumers can compile against the contract.'],
+        testStrategy: 'Run contract tests against fake and real implementations.',
+      },
+      {
+        id: 'ui',
+        title: 'UI',
+        intent: 'Provide user-facing todo workflows.',
+        parentId: 'project-done',
+        dependsOn: [],
+        acceptanceCriteria: ['Primary UI flows work.'],
+        testStrategy: 'Run UI integration tests.',
+      },
+      {
+        id: 'list-backend',
+        title: 'List backend integration',
+        intent: 'Connect list behavior to the DAO contract.',
+        parentId: 'ui',
+        dependsOn: ['dao-interface'],
+        acceptanceCriteria: ['List loads through the DAO contract.'],
+        testStrategy: 'Run list integration against fake DAO.',
+      },
+    ],
+  };
+
+  const result = validateTechLeadPlan(plan);
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.tasks.length, 5);
+  assert.equal(result.plan.rootTaskId, 'project-done');
+});
+
+test('Tech Lead v2 plan validator rejects multiple logical roots', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'bad',
+    rootTaskId: 'A',
+    tasks: [
+      { id: 'A', title: 'A', intent: 'A', parentId: null, dependsOn: [], acceptanceCriteria: ['a'], testStrategy: 'a' },
+      { id: 'B', title: 'B', intent: 'B', parentId: null, dependsOn: [], acceptanceCriteria: ['b'], testStrategy: 'b' },
+    ],
+  };
+  assert.throws(() => validateTechLeadPlan(plan), /exactly one logical root/);
+});
+
+test('Tech Lead v2 plan validator rejects redundant parent dependency', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'bad',
+    rootTaskId: 'ROOT',
+    tasks: [
+      { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
+      { id: 'CHILD', title: 'Child', intent: 'child', parentId: 'ROOT', dependsOn: ['ROOT'], acceptanceCriteria: ['child'], testStrategy: 'child' },
+    ],
+  };
+  assert.throws(() => validateTechLeadPlan(plan), /must not repeat parent\/child ordering/);
+});
+
+test('Tech Lead v2 plan validator catches cycle created by explicit plus virtual hierarchy edges', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'cycle',
+    rootTaskId: 'ROOT',
+    tasks: [
+      { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
+      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: ['B'], acceptanceCriteria: ['a'], testStrategy: 'a' },
+      { id: 'B', title: 'B', intent: 'b', parentId: 'A', dependsOn: [], acceptanceCriteria: ['b'], testStrategy: 'b' },
+    ],
+  };
+  assert.throws(() => validateTechLeadPlan(plan), /execution graph contains a cycle/);
+});
+
+test('Tech Lead prompt explicitly separates decomposition, dependency, and graph review passes', () => {
+  const prompt = buildTechLeadPrompt({
+    projectContext: { goal: 'Build a todo app' },
+    schema: TECH_LEAD_PLAN_SCHEMA,
+  });
+  assert.match(prompt, /PASS 1 — DECOMPOSITION TREE/);
+  assert.match(prompt, /PASS 2 — EXECUTION DEPENDENCIES/);
+  assert.match(prompt, /PASS 3 — GRAPH REVIEW/);
+  assert.match(prompt, /Never add parentId as a dependsOn entry/i);
+  assert.match(prompt, /interface\/contract/i);
 });
