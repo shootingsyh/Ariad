@@ -55,7 +55,7 @@ function isProjectExecutionRole(request) {
 }
 
 function toolCallFor(request) {
-  if (!hasWorkspace(request) || hasToolResult(request)) return null;
+  if (hasToolResult(request)) return null;
   const artifact = plannerArtifactTransport(request);
   if (artifact) {
     return {
@@ -66,6 +66,7 @@ function toolCallFor(request) {
       },
     };
   }
+  if (!hasWorkspace(request)) return null;
   const role = requestRole(request);
   const cycle = requestCycle(request);
   if (isDiscovery(request)) return { name: 'read', arguments: { path: 'README.md' } };
