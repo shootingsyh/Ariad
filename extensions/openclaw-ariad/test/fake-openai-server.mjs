@@ -11,7 +11,11 @@ function requestText(request) {
 }
 
 function requestRole(request) {
-  return requestText(request).match(/Ariad(?:'s| the)?\s+(developer|tester|reviewer|project_debugger|tech_lead|pm|system_debugger|artist)\s+role/i)?.[1]?.toLowerCase() ?? null;
+  const text = requestText(request);
+  if (/Ariad's Tech Lead/i.test(text) || /Tech Lead dependency pass/i.test(text) || /Tech Lead repair pass/i.test(text)) return 'tech_lead';
+  if (/delivery-plan critic/i.test(text)) return 'tech_lead_critic';
+  if (/PM reviewing a validated delivery plan/i.test(text)) return 'pm';
+  return text.match(/Ariad(?:'s| the)?\s+(developer|tester|reviewer|project_debugger|tech_lead|pm|system_debugger|artist)\s+role/i)?.[1]?.toLowerCase() ?? null;
 }
 
 function requestCycle(request) {
@@ -93,10 +97,62 @@ function fakeProjectModel({ existingProject }) {
   };
 }
 
+
+function fakeV2Plan() {
+  return {
+    version: 2,
+    projectSummary: 'Tiny health project',
+    rootTaskId: 'ROOT',
+    tasks: [
+      {
+        id: 'ROOT',
+        title: 'Health project complete',
+        intent: 'Integrate and verify the complete health project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['The health project is complete.'],
+        testStrategy: 'Run final integration verification.',
+      },
+      {
+        id: 'T1',
+        title: 'Health endpoint fixture',
+        intent: 'Create health.txt with a healthy status.',
+        parentId: 'ROOT',
+        dependsOn: [],
+        acceptanceCriteria: ['health.txt status=healthy'],
+        testStrategy: 'Read health.txt.',
+      },
+    ],
+  };
+}
+
+function isV2PlanningPrompt(request) {
+  const text = requestText(request);
+  return /delivery tree|dependency pass|repair pass/i.test(text) && /"version"\s*:\s*\{\s*"const"\s*:\s*2/.test(text);
+}
+
+function isV2CriticPrompt(request) {
+  return /delivery-plan critic/i.test(requestText(request));
+}
+
+function isV2PmPrompt(request) {
+  return /PM reviewing a validated delivery plan/i.test(requestText(request));
+}
+
 function roleReply(request) {
   const cycle = requestCycle(request);
   const role = requestRole(request);
   const taskId = requestTaskId(request);
+
+  if (isV2PlanningPrompt(request)) {
+    return { executionStatus: 'COMPLETED', outcome: 'PLANNED', result: fakeV2Plan() };
+  }
+  if (isV2CriticPrompt(request)) {
+    return { executionStatus: 'COMPLETED', outcome: 'CLEAN', result: { issues: [], summary: 'No substantive issues.' } };
+  }
+  if (isV2PmPrompt(request)) {
+    return { executionStatus: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'Plan covers the requested outcome.', guidance: '', questions: [] } };
+  }
 
   if (isDiscovery(request) && (!hasWorkspace(request) || !hasToolResult(request))) {
     return { executionStatus: 'FAILED', failure: !hasWorkspace(request) ? 'FAKE_E2E_WORKSPACE_MISSING' : 'FAKE_E2E_DISCOVERY_TOOL_RESULT_MISSING' };
