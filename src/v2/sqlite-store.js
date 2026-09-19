@@ -289,7 +289,7 @@ export class SQLiteV2Store {
         this.updateTask(existing.id, existing.version, {
           ...patch,
           // Preserve execution progress for stable task ids across replans.
-          state: existing.state === 'OBSOLETE' ? 'READY' : existing.state,
+          state: ['OBSOLETE', 'WAITING_REPLAN'].includes(existing.state) ? 'READY' : existing.state,
         });
       }
 
