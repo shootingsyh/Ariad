@@ -33,12 +33,22 @@ export class V2Scheduler {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = role.transition({ task, result });
+      const next = await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-      this.store.updateTask(task.id, task.version, {
-        ...next,
+      const { skipTaskIds = [], transitionHistory = null, ...patch } = next;
+      let updated = this.store.updateTask(task.id, task.version, {
+        ...patch,
         execution: null,
       });
+      if (transitionHistory) {
+        updated = this.store.appendTaskHistory(task.id, updated.version, transitionHistory);
+      }
+      for (const skipId of skipTaskIds) {
+        const skipped = this.store.getTask(skipId);
+        if (skipped && skipped.state === 'READY') {
+          this.store.updateTask(skipId, skipped.version, { state: 'SKIPPED', execution: null });
+        }
+      }
     }
   }
 
@@ -108,12 +118,20 @@ export class V2Scheduler {
       const requirements = spec.resources ?? [];
       if (!this.resources.claim(requirements, task.id)) continue;
 
+      const priorAttempts = (task.history ?? []).filter(entry =>
+        entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_INTERRUPTION'
+      ).length;
+      const attemptId = `${projectId}:${task.id}:${task.stage}:${priorAttempts + 1}`;
+      const idempotencyKey = `ariad:v2:${attemptId}`;
+
       try {
         this.store.updateTask(task.id, task.version, {
           state: 'WORKING',
           execution: {
             provider: spec.provider,
             externalId: null,
+            attemptId,
+            idempotencyKey,
             role: task.stage,
             startedAt: new Date().toISOString(),
             resources: structuredClone(requirements),
@@ -136,6 +154,8 @@ export class V2Scheduler {
           scope: task.scope,
           flowId: task.flowId ?? null,
           sessionPolicy: role.sessionPolicy ?? 'fresh',
+          attemptId,
+          idempotencyKey,
         });
         const current = this.store.getTask(task.id);
         this.store.updateTask(task.id, current.version, {
