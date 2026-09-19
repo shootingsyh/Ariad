@@ -74,7 +74,8 @@ export class AriadProjectManager {
   status(name) {
     const p = this.paths(name);
     if (!existsSync(p.manifest)) throw new Error(`unknown Ariad project: ${p.id}`);
-    return { ...readJson(p.manifest), root: p.root };
+    const manifest = readJson(p.manifest);
+    return { ...manifest, executionState: manifest.executionState ?? 'IDLE', root: p.root };
   }
 
   setDesiredState(name, desiredState) {
