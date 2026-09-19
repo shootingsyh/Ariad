@@ -85,6 +85,15 @@ export class SQLiteV2Store {
       );
       CREATE INDEX IF NOT EXISTS idx_v2_planning_project_state
         ON v2_planning_requests(project_id, state, sequence);
+      CREATE TABLE IF NOT EXISTS v2_system_incidents (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        task_id TEXT,
+        data_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_v2_incidents_project
+        ON v2_system_incidents(project_id, sequence);
     `);
   }
 
@@ -422,6 +431,25 @@ export class SQLiteV2Store {
        WHERE project_id = ? AND batch_id = ? AND state = 'CLAIMED'`
     ).run(now, projectId, batchId);
     return this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
+  }
+
+  recordIncident(incident) {
+    if (!incident?.projectId) throw new Error('incident.projectId is required');
+    const at = incident.at ?? new Date().toISOString();
+    this.db.prepare(
+      'INSERT INTO v2_system_incidents (project_id, task_id, data_json, created_at) VALUES (?, ?, ?, ?)'
+    ).run(incident.projectId, incident.taskId ?? null, encode({ ...structuredClone(incident), at }), at);
+    return { ...structuredClone(incident), at };
+  }
+
+  listIncidents(projectId) {
+    return this.db.prepare(
+      'SELECT * FROM v2_system_incidents WHERE project_id = ? ORDER BY sequence'
+    ).all(projectId).map(row => ({
+      sequence: row.sequence,
+      ...decode(row.data_json),
+      createdAt: row.created_at,
+    }));
   }
 
   close() {
