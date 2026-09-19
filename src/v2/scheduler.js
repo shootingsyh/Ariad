@@ -148,7 +148,7 @@ export class V2Scheduler {
       try {
         const provider = this.providers.get(spec.provider);
         const handle = await provider.start({
-          ...structuredClone(spec),
+          ...spec,
           projectId,
           taskId: task.id,
           role: task.stage,
