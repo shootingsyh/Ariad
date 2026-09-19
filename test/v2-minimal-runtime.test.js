@@ -279,7 +279,7 @@ test('empty project bootstrap welcomes PM without creating durable work', () => 
   }
 });
 
-test('non-empty project bootstrap creates restore/discover then PM review control flow', () => {
+test('non-empty project bootstrap queues restore planning work instead of creating a competing control graph', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
@@ -290,35 +290,33 @@ test('non-empty project bootstrap creates restore/discover then PM review contro
       directoryEmpty: false,
       flowId: 'bootstrap-1',
     });
-    assert.equal(result.pmInvocation.kind, 'WELCOME_AND_RESTORE_STARTED');
-    assert.equal(result.controlFlow.flowId, 'bootstrap-1');
-    const tasks = store.listTasks('P8', { flowId: 'bootstrap-1' });
-    assert.deepEqual(tasks.map(x => [x.id, x.stage, x.dependsOn]), [
-      ['bootstrap-1:restore', 'tech_lead', []],
-      ['bootstrap-1:review', 'pm', ['bootstrap-1:restore']],
-    ]);
-    assert.ok(tasks.every(x => x.scope === 'control'));
+    assert.equal(result.pmInvocation.kind, 'WELCOME_AND_PLANNING_QUEUED');
+    assert.equal(result.planningRequest.id, 'bootstrap-1:restore');
+    assert.equal(result.planningRequest.state, 'PENDING');
+    assert.deepEqual(store.listTasks('P8'), []);
+    assert.equal(store.hasUnplannedPlanningRequests('P8'), true);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('PM can open an ad-hoc planning flow without touching the delivery graph', () => {
+test('PM appends planning requests without creating separate plan/replan graphs', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P9' });
     store.createTask({ id: 'FEATURE', projectId: 'P9', stage: 'developer' });
-    const flow = createPlanningFlow({
+    const result = createPlanningFlow({
       store,
       projectId: 'P9',
       flowId: 'plan-42',
       input: { request: 'add collaboration' },
     });
-    assert.equal(flow.flowId, 'plan-42');
+    assert.equal(result.planningRequest.id, 'plan-42');
+    assert.equal(result.planningRequest.state, 'PENDING');
     assert.deepEqual(store.listTasks('P9', { scope: 'delivery' }).map(x => x.id), ['FEATURE']);
-    assert.deepEqual(store.listTasks('P9', { flowId: 'plan-42' }).map(x => x.stage), ['tech_lead', 'pm']);
+    assert.equal(store.listTasks('P9', { scope: 'control' }).length, 0);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -495,4 +493,122 @@ test('Tech Lead prompt explicitly separates decomposition, dependency, and graph
   assert.match(prompt, /PASS 3 — GRAPH REVIEW/);
   assert.match(prompt, /Never add parentId as a dependsOn entry/i);
   assert.match(prompt, /interface\/contract/i);
+});
+
+
+test('scheduler drains planning batches before dispatching delivery work', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P11' });
+    store.createTask({ id: 'DELIVERY', projectId: 'P11', stage: 'developer' });
+
+    store.enqueuePlanningRequest({
+      id: 'REQ-1',
+      projectId: 'P11',
+      request: 'Add login support',
+    });
+
+    const provider = fakeProvider();
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const resources = new ResourcePool({ gpu: 1 });
+    const scheduler = new V2Scheduler({ store, roles: roles(), providers, resources });
+
+    const first = await scheduler.tick('P11');
+    assert.equal(store.getTask('DELIVERY').state, 'READY');
+    assert.equal(first.started.length, 1);
+    const firstPlanner = store.getTask(first.started[0]);
+    assert.equal(firstPlanner.input.purpose, 'PLANNER_DECOMPOSE');
+    assert.deepEqual(firstPlanner.input.requests.map(x => x.id), ['REQ-1']);
+    assert.equal(store.getPlanningRequest('REQ-1').state, 'CLAIMED');
+
+    // A new PM request arriving during planning stays pending for the next batch.
+    store.enqueuePlanningRequest({
+      id: 'REQ-2',
+      projectId: 'P11',
+      request: 'Also make todos user-scoped',
+    });
+    assert.deepEqual(
+      store.listPlanningRequests('P11').map(x => [x.id, x.state]),
+      [['REQ-1', 'CLAIMED'], ['REQ-2', 'PENDING']]
+    );
+
+    // Simulate completion of the first fixed planner DAG.
+    const firstBatchId = store.getPlanningRequest('REQ-1').batchId;
+    const firstFlowId = `planner:P11:${firstBatchId}`;
+    for (const task of store.listTasks('P11', { flowId: firstFlowId })) {
+      const current = store.getTask(task.id);
+      store.updateTask(task.id, current.version, { state: 'DONE', execution: null });
+    }
+
+    const second = await scheduler.tick('P11');
+    assert.equal(store.getPlanningRequest('REQ-1').state, 'PLANNED');
+    assert.equal(store.getPlanningRequest('REQ-2').state, 'CLAIMED');
+    assert.equal(store.getTask('DELIVERY').state, 'READY');
+    assert.equal(second.started.length, 1);
+    const secondPlanner = store.getTask(second.started[0]);
+    assert.deepEqual(secondPlanner.input.requests.map(x => x.id), ['REQ-2']);
+
+    // Once the queue is fully drained, delivery becomes eligible again.
+    const secondBatchId = store.getPlanningRequest('REQ-2').batchId;
+    const secondFlowId = `planner:P11:${secondBatchId}`;
+    for (const task of store.listTasks('P11', { flowId: secondFlowId })) {
+      const current = store.getTask(task.id);
+      store.updateTask(task.id, current.version, { state: 'DONE', execution: null });
+    }
+
+    const third = await scheduler.tick('P11');
+    assert.equal(store.getPlanningRequest('REQ-2').state, 'PLANNED');
+    assert.deepEqual(third.started, ['DELIVERY']);
+    assert.equal(store.getTask('DELIVERY').state, 'WORKING');
+
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('planning batch atomically snapshots all currently pending requests in arrival order', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P12' });
+    store.enqueuePlanningRequest({ id: 'R1', projectId: 'P12', request: 'first' });
+    store.enqueuePlanningRequest({ id: 'R2', projectId: 'P12', request: 'second' });
+    store.enqueuePlanningRequest({ id: 'R3', projectId: 'P12', request: 'third' });
+
+    const pending = store.listPlanningRequests('P12', { states: ['PENDING'] });
+    assert.deepEqual(pending.map(x => x.id), ['R1', 'R2', 'R3']);
+
+    store.createPlanningBatch({
+      projectId: 'P12',
+      batchId: 'batch-test',
+      requestIds: pending.map(x => x.id),
+      tasks: [{
+        id: 'planner:test:decompose',
+        stage: 'tech_lead',
+        input: {
+          purpose: 'PLANNER_DECOMPOSE',
+          planningBatchId: 'batch-test',
+          requests: pending.map(x => ({ id: x.id, sequence: x.sequence })),
+        },
+      }],
+    });
+
+    assert.deepEqual(
+      store.listPlanningRequests('P12').map(x => [x.id, x.state, x.batchId]),
+      [
+        ['R1', 'CLAIMED', 'batch-test'],
+        ['R2', 'CLAIMED', 'batch-test'],
+        ['R3', 'CLAIMED', 'batch-test'],
+      ]
+    );
+    const plannerTask = store.getTask('planner:test:decompose');
+    assert.deepEqual(plannerTask.input.requests.map(x => x.id), ['R1', 'R2', 'R3']);
+
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
