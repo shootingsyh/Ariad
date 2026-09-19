@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-v2-provider.ts src/openclaw-project-agent-adapter.ts src/ariad-supervisor.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
+    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-v2-provider.ts src/openclaw-project-agent-adapter.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
     "test": "npm run build",
     "test:e2e": "npm run build && node test/openclaw-v2-e2e.mjs",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
