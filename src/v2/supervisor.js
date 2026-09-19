@@ -21,6 +21,7 @@ export class V2Supervisor {
       at: new Date().toISOString(),
     };
     if (this.incidentSink?.record) await this.incidentSink.record(incident);
+    else if (typeof this.store.recordIncident === 'function') this.store.recordIncident(incident);
     return incident;
   }
 
