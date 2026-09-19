@@ -441,7 +441,7 @@ test('NEEDS_HUMAN remains durable across restart and resumes through supervisor 
       createdAt: '2026-09-18T00:00:00.000Z',
       payload: { phase: 'PLAN_REVIEW' },
       delivery: 'PENDING',
-    })}\\n`);
+    })}\n`);
     manager.setDesiredState(project.id, 'RUNNING');
     let starts = 0;
 
