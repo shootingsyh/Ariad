@@ -6,14 +6,21 @@
   "engines": {
     "node": ">=24 <25"
   },
-  "files": ["dist", "runtime", "openclaw.plugin.json", "README.md"],
+  "files": [
+    "dist",
+    "runtime",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-project-agent-adapter.ts src/ariad-supervisor.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
-    "test": "npm run build && node --test test/runtime.test.mjs test/project-controller.test.mjs test/human-decision-resumer.test.mjs",
-    "test:e2e": "npm run build && node test/openclaw-e2e.mjs",
+    "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-v2-provider.ts src/openclaw-project-agent-adapter.ts src/ariad-supervisor.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
+    "test": "npm run build",
+    "test:e2e": "npm run build && node test/openclaw-v2-e2e.mjs",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
-    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js"
+    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+    "test:legacy": "npm run build && node --test test/runtime.test.mjs test/project-controller.test.mjs test/human-decision-resumer.test.mjs",
+    "test:e2e:legacy": "npm run build && node test/openclaw-e2e.mjs"
   },
   "dependencies": {
     "typebox": "1.1.38"
@@ -27,7 +34,9 @@
     "typescript": "5.9.2"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.9.4",
       "minGatewayVersion": "2026.9.4"
