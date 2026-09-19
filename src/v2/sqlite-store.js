@@ -73,6 +73,18 @@ export class SQLiteV2Store {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_v2_tasks_project ON v2_tasks(project_id);
+      CREATE TABLE IF NOT EXISTS v2_planning_requests (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        batch_id TEXT,
+        data_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_v2_planning_project_state
+        ON v2_planning_requests(project_id, state, sequence);
     `);
   }
 
@@ -213,6 +225,122 @@ export class SQLiteV2Store {
       ...patch,
       history: [...(current.history ?? []), structuredClone(entry)],
     });
+  }
+
+  enqueuePlanningRequest({ id, projectId, request, context = null }) {
+    if (!id) throw new Error('planning request id is required');
+    if (!projectId) throw new Error('planning request projectId is required');
+    if (request == null || (typeof request === 'string' && request.trim() === '')) {
+      throw new Error('planning request content is required');
+    }
+    if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO v2_planning_requests
+       (id, project_id, state, batch_id, data_json, created_at, updated_at)
+       VALUES (?, ?, 'PENDING', NULL, ?, ?, ?)`
+    ).run(id, projectId, encode({ request: structuredClone(request), context: structuredClone(context) }), now, now);
+    return this.getPlanningRequest(id);
+  }
+
+  getPlanningRequest(id) {
+    const row = this.db.prepare(
+      'SELECT * FROM v2_planning_requests WHERE id = ?'
+    ).get(id);
+    if (!row) return null;
+    return {
+      ...decode(row.data_json),
+      id: row.id,
+      projectId: row.project_id,
+      sequence: row.sequence,
+      state: row.state,
+      batchId: row.batch_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listPlanningRequests(projectId, { states = null } = {}) {
+    const rows = this.db.prepare(
+      'SELECT * FROM v2_planning_requests WHERE project_id = ? ORDER BY sequence'
+    ).all(projectId);
+    return rows.map(row => ({
+      ...decode(row.data_json),
+      id: row.id,
+      projectId: row.project_id,
+      sequence: row.sequence,
+      state: row.state,
+      batchId: row.batch_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })).filter(item => !states || states.includes(item.state));
+  }
+
+  hasUnplannedPlanningRequests(projectId) {
+    const row = this.db.prepare(
+      "SELECT 1 AS found FROM v2_planning_requests WHERE project_id = ? AND state != 'PLANNED' LIMIT 1"
+    ).get(projectId);
+    return Boolean(row);
+  }
+
+  listClaimedPlanningBatches(projectId) {
+    return this.db.prepare(
+      "SELECT DISTINCT batch_id FROM v2_planning_requests WHERE project_id = ? AND state = 'CLAIMED' AND batch_id IS NOT NULL ORDER BY batch_id"
+    ).all(projectId).map(row => row.batch_id);
+  }
+
+  createPlanningBatch({ projectId, batchId, requestIds, tasks }) {
+    if (!projectId || !batchId) throw new Error('projectId and batchId are required');
+    if (!Array.isArray(requestIds) || requestIds.length === 0) throw new Error('planning batch requires requests');
+    if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('planning batch requires flow tasks');
+    const flowId = `planner:${projectId}:${batchId}`;
+    const ids = new Set(tasks.map(task => task.id));
+    if (ids.size !== tasks.length || ids.has(undefined)) throw new Error('planner flow task ids must be present and unique');
+    for (const task of tasks) {
+      for (const dep of task.dependsOn ?? []) {
+        if (!ids.has(dep)) throw new Error(`planner task ${task.id} depends outside flow ${flowId}: ${dep}`);
+      }
+    }
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const placeholders = requestIds.map(() => '?').join(',');
+      const rows = this.db.prepare(
+        `SELECT id, state FROM v2_planning_requests
+         WHERE project_id = ? AND id IN (${placeholders})`
+      ).all(projectId, ...requestIds);
+      if (rows.length !== requestIds.length || rows.some(row => row.state !== 'PENDING')) {
+        throw new Error('planning batch requests must all be PENDING');
+      }
+      const now = new Date().toISOString();
+      this.db.prepare(
+        `UPDATE v2_planning_requests
+         SET state = 'CLAIMED', batch_id = ?, updated_at = ?
+         WHERE project_id = ? AND id IN (${placeholders}) AND state = 'PENDING'`
+      ).run(batchId, now, projectId, ...requestIds);
+
+      const created = tasks.map(task => this.#insertTask({
+        ...task,
+        projectId,
+        scope: 'control',
+        flowId,
+      }));
+      this.db.exec('COMMIT');
+      return { batchId, flowId, tasks: created };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  completePlanningBatch(projectId, batchId) {
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `UPDATE v2_planning_requests
+       SET state = 'PLANNED', updated_at = ?
+       WHERE project_id = ? AND batch_id = ? AND state = 'CLAIMED'`
+    ).run(now, projectId, batchId);
+    return this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
   }
 
   close() {
