@@ -76,7 +76,7 @@ function planningSkipIds(task, round) {
   return [];
 }
 
-function plannerPrompt({ store, project, task }) {
+function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
   const currentPlan = latestPlanInFlow(store, task, artifactRoot);
   const context = {
@@ -117,7 +117,7 @@ function plannerPrompt({ store, project, task }) {
   return buildTechLeadPrompt({ projectContext: context, schema: TECH_LEAD_PLAN_SCHEMA });
 }
 
-function criticPrompt({ store, project, task }) {
+function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
   return [
     'You are Ariad\'s delivery-plan critic.',
@@ -250,7 +250,7 @@ export function createDefaultV2Roles({
       prepare: ({ project, task }) => {
         const artifact = plannerArtifact(task);
         if (artifact) mkdirSync(resolve(artifactRoot, 'planner'), { recursive: true });
-        const base = plannerPrompt({ store, project, task });
+        const base = plannerPrompt({ store, project, task, artifactRoot });
         const prompt = artifact ? [
           base,
           '',
@@ -275,7 +275,7 @@ export function createDefaultV2Roles({
     },
 
     tech_lead_critic: {
-      prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task })),
+      prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => {
         if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
           return {
