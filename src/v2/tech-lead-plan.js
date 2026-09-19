@@ -148,7 +148,15 @@ export function validateTechLeadPlan(plan) {
       version: 2,
       projectSummary: plan.projectSummary,
       rootTaskId: plan.rootTaskId,
-      tasks: normalized,
+      tasks: normalized.map(task => ({
+        id: task.id,
+        title: task.title,
+        intent: task.intent,
+        parentId: task.parentId,
+        dependsOn: [...task.dependsOn],
+        acceptanceCriteria: [...task.acceptanceCriteria],
+        testStrategy: task.testStrategy,
+      })),
     },
   };
 }
