@@ -165,9 +165,9 @@ class ProjectRuntime {
       }
 
       this.manager.setExecutionState(this.projectId, state);
-    } catch {
+    } catch (error) {
       this.manager.setExecutionState(this.projectId, 'FAILED');
-      throw;
+      throw error;
     } finally {
       this.ticking = false;
     }
