@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AriadProjectManager, slugify } from '../extensions/openclaw-ariad/runtime/project-manager.js';
+import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
 
 test('OpenClaw Ariad project manager isolates project folders and durable desired state', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-openclaw-'));
@@ -85,6 +86,31 @@ test('legacy projectAgent binding is read as Frontdesk without migration', () =>
       host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:legacy',
     });
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('Ariad dashboard starts and serves project JSON without owning project state', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-dashboard-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+  manager.create('Dashboard Project', { goal: 'observe me' });
+  const dashboard = new AriadDashboardService({ manager, host: '127.0.0.1', port: 0 });
+
+  try {
+    await dashboard.start();
+    const address = dashboard.address;
+    assert.ok(address && typeof address.port === 'number' && address.port > 0);
+    const projects = await fetch(`http://127.0.0.1:${address.port}/api/projects`).then(r => r.json());
+    assert.equal(projects.length, 1);
+    assert.equal(projects[0].project.id, 'dashboard-project');
+    assert.equal(projects[0].summary.total, 0);
+
+    const page = await fetch(`http://127.0.0.1:${address.port}/`).then(r => r.text());
+    assert.match(page, /Ariad Dashboard/);
+    assert.match(page, /Read-only live view/);
+  } finally {
+    await dashboard.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 });
