@@ -323,7 +323,15 @@ export class AriadDashboardService {
     });
   }
 
+  get address() {
+    const address = this.server?.address();
+    return address && typeof address === 'object'
+      ? { host: this.host, port: address.port }
+      : null;
+  }
+
   get url() {
-    return `http://${this.host}:${this.port}`;
+    const address = this.address;
+    return address ? `http://${address.host}:${address.port}` : `http://${this.host}:${this.port}`;
   }
 }
