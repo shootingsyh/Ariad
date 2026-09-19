@@ -20,6 +20,8 @@ function decodeJson(value: unknown) {
   try { return JSON.parse(value); } catch { return value; }
 }
 
+const TERMINAL_EXECUTION_STATES = new Set(['SUCCEEDED', 'FAILED', 'NEEDS_HUMAN']);
+
 function executionStateForController(status: { phase?: string } | undefined) {
   switch (status?.phase) {
     case 'STARTING':
@@ -112,16 +114,24 @@ export class AriadSupervisor {
   }
 
   async ensureRunning(name: string) {
-    const existing = this.manager.status(name);
-    const current = this.controllers.get(existing.id);
+    const project = this.manager.setDesiredState(name, 'RUNNING');
+    const current = this.controllers.get(project.id);
     const snapshot = current?.status?.() as { active?: boolean; phase?: string } | undefined;
 
-    if (current && snapshot?.active === false && snapshot.phase !== 'SUCCEEDED') {
+    if (current && snapshot?.active !== false) return this.status(project.id);
+
+    if (current) {
       await current.stop();
-      this.controllers.delete(existing.id);
+      this.controllers.delete(project.id);
     }
 
-    const project = this.manager.setDesiredState(name, 'RUNNING');
+    if (project.executionState === 'SUCCEEDED' || project.executionState === 'NEEDS_HUMAN') {
+      return this.status(project.id);
+    }
+
+    if (project.executionState !== 'IDLE') {
+      this.manager.setExecutionState(project.id, 'IDLE');
+    }
     return this.status(project.id);
   }
 
@@ -144,10 +154,7 @@ export class AriadSupervisor {
       await current.stop();
       this.controllers.delete(project.id);
     }
-    const nextProject = this.manager.status(project.id);
-    const next = this.createController(nextProject);
-    this.controllers.set(project.id, next);
-    await next.start();
+    this.manager.setExecutionState(project.id, 'IDLE');
     return { resumed, project: this.status(project.id) };
   }
 
@@ -156,28 +163,47 @@ export class AriadSupervisor {
     if (this.reconcilePromise) return this.reconcilePromise;
 
     this.reconcilePromise = (async () => {
-      for (const project of this.manager.list()) {
-        const controller = this.controllers.get(project.id);
-        const snapshot = controller?.status?.() as { active?: boolean; phase?: string } | undefined;
+      for (const listedProject of this.manager.list()) {
+        let project = listedProject;
+        let controller = this.controllers.get(project.id);
+        let snapshot = controller?.status?.() as { active?: boolean; phase?: string } | undefined;
         const observedExecutionState = executionStateForController(snapshot);
-        if (observedExecutionState) this.manager.setExecutionState(project.id, observedExecutionState);
+        if (observedExecutionState) {
+          project = this.manager.setExecutionState(project.id, observedExecutionState);
+        }
+
+        if (controller && snapshot?.active === false) {
+          this.controllers.delete(project.id);
+          controller = undefined;
+          snapshot = undefined;
+        }
+
+        if (project.desiredState === 'STOPPED') {
+          if (controller) {
+            await controller.stop();
+            const stoppedSnapshot = controller.status?.() as { phase?: string } | undefined;
+            const stoppedExecutionState = executionStateForController(stoppedSnapshot);
+            if (stoppedExecutionState && TERMINAL_EXECUTION_STATES.has(stoppedExecutionState)) {
+              project = this.manager.setExecutionState(project.id, stoppedExecutionState);
+            } else if (!TERMINAL_EXECUTION_STATES.has(project.executionState)) {
+              project = this.manager.setExecutionState(project.id, 'IDLE');
+            }
+            this.controllers.delete(project.id);
+          } else if (!TERMINAL_EXECUTION_STATES.has(project.executionState) && project.executionState !== 'IDLE') {
+            project = this.manager.setExecutionState(project.id, 'IDLE');
+          }
+          continue;
+        }
 
         if (
           project.desiredState === 'RUNNING'
           && !controller
-          && project.executionState !== 'SUCCEEDED'
-          && project.executionState !== 'NEEDS_HUMAN'
+          && !TERMINAL_EXECUTION_STATES.has(project.executionState)
         ) {
           const nextProject = this.manager.setExecutionState(project.id, 'PLANNING');
           const next = this.createController(nextProject);
           this.controllers.set(project.id, next);
           await next.start();
-        } else if (project.desiredState === 'STOPPED' && controller) {
-          await controller.stop();
-          const stoppedSnapshot = controller.status?.() as { phase?: string } | undefined;
-          const stoppedExecutionState = executionStateForController(stoppedSnapshot);
-          if (stoppedExecutionState) this.manager.setExecutionState(project.id, stoppedExecutionState);
-          this.controllers.delete(project.id);
         }
       }
     })().finally(() => {
