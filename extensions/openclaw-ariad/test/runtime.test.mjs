@@ -232,6 +232,10 @@ test('AriadSupervisor replaces a settled controller after recording a human deci
     await supervisor.start();
     const response = await supervisor.submitDecision(project.id, 'Keep the public API stable.');
     assert.equal(response.resumed.record.decision, 'Keep the public API stable.');
+    assert.equal(response.project.executionState, 'IDLE');
+    assert.deepEqual(events, ['start:decision', 'stop:decision'], 'decision request must not launch a controller inline');
+
+    await supervisor.reconcile();
     assert.deepEqual(events, ['start:decision', 'stop:decision', 'start:decision']);
     await supervisor.stop();
   } finally {
@@ -342,6 +346,8 @@ test('successful project execution state is durable and does not auto-rerun afte
     await supervisor.start();
     assert.equal(starts, 1);
     assert.equal(supervisor.status(project.id).executionState, 'SUCCEEDED');
+    await supervisor.reconcile();
+    assert.equal(supervisor.status(project.id).controller, null, 'settled successful controller must be removed');
     await supervisor.stop();
 
     const reopenedManager = new AriadProjectManager({ projectsRoot: dir });
@@ -359,6 +365,128 @@ test('successful project execution state is durable and does not auto-rerun afte
     await restarted.start();
     assert.equal(starts, 1, 'durable SUCCEEDED project must not restart merely because desiredState remains RUNNING');
     assert.equal(restarted.status(project.id).executionState, 'SUCCEEDED');
+    await restarted.stop();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('failed project execution state is durable and does not auto-rerun after supervisor restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-failed-state-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('failed');
+    manager.setDesiredState(project.id, 'RUNNING');
+    let starts = 0;
+
+    const supervisor = new AriadSupervisor({
+      manager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        active: false,
+        phase: 'FAILED',
+        async start() { starts += 1; },
+        async stop() {},
+        status() { return { active: this.active, phase: this.phase, error: 'boom' }; },
+      }),
+    });
+
+    await supervisor.start();
+    assert.equal(starts, 1);
+    assert.equal(supervisor.status(project.id).executionState, 'FAILED');
+    await supervisor.reconcile();
+    assert.equal(supervisor.status(project.id).controller, null, 'settled failed controller must be removed');
+    await supervisor.stop();
+
+    const reopenedManager = new AriadProjectManager({ projectsRoot: dir });
+    assert.equal(reopenedManager.status(project.id).executionState, 'FAILED');
+
+    const restarted = new AriadSupervisor({
+      manager: reopenedManager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        async start() { starts += 1; },
+        async stop() {},
+        status() { return { active: true, phase: 'RUNNING' }; },
+      }),
+    });
+    await restarted.start();
+    assert.equal(starts, 1, 'durable FAILED project must not auto-retry after restart');
+
+    await restarted.ensureRunning(project.id);
+    assert.equal(restarted.status(project.id).executionState, 'IDLE', 'explicit start resets FAILED for a manual retry');
+    await restarted.reconcile();
+    assert.equal(starts, 2, 'explicit start allows supervisor-owned retry');
+    await restarted.stop();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('NEEDS_HUMAN remains durable across restart and resumes through supervisor reconciliation after decide', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-supervisor-human-state-'));
+  try {
+    const manager = new AriadProjectManager({ projectsRoot: dir });
+    const project = manager.create('human-wait', {
+      goal: 'ship it',
+      projectAgent: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:human-wait' },
+    });
+    const projectDir = join(project.root, '.ariad', 'project');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, 'project-agent-events.jsonl'), `${JSON.stringify({
+      version: 1,
+      id: 'human-wait:e1',
+      projectId: project.id,
+      type: 'NEEDS_HUMAN',
+      createdAt: '2026-09-18T00:00:00.000Z',
+      payload: { phase: 'PLAN_REVIEW' },
+      delivery: 'PENDING',
+    })}\\n`);
+    manager.setDesiredState(project.id, 'RUNNING');
+    let starts = 0;
+
+    const supervisor = new AriadSupervisor({
+      manager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        active: false,
+        phase: 'NEEDS_HUMAN',
+        async start() { starts += 1; },
+        async stop() {},
+        status() { return { active: this.active, phase: this.phase }; },
+      }),
+    });
+
+    await supervisor.start();
+    assert.equal(starts, 1);
+    assert.equal(supervisor.status(project.id).executionState, 'NEEDS_HUMAN');
+    await supervisor.reconcile();
+    assert.equal(supervisor.status(project.id).controller, null);
+    await supervisor.stop();
+
+    const reopenedManager = new AriadProjectManager({ projectsRoot: dir });
+    const restarted = new AriadSupervisor({
+      manager: reopenedManager,
+      reconcileIntervalMs: 60_000,
+      createController: () => ({
+        active: true,
+        phase: 'RUNNING',
+        async start() { starts += 1; },
+        async stop() { this.active = false; },
+        status() { return { active: this.active, phase: this.phase }; },
+      }),
+    });
+
+    await restarted.start();
+    assert.equal(starts, 1, 'NEEDS_HUMAN must not auto-rerun after restart');
+
+    const response = await restarted.submitDecision(project.id, 'Proceed with the reviewed plan.');
+    assert.equal(response.project.executionState, 'IDLE');
+    assert.equal(starts, 1, 'decide RPC must not start a controller inline');
+
+    await restarted.reconcile();
+    assert.equal(starts, 2);
+    assert.equal(restarted.status(project.id).executionState, 'RUNNING');
     await restarted.stop();
   } finally {
     rmSync(dir, { recursive: true, force: true });
