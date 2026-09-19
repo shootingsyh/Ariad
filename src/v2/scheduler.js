@@ -1,5 +1,6 @@
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
+import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -41,15 +42,35 @@ export class V2Scheduler {
     }
   }
 
+  #settlePlanningBatches(projectId) {
+    for (const batchId of this.store.listClaimedPlanningBatches(projectId)) {
+      const flowId = `planner:${projectId}:${batchId}`;
+      const tasks = this.store.listTasks(projectId, { flowId });
+      if (tasks.length > 0 && tasks.every(task => task.state === 'DONE')) {
+        this.store.completePlanningBatch(projectId, batchId);
+      }
+    }
+  }
+
   async tick(projectId) {
     await this.#advanceResults(projectId);
+    this.#settlePlanningBatches(projectId);
+
+    if (this.store.hasUnplannedPlanningRequests(projectId)) {
+      createNextPlanningBatch({ store: this.store, projectId });
+    }
+
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
     const allTasks = this.store.listTasks(projectId);
+    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
+    const schedulableTasks = planningBlocked
+      ? allTasks.filter(isPlannerTask)
+      : allTasks.filter(task => !isPlannerTask(task));
     const candidates = [];
 
-    for (const { key, graph } of partitionExecutionGraphs(allTasks)) {
+    for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {
         if (!graph.isRunnable(task)) continue;
         candidates.push({
