@@ -15,7 +15,7 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
   try {
     const alpha = manager.create('Alpha Project', {
       goal: 'build alpha',
-      projectAgent: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha' },
+      frontdeskBinding: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha' },
     });
     const beta = manager.create('Beta Project', { goal: 'build beta' });
 
@@ -40,9 +40,19 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     const listed = manager.list();
     assert.deepEqual(listed.map((p) => p.id).sort(), ['alpha-project', 'beta-project']);
     assert.match(readFileSync(join(beta.root, 'project.json'), 'utf8'), /build beta/);
-    assert.deepEqual(manager.status('alpha-project').projectAgent, {
+    assert.deepEqual(manager.status('alpha-project').frontdeskBinding, {
       host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha',
     });
+
+    manager.bindFrontdesk('alpha-project', {
+      host: 'openclaw', agentId: 'delegate', sessionKey: 'agent:delegate:alpha',
+    });
+    assert.deepEqual(manager.status('alpha-project').frontdeskBinding, {
+      host: 'openclaw', agentId: 'delegate', sessionKey: 'agent:delegate:alpha',
+    });
+    assert.equal(manager.status('alpha-project').desiredState, 'STOPPED');
+    manager.unbindFrontdesk('alpha-project');
+    assert.equal(manager.status('alpha-project').frontdeskBinding, null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -59,4 +69,22 @@ test('OpenClaw plugin manifest owns exactly one Ariad tool and starts with Gatew
   assert.equal(manifest.id, 'ariad');
   assert.deepEqual(manifest.contracts.tools, ['ariad_project']);
   assert.equal(manifest.activation.onStartup, true);
+});
+
+
+test('legacy projectAgent binding is read as Frontdesk without migration', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-openclaw-legacy-frontdesk-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+
+  try {
+    manager.create('Legacy Binding', {
+      goal: 'compatibility',
+      projectAgent: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:legacy' },
+    });
+    assert.deepEqual(manager.status('legacy-binding').frontdeskBinding, {
+      host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:legacy',
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
