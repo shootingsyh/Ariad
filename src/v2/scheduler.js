@@ -119,7 +119,8 @@ export class V2Scheduler {
       if (!this.resources.claim(requirements, task.id)) continue;
 
       const priorAttempts = (task.history ?? []).filter(entry =>
-        entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_INTERRUPTION'
+        entry?.type === 'ROLE_RESULT'
+        || (entry?.type === 'SYSTEM_INTERRUPTION' && entry?.consumeAttempt !== false)
       ).length;
       const attemptId = `${projectId}:${task.id}:${task.stage}:${priorAttempts + 1}`;
       const idempotencyKey = `ariad:v2:${attemptId}`;
