@@ -612,3 +612,77 @@ test('planning batch atomically snapshots all currently pending requests in arri
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('applyDeliveryPlan atomically preserves completed work and obsoletes removed tasks', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P13' });
+    store.createTask({ id: 'KEEP', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
+    store.createTask({ id: 'REMOVE', projectId: 'P13', state: 'READY', stage: 'developer' });
+
+    store.applyDeliveryPlan('P13', {
+      version: 2,
+      projectSummary: 'updated',
+      rootTaskId: 'ROOT',
+      tasks: [
+        { id: 'ROOT', title: 'Root', intent: 'integrate', parentId: null, dependsOn: [], acceptanceCriteria: ['done'], testStrategy: 'e2e' },
+        { id: 'KEEP', title: 'Keep', intent: 'preserve completed work', parentId: 'ROOT', dependsOn: [], acceptanceCriteria: ['kept'], testStrategy: 'existing tests' },
+      ],
+    });
+
+    assert.equal(store.getTask('KEEP').state, 'DONE');
+    assert.equal(store.getTask('KEEP').history.length, 1);
+    assert.equal(store.getTask('REMOVE').state, 'OBSOLETE');
+    assert.equal(store.getTask('ROOT').state, 'READY');
+    assert.equal(store.getProject('P13').deliveryPlanVersion, 1);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduler persists a stable attempt identity before provider start', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P14' });
+    store.createTask({ id: 'T14', projectId: 'P14', stage: 'developer' });
+
+    let seen = null;
+    const provider = {
+      id: 'capture',
+      async start(spec) {
+        seen = spec;
+        const durable = store.getTask('T14');
+        assert.equal(durable.state, 'WORKING');
+        assert.equal(durable.execution.attemptId, spec.attemptId);
+        assert.equal(durable.execution.idempotencyKey, spec.idempotencyKey);
+        return { externalId: 'capture-1' };
+      },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() {},
+    };
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const roleRegistry = new RoleRegistry();
+    roleRegistry.register('developer', {
+      prepare: () => ({ provider: 'capture' }),
+      transition: () => ({ stage: 'tester', state: 'READY' }),
+    });
+    const scheduler = new V2Scheduler({
+      store,
+      roles: roleRegistry,
+      providers,
+      resources: new ResourcePool({}),
+    });
+
+    await scheduler.tick('P14');
+    assert.equal(seen.attemptId, 'P14:T14:developer:1');
+    assert.equal(seen.idempotencyKey, 'ariad:v2:P14:T14:developer:1');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
