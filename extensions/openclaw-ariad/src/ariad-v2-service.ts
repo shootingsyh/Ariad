@@ -66,7 +66,7 @@ class ProjectRuntime {
     });
 
     const roleRegistry = new RoleRegistry();
-    const roleDefinitions = createDefaultV2Roles({
+    const roleDefinitions = (createDefaultV2Roles as any)({
       store: this.store,
       providerId: provider.id,
       codeProviderId: 'ariad-code',
