@@ -35,7 +35,6 @@ function normalizeTask(task) {
   }
   return {
     dependsOn: [],
-    scope,
     stage: 'developer',
     state: 'READY',
     input: {},
