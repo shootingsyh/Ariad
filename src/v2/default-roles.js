@@ -185,9 +185,12 @@ export function createDefaultV2Roles({
             devCycle: Math.max(1, failureCount(task) + 1),
           });
           if (!finalized.ok) {
+            const sourceControlFailures = (task.history ?? []).filter(
+              entry => entry?.type === 'SYSTEM_INTERRUPTION' && entry?.role === 'source_control'
+            ).length;
             return {
               stage: 'reviewer',
-              state: 'READY',
+              state: sourceControlFailures >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
               transitionHistory: {
                 type: 'SYSTEM_INTERRUPTION',
                 role: 'source_control',
