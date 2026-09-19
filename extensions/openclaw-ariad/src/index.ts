@@ -51,6 +51,29 @@ export default defineFeaturePlugin({
       provider: v2Provider,
       pushSourceControl,
       logger: api.logger,
+      onProjectEvent: async (project, type) => {
+        if (!project.frontdeskBinding) return;
+        try {
+          await projectAgentAdapter.notify({
+            binding: project.frontdeskBinding,
+            event: {
+              version: 1,
+              id: `frontdesk:${project.id}:${type}:${Date.now()}`,
+              projectId: project.id,
+              type,
+              createdAt: new Date().toISOString(),
+              payload: {
+                executionState: project.executionState,
+                desiredState: project.desiredState,
+              },
+            },
+          });
+        } catch (error) {
+          api.logger?.warn?.(
+            `Ariad Frontdesk notification for ${project.id} failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      },
     });
 
     api.registerService({
@@ -178,7 +201,7 @@ export default defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal, decision } = input;
+        const { action, name, goal, decision, agentId, sessionKey } = input;
         let details: unknown;
         if (action === 'list') {
           details = { action, projects: v2Service.list() };
@@ -188,7 +211,7 @@ export default defineFeaturePlugin({
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             const project = manager.create(name, {
               goal: goal ?? null,
-              projectAgent: {
+              frontdeskBinding: {
                 host: 'openclaw',
                 agentId: toolContext?.agentId ?? null,
                 sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
@@ -201,15 +224,29 @@ export default defineFeaturePlugin({
             details = { action, project: await v2Service.ensureRunning(name) };
           } else if (action === 'stop') {
             details = { action, project: await v2Service.ensureStopped(name) };
+          } else if (action === 'bind_frontdesk') {
+            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+            const binding = {
+              host: 'openclaw',
+              agentId: agentId ?? toolContext?.agentId ?? null,
+              sessionKey: sessionKey ?? toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
+            };
+            await projectAgentAdapter.bindProject(binding);
+            details = { action, project: manager.bindFrontdesk(name, binding) };
+          } else if (action === 'unbind_frontdesk') {
+            details = { action, project: manager.unbindFrontdesk(name) };
+          } else if (action === 'frontdesk_status') {
+            const project = manager.status(name);
+            details = { action, projectId: project.id, frontdeskBinding: project.frontdeskBinding ?? null };
           } else if (action === 'decide') {
             if (!decision) throw new Error('decision is required for action decide');
             const project = manager.status(name);
-            if (!project.projectAgent) throw new Error('project has no bound Project Agent');
+            if (!project.frontdeskBinding) throw new Error('project has no bound Frontdesk');
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             details = {
               action,
               result: await projectAgentAdapter.submitDecision({
-                binding: project.projectAgent,
+                binding: project.frontdeskBinding,
                 requester: {
                   agentId: toolContext?.agentId ?? null,
                   sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
