@@ -451,7 +451,12 @@ export class SQLiteV2Store {
     }));
   }
 
+  checkpoint() {
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  }
+
   close() {
+    this.checkpoint();
     this.db.close();
   }
 }
