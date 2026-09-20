@@ -149,20 +149,8 @@ function fakeV2Plan() {
         parentId: null,
         dependsOn: [],
         logicalTaskIds: ['T1'],
-        workTasks: [
-          {
-            id: 'M1_TEST',
-            title: 'Health milestone smoke test',
-            kind: 'test',
-            intent: 'Verify the health milestone as an integrated result.',
-            dependsOn: [],
-            acceptanceCriteria: ['health.txt reports healthy status'],
-            testStrategy: 'Read health.txt after the feature task completes.',
-          },
-        ],
-        completionTaskId: 'M1_TEST',
         acceptanceCriteria: ['The health slice is usable.'],
-        testStrategy: 'Run the health milestone smoke test.',
+        testStrategy: 'Read health.txt after T1 passes its normal test/review flow.',
       },
     ],
   };
