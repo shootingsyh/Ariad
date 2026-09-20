@@ -223,6 +223,11 @@ export default defineFeaturePlugin({
             respond(true, { project: v2Service.status(input.name) });
             return;
           }
+          if (input.action === 'adopt') {
+            if (!input.sourcePath) throw new Error('sourcePath is required for adopt');
+            respond(true, { project: manager.adopt(input.name, input.sourcePath) });
+            return;
+          }
           throw new Error(`unsupported CI project action: ${input.action}`);
         } catch (error) {
           respond(false, undefined, { code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
@@ -253,6 +258,11 @@ export default defineFeaturePlugin({
             details = { action, project: v2Service.status(project.id) };
           } else if (action === 'status') {
             details = { action, project: v2Service.status(name) };
+          } else if (action === 'adopt') {
+            if (!sourcePath) throw new Error('sourcePath is required for action adopt');
+            const project = manager.status(name);
+            if (project.desiredState !== 'STOPPED') throw new Error('project must be STOPPED before adoption');
+            details = { action, project: manager.adopt(name, sourcePath) };
           } else if (action === 'start') {
             details = { action, project: await v2Service.ensureRunning(name) };
           } else if (action === 'stop') {
