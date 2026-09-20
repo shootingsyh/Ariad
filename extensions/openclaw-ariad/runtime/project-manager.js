@@ -88,7 +88,7 @@ export class AriadProjectManager {
       id: p.id,
       name: String(name),
       goal,
-      mode,
+      mode: effectiveMode,
       sourcePath: sourcePath ? resolve(sourcePath) : null,
       createdAt,
       workspace: p.workspace,
