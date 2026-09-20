@@ -484,19 +484,22 @@ test('Tech Lead v2 plan validator catches cycle created by explicit plus virtual
   assert.throws(() => validateTechLeadPlan(plan), /execution graph contains a cycle/);
 });
 
-test('Tech Lead prompt explicitly separates decomposition, dependency, and graph review passes', () => {
+test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   const prompt = buildTechLeadPrompt({
     projectContext: { goal: 'Build a todo app' },
     schema: TECH_LEAD_PLAN_SCHEMA,
   });
-  assert.match(prompt, /PASS 1 — LOGICAL TREE/);
-  assert.match(prompt, /PASS 2 — MILESTONE STRUCTURE/);
-  assert.match(prompt, /PASS 3 — EXECUTION DEPENDENCIES/);
-  assert.match(prompt, /PASS 4 — REVIEW FOR CONTINUITY/);
-  assert.match(prompt, /integration\/test\/reconcile/i);
-  assert.match(prompt, /earlier milestone/i);
-  assert.match(prompt, /Never add parentId as a dependsOn entry/i);
-  assert.match(prompt, /interface\/contract/i);
+  assert.match(prompt, /ARIAD MODEL/);
+  assert.match(prompt, /GREENFIELD/);
+  assert.match(prompt, /EXISTING ARIAD PROJECT/);
+  assert.match(prompt, /EXISTING NON-ARIAD PROJECT/);
+  assert.match(prompt, /Logical tree/i);
+  assert.match(prompt, /Milestones/i);
+  assert.match(prompt, /TAKEOVER_NOTE/);
+  assert.match(prompt, /fresh verification/i);
+  assert.match(prompt, /stop for human review/i);
+  assert.match(prompt, /earlier\/non-prerequisite milestones must not depend on later milestone work/i);
+  assert.match(prompt, /another TL could pick this project up/i);
 });
 
 
