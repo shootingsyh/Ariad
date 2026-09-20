@@ -489,9 +489,12 @@ test('Tech Lead prompt explicitly separates decomposition, dependency, and graph
     projectContext: { goal: 'Build a todo app' },
     schema: TECH_LEAD_PLAN_SCHEMA,
   });
-  assert.match(prompt, /PASS 1 — DECOMPOSITION TREE/);
-  assert.match(prompt, /PASS 2 — EXECUTION DEPENDENCIES/);
-  assert.match(prompt, /PASS 3 — GRAPH REVIEW/);
+  assert.match(prompt, /PASS 1 — LOGICAL TREE/);
+  assert.match(prompt, /PASS 2 — MILESTONE TREE/);
+  assert.match(prompt, /PASS 3 — EXECUTION DEPENDENCIES/);
+  assert.match(prompt, /PASS 4 — GRAPH REVIEW/);
+  assert.match(prompt, /connection\/reconcile\/test/i);
+  assert.match(prompt, /earlier milestone/i);
   assert.match(prompt, /Never add parentId as a dependsOn entry/i);
   assert.match(prompt, /interface\/contract/i);
 });
@@ -886,6 +889,274 @@ test('accepted takeover plan pauses at human review until a human decision is re
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.' } },
     });
     assert.equal(second.state, 'DONE');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('milestone tree compiles connection/reconcile/test work into one execution DAG', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'Milestone project',
+    rootTaskId: 'ROOT',
+    tasks: [
+      {
+        id: 'ROOT',
+        title: 'Project complete',
+        intent: 'Complete the whole product.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['Whole product works.'],
+        testStrategy: 'Run project acceptance.',
+      },
+      {
+        id: 'FEATURE_A',
+        title: 'Feature A',
+        intent: 'Provide feature A.',
+        parentId: 'ROOT',
+        dependsOn: [],
+        acceptanceCriteria: ['Feature A works.'],
+        testStrategy: 'Run feature A tests.',
+      },
+      {
+        id: 'FEATURE_B',
+        title: 'Feature B',
+        intent: 'Provide feature B.',
+        parentId: 'ROOT',
+        dependsOn: ['FEATURE_A'],
+        acceptanceCriteria: ['Feature B works.'],
+        testStrategy: 'Run feature B tests.',
+      },
+    ],
+    milestones: [
+      {
+        id: 'M1',
+        title: 'First usable slice',
+        goal: 'Feature A works end to end.',
+        parentId: null,
+        dependsOn: [],
+        logicalTaskIds: ['FEATURE_A'],
+        workTasks: [
+          {
+            id: 'M1_CONNECT',
+            title: 'Connect first slice',
+            kind: 'connection',
+            intent: 'Connect feature A to its runtime boundary.',
+            dependsOn: ['FEATURE_A'],
+            acceptanceCriteria: ['Feature A is connected.'],
+            testStrategy: 'Run integration checks.',
+          },
+          {
+            id: 'M1_TEST',
+            title: 'Verify first slice',
+            kind: 'test',
+            intent: 'Verify the first milestone as a usable result.',
+            dependsOn: ['M1_CONNECT'],
+            acceptanceCriteria: ['First slice works end to end.'],
+            testStrategy: 'Run milestone smoke test.',
+          },
+        ],
+        completionTaskId: 'M1_TEST',
+        acceptanceCriteria: ['First slice is usable.'],
+        testStrategy: 'Run the milestone smoke path.',
+      },
+      {
+        id: 'M2',
+        title: 'Second integrated slice',
+        goal: 'Feature B is integrated with the first slice.',
+        parentId: null,
+        dependsOn: ['M1'],
+        logicalTaskIds: ['FEATURE_B'],
+        workTasks: [
+          {
+            id: 'M2_RECONCILE',
+            title: 'Reconcile A and B',
+            kind: 'reconcile',
+            intent: 'Reconcile state and contracts between A and B.',
+            dependsOn: ['FEATURE_B'],
+            acceptanceCriteria: ['A and B agree on state/contracts.'],
+            testStrategy: 'Run integration reconciliation checks.',
+          },
+          {
+            id: 'M2_TEST',
+            title: 'Verify second slice',
+            kind: 'test',
+            intent: 'Verify the second milestone end to end.',
+            dependsOn: ['M2_RECONCILE'],
+            acceptanceCriteria: ['Second slice works end to end.'],
+            testStrategy: 'Run milestone E2E.',
+          },
+        ],
+        completionTaskId: 'M2_TEST',
+        acceptanceCriteria: ['Second integrated slice is usable.'],
+        testStrategy: 'Run second milestone E2E.',
+      },
+    ],
+  };
+
+  const validated = validateTechLeadPlan(plan).plan;
+  const byId = new Map(validated.executionTasks.map(task => [task.id, task]));
+
+  assert.equal(byId.get('M1_CONNECT').origin, 'milestone');
+  assert.equal(byId.get('M1_CONNECT').stage, 'developer');
+  assert.equal(byId.get('M1_TEST').stage, 'tester');
+  assert.ok(byId.get('M1_TEST').dependsOn.includes('FEATURE_A'));
+  assert.ok(byId.get('M1_TEST').dependsOn.includes('M1_CONNECT'));
+
+  assert.ok(byId.get('FEATURE_B').dependsOn.includes('M1_TEST'));
+  assert.ok(byId.get('M2_RECONCILE').dependsOn.includes('M1_TEST'));
+  assert.ok(byId.get('M2_TEST').dependsOn.includes('FEATURE_B'));
+  assert.ok(byId.get('M2_TEST').dependsOn.includes('M2_RECONCILE'));
+
+  assert.ok(byId.get('ROOT').dependsOn.includes('M1_TEST'));
+  assert.ok(byId.get('ROOT').dependsOn.includes('M2_TEST'));
+  assert.doesNotThrow(() => buildExecutionGraph(validated.executionTasks));
+});
+
+test('milestone validator rejects an earlier milestone depending on future milestone work', () => {
+  const plan = {
+    version: 2,
+    projectSummary: 'Bad milestone direction',
+    rootTaskId: 'ROOT',
+    tasks: [
+      {
+        id: 'ROOT',
+        title: 'Root',
+        intent: 'Complete project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['done'],
+        testStrategy: 'e2e',
+      },
+      {
+        id: 'A',
+        title: 'A',
+        intent: 'A',
+        parentId: 'ROOT',
+        dependsOn: ['B'],
+        acceptanceCriteria: ['a'],
+        testStrategy: 'a',
+      },
+      {
+        id: 'B',
+        title: 'B',
+        intent: 'B',
+        parentId: 'ROOT',
+        dependsOn: [],
+        acceptanceCriteria: ['b'],
+        testStrategy: 'b',
+      },
+    ],
+    milestones: [
+      {
+        id: 'M1',
+        title: 'M1',
+        goal: 'first',
+        parentId: null,
+        dependsOn: [],
+        logicalTaskIds: ['A'],
+        workTasks: [{
+          id: 'M1_TEST',
+          title: 'M1 test',
+          kind: 'test',
+          intent: 'verify first',
+          dependsOn: [],
+          acceptanceCriteria: ['m1'],
+          testStrategy: 'm1',
+        }],
+        completionTaskId: 'M1_TEST',
+        acceptanceCriteria: ['m1'],
+        testStrategy: 'm1',
+      },
+      {
+        id: 'M2',
+        title: 'M2',
+        goal: 'second',
+        parentId: null,
+        dependsOn: ['M1'],
+        logicalTaskIds: ['B'],
+        workTasks: [{
+          id: 'M2_TEST',
+          title: 'M2 test',
+          kind: 'test',
+          intent: 'verify second',
+          dependsOn: [],
+          acceptanceCriteria: ['m2'],
+          testStrategy: 'm2',
+        }],
+        completionTaskId: 'M2_TEST',
+        acceptanceCriteria: ['m2'],
+        testStrategy: 'm2',
+      },
+    ],
+  };
+
+  assert.throws(
+    () => validateTechLeadPlan(plan),
+    /cross-milestone dependency.*not allowed/i
+  );
+});
+
+test('applyDeliveryPlan materializes milestone test at tester stage', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-milestone' });
+    const validated = validateTechLeadPlan({
+      version: 2,
+      projectSummary: 'Milestone apply',
+      rootTaskId: 'ROOT',
+      tasks: [
+        {
+          id: 'ROOT',
+          title: 'Root',
+          intent: 'Complete project.',
+          parentId: null,
+          dependsOn: [],
+          acceptanceCriteria: ['done'],
+          testStrategy: 'e2e',
+        },
+        {
+          id: 'FEATURE',
+          title: 'Feature',
+          intent: 'Feature.',
+          parentId: 'ROOT',
+          dependsOn: [],
+          acceptanceCriteria: ['feature'],
+          testStrategy: 'feature',
+        },
+      ],
+      milestones: [{
+        id: 'M1',
+        title: 'M1',
+        goal: 'usable feature',
+        parentId: null,
+        dependsOn: [],
+        logicalTaskIds: ['FEATURE'],
+        workTasks: [{
+          id: 'M1_TEST',
+          title: 'Milestone test',
+          kind: 'test',
+          intent: 'Verify milestone.',
+          dependsOn: [],
+          acceptanceCriteria: ['milestone works'],
+          testStrategy: 'smoke',
+        }],
+        completionTaskId: 'M1_TEST',
+        acceptanceCriteria: ['usable'],
+        testStrategy: 'smoke',
+      }],
+    }).plan;
+
+    store.applyDeliveryPlan('P-milestone', validated);
+    const testTask = store.getTask('M1_TEST');
+    assert.equal(testTask.stage, 'tester');
+    assert.equal(testTask.origin, 'milestone');
+    assert.equal(testTask.milestoneId, 'M1');
+    assert.equal(testTask.milestoneKind, 'test');
+    assert.ok(testTask.dependsOn.includes('FEATURE'));
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
