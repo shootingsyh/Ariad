@@ -51,6 +51,7 @@ export class AriadProjectManager {
       mkdirSync(p.ariad, { recursive: true });
     }
     const legacy = readJson(p.legacyManifest);
+    if (!existsSync(p.manifest)) renameSync(p.legacyManifest, p.manifest);
     writeJson(p.manifest, {
       ...legacy,
       workspace: p.workspace,
