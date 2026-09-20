@@ -192,7 +192,7 @@ function addUniqueDependency(task, depId) {
 }
 
 function normalizeMilestones(plan, logicalById) {
-  if (plan.milestones == null) return [];
+  if (plan.milestones == null) return { milestones: [], milestonesById: new Map(), milestoneByLogicalTask: new Map(), workById: new Map() };
   if (!Array.isArray(plan.milestones) || plan.milestones.length === 0) {
     fail('$.milestones', 'must be a non-empty array when present');
   }
