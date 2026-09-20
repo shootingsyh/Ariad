@@ -195,36 +195,39 @@ export function createDefaultV2Roles({
       prepare: ({ task }) => prepareLlm(task, null, {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
-      async transition({ task, result }) {
+      transition({ task, result }) {
         if (result.outcome === 'NOT_PASS') {
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
         }
         if (result.outcome !== 'PASS') return { state: 'NEEDS_HUMAN' };
-        if (sourceControl) {
-          const finalized = await sourceControl.finalize({
-            taskId: task.id,
-            strategyEpoch: strategyEpoch(task),
-            devCycle: Math.max(1, failureCount(task) + 1),
-          });
-          if (!finalized.ok) {
-            const sourceControlFailures = (task.history ?? []).filter(
-              entry => entry?.type === 'SYSTEM_INTERRUPTION' && entry?.role === 'source_control'
-            ).length;
-            return {
-              stage: 'reviewer',
-              state: sourceControlFailures >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-              transitionHistory: {
-                type: 'SYSTEM_INTERRUPTION',
-                role: 'source_control',
-                failure: finalized.failure ?? 'SOURCE_CONTROL_FAILED',
-                at: new Date().toISOString(),
-              },
-            };
-          }
-        }
         return { state: 'DONE' };
+      },
+      async afterPersist({ task }) {
+        if (!sourceControl || task.state !== 'DONE') return null;
+        store.checkpoint?.();
+        const finalized = await sourceControl.finalize({
+          taskId: task.id,
+          strategyEpoch: strategyEpoch(task),
+          devCycle: Math.max(1, failureCount(task) + 1),
+        });
+        if (finalized.ok) return null;
+        const sourceControlFailures = (task.history ?? []).filter(
+          entry => entry?.type === 'SYSTEM_INTERRUPTION' && entry?.role === 'source_control'
+        ).length;
+        return {
+          patch: {
+            stage: 'reviewer',
+            state: sourceControlFailures >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+          },
+          transitionHistory: {
+            type: 'SYSTEM_INTERRUPTION',
+            role: 'source_control',
+            failure: finalized.failure ?? 'SOURCE_CONTROL_FAILED',
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
 
