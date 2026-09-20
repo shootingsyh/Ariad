@@ -643,6 +643,54 @@ test('applyDeliveryPlan atomically preserves completed work and obsoletes remove
   }
 });
 
+test('scheduler runs afterPersist only after the transition is durable', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-after' });
+    store.createTask({
+      id: 'T-after',
+      projectId: 'P-after',
+      stage: 'reviewer',
+      state: 'RESULT_READY',
+      history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS', result: {} }],
+    });
+
+    let observed = null;
+    const roleRegistry = new RoleRegistry();
+    roleRegistry.register('reviewer', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => ({ state: 'DONE' }),
+      afterPersist: ({ task }) => {
+        observed = {
+          argumentState: task.state,
+          durableState: store.getTask(task.id).state,
+          execution: store.getTask(task.id).execution,
+        };
+        return null;
+      },
+    });
+    const providers = new ProviderRegistry();
+    providers.register(fakeProvider());
+    const scheduler = new V2Scheduler({
+      store,
+      roles: roleRegistry,
+      providers,
+      resources: new ResourcePool({}),
+    });
+
+    await scheduler.tick('P-after');
+    assert.deepEqual(observed, {
+      argumentState: 'DONE',
+      durableState: 'DONE',
+      execution: null,
+    });
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('scheduler persists a stable attempt identity before provider start', async () => {
   const { dir, file } = tempDb();
   try {
