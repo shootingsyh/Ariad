@@ -23,15 +23,9 @@ export function buildExecutionGraph(tasks) {
       addEdge(prerequisites, dependents, depId, task.id);
     }
 
-    if (task.parentId != null) {
-      const parent = byId.get(task.parentId);
-      if (!parent) throw new Error(`task ${task.id} has unknown parent ${task.parentId}`);
-      if (graphKey(parent) !== graphKey(task)) {
-        throw new Error(`task ${task.id} has parent outside graph ${graphKey(task)}: ${task.parentId}`);
-      }
-      // Hierarchy is logical; execution is child-first.
-      addEdge(prerequisites, dependents, task.id, parent.id);
-    }
+    // parentId, when present on legacy tasks, is logical structure only.
+    // Execution ordering comes exclusively from dependsOn. New artifact plans
+    // derive milestone hierarchy prerequisites into dependsOn before scheduling.
   }
 
   const indegree = new Map([...prerequisites].map(([id, deps]) => [id, deps.size]));
