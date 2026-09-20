@@ -20,7 +20,15 @@ import { AriadDashboardService } from './dashboard-service.js';
 const promptRenderer = new PromptRenderer();
 
 function renderRoleMessage(role: string, context: Record<string, unknown>) {
-  if (typeof context.v2Prompt === 'string' && context.v2Prompt.trim()) return context.v2Prompt;
+  if (typeof context.v2Prompt === 'string' && context.v2Prompt.trim()) {
+    const { v2Prompt, ...runtimeContext } = context;
+    return [
+      v2Prompt,
+      '',
+      'ARIAD RUNTIME CONTEXT',
+      JSON.stringify(runtimeContext),
+    ].join('\n');
+  }
   const rendered = promptRenderer.render(role, context);
   return rendered.messages
     .map((message: { role: string; content: string }) => `[${message.role.toUpperCase()}]\n${message.content}`)
