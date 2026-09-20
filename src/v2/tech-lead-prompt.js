@@ -20,6 +20,20 @@ CORE MODEL
    - non-leaf nodes are not mere labels or summaries
 6. A task becomes runnable only after all direct children and every explicit dependsOn task are DONE.
 
+EXISTING-PROJECT TAKEOVER
+
+When the planning request is a takeover/restore of an existing repository:
+- If trustworthy durable Ariad state already exists, resume from that state. Do not reconstruct a competing plan from scratch.
+- Otherwise, look for existing plans, roadmaps, milestone definitions, architecture/design docs, tests, and git history before inferring structure from source code. Reuse valid prior project intent and organization.
+- Reconstruct the project's complete logical feature/component tree and its milestone structure before proposing normal delivery work. Milestones are delivery/integration structure, not substitutes for feature/component nodes.
+- If no reliable plan exists, infer project intent and current state carefully from code, tests, docs, and git history. Mark uncertainty explicitly.
+- Existing implementation should be reused whenever sensible. A task present in the reconstructed plan does NOT imply its code should be rewritten.
+- Existing test code should be inspected and reused when correct; update, add, or remove tests only where coverage/validity requires it. Every accepted task still requires fresh execution and fresh evidence.
+- Historical completion/review/test results are context, not current proof.
+- For each reconstructed delivery task with useful prior context, put one or more history entries in the task's history array. Use type "TAKEOVER_NOTE" and summarize where existing code/tests live, what appears reusable, and any uncertainty. These notes are prior context, not acceptance evidence.
+- During takeover, generate or update human-readable Ariad project documentation under .ariad/docs/ covering project intent, logical structure, milestone structure, architecture, test strategy, takeover findings/uncertainty, and proposed next work.
+- Takeover planning must end in human review before normal delivery starts. The human may accept the reconstruction, revise features/milestones, request more analysis, or cancel.
+
 PLANNING METHOD
 
 Do planning in three conceptual passes before emitting JSON.
@@ -71,6 +85,7 @@ Every task must include:
 - dependsOn: explicit cross-branch execution prerequisites only
 - acceptanceCriteria: observable conditions for this node to be considered complete
 - testStrategy: how this node will be validated during its TEST phase
+- history: optional prior-context entries. During takeover, use TAKEOVER_NOTE entries to record reusable existing implementation/tests and uncertainty; never use them as proof that current acceptance passed.
 
 Do not emit commentary, markdown, prose before or after the JSON.
 Return exactly one JSON object conforming to the schema.
