@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitSourceControlFinalizer } from '../src/git-source-control-finalizer.js';
+import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -84,6 +85,45 @@ test('state checkpoint never tracks SQLite WAL or SHM sidecars', async () => {
     assert.equal(git(dir, ['ls-files', '.ariad/state.db-wal']), '');
     assert.equal(git(dir, ['ls-files', '.ariad/state.db-shm']), '');
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('full finalize commits product changes and an open SQLite state snapshot after state checkpoints', async () => {
+  const dir = initRepo();
+  const ariad = join(dir, '.ariad');
+  mkdirSync(ariad, { recursive: true });
+  writeFileSync(join(ariad, '.gitignore'), 'state.db-wal\nstate.db-shm\nstate.db-journal\n');
+  writeFileSync(join(ariad, 'project.json'), '{"id":"P1"}\n');
+  const store = new SQLiteV2Store(join(ariad, 'state.db'));
+  try {
+    store.createProject({ id: 'P1' });
+    store.createTask({
+      id: 'T1',
+      projectId: 'P1',
+      stage: 'reviewer',
+      state: 'WORKING',
+      history: [{ type: 'ROLE_RESULT', role: 'tester', outcome: 'PASS' }],
+    });
+    store.checkpoint();
+
+    const finalizer = new GitSourceControlFinalizer({ workspace: dir, push: false });
+    const stateResult = await finalizer.checkpointState({ label: 'P1 running' });
+    assert.equal(stateResult.ok, true);
+
+    writeFileSync(join(dir, 'feature.txt'), 'accepted product work\n');
+    let task = store.getTask('T1');
+    task = store.updateTask('T1', task.version, { state: 'DONE', execution: null });
+    store.checkpoint();
+
+    const result = await finalizer.finalize({ taskId: 'T1', strategyEpoch: 1, devCycle: 1 });
+    assert.equal(result.ok, true, result.failure);
+    assert.equal(result.committed, true);
+    assert.equal(git(dir, ['show', '--pretty=', '--name-only', 'HEAD']).includes('feature.txt'), true);
+    assert.equal(git(dir, ['show', '--pretty=', '--name-only', 'HEAD']).includes('.ariad/state.db'), true);
+    assert.equal(git(dir, ['status', '--porcelain']), '');
+  } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
