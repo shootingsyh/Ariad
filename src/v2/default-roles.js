@@ -372,7 +372,7 @@ export function createDefaultV2Roles({
         const takeover = isTakeoverPlanningTask(store, task);
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
-          'Review both the logical feature/component tree and the milestone tree. Milestones should represent meaningful integrated outcomes with credible connection/reconcile work and milestone-level acceptance tests.',
+          'Review both the logical feature/component tree and the milestone structure. Milestones should be useful integrated checkpoints with enough implementation/integration/testing work to keep the project understandable and executable, without forcing unnecessary ceremony.',
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
@@ -390,7 +390,7 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLAN_ACCEPTED') {
           const plan = latestPlanInFlow(store, task, artifactRoot);
           const validated = validateTechLeadPlan(plan);
-          store.applyDeliveryPlan(task.projectId, validated.plan, { executionTasks: validated.executionTasks });
+          store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           if (takeover && !hasHumanDecision) {
