@@ -159,7 +159,8 @@ function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
   return [
     'You are Ariad\'s delivery-plan critic.',
-    'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone-tree quality, missing milestone connection/reconcile/test work, weak milestone acceptance tests, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
+    'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
+    'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'Return JSON only:',
     '{"executionStatus":"COMPLETED","outcome":"CLEAN|MINOR_ONLY|ISSUES","result":{"issues":[{"severity":"error|major|minor","message":"string"}],"summary":"string"}}',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
@@ -372,7 +373,7 @@ export function createDefaultV2Roles({
         const takeover = isTakeoverPlanningTask(store, task);
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
-          'Review both the logical feature/component tree and the milestone structure. Milestones should be useful integrated checkpoints with enough implementation/integration/testing work to keep the project understandable and executable, without forcing unnecessary ceremony.',
+          'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
