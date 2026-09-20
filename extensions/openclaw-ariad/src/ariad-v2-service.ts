@@ -30,6 +30,7 @@ class ProjectRuntime {
   private readonly scheduler: V2Scheduler;
   private readonly supervisor: V2Supervisor;
   private readonly sourceControl: GitSourceControlFinalizer;
+  private readonly logger: any;
   private ticking = false;
   private requestSequence = 0;
 
@@ -38,13 +39,16 @@ class ProjectRuntime {
     project,
     provider,
     pushSourceControl,
+    logger,
   }: {
     manager: ProjectManager;
     project: any;
     provider: OpenClawV2Provider;
     pushSourceControl: boolean;
+    logger?: any;
   }) {
     this.manager = manager;
+    this.logger = logger;
     this.projectId = project.id;
     this.store = new SQLiteV2Store(project.stateDb);
 
@@ -181,8 +185,9 @@ class ProjectRuntime {
         label: `${this.projectId} ${state.toLowerCase()}`,
       });
       if (!checkpoint.ok) {
-        this.manager.setExecutionState(this.projectId, 'FAILED');
-        throw new Error(`failed to checkpoint Ariad state: ${checkpoint.failure ?? 'unknown Git failure'}`);
+        this.logger?.warn?.(
+          `Ariad state checkpoint for ${this.projectId} was committed locally but not fully replicated: ${checkpoint.failure ?? 'unknown Git failure'}`
+        );
       }
     } catch (error) {
       this.manager.setExecutionState(this.projectId, 'FAILED');
@@ -297,6 +302,7 @@ export class AriadV2Service {
         project,
         provider: this.provider,
         pushSourceControl: this.pushSourceControl,
+        logger: this.logger,
       });
       this.runtimes.set(project.id, runtime);
     }
