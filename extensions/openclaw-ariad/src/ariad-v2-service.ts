@@ -20,7 +20,7 @@ type ProjectManager = {
 };
 
 function workspaceIsEmpty(path: string) {
-  return readdirSync(path, { withFileTypes: true }).every(entry => entry.name === '.git');
+  return readdirSync(path, { withFileTypes: true }).every(entry => ['.git', '.ariad'].includes(entry.name));
 }
 
 class ProjectRuntime {
@@ -29,6 +29,7 @@ class ProjectRuntime {
   private readonly store: SQLiteV2Store;
   private readonly scheduler: V2Scheduler;
   private readonly supervisor: V2Supervisor;
+  private readonly sourceControl: GitSourceControlFinalizer;
   private ticking = false;
   private requestSequence = 0;
 
@@ -61,7 +62,7 @@ class ProjectRuntime {
     providers.register(new FunctionProvider());
 
     const resources = new ResourcePool({});
-    const sourceControl = new GitSourceControlFinalizer({
+    this.sourceControl = new GitSourceControlFinalizer({
       workspace: project.workspace,
       push: pushSourceControl,
     });
@@ -72,8 +73,8 @@ class ProjectRuntime {
       providerId: provider.id,
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
-      sourceControl,
-      artifactRoot: join(project.root, '.ariad', 'artifacts'),
+      sourceControl: this.sourceControl,
+      artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
         this.store.enqueuePlanningRequest({
@@ -172,6 +173,17 @@ class ProjectRuntime {
       }
 
       this.manager.setExecutionState(this.projectId, state);
+
+      // Persist runtime truth as a Git snapshot without touching unfinished product changes.
+      // Reviewer PASS performs the full-repository finalize separately.
+      this.store.checkpoint();
+      const checkpoint = await this.sourceControl.checkpointState({
+        label: `${this.projectId} ${state.toLowerCase()}`,
+      });
+      if (!checkpoint.ok) {
+        this.manager.setExecutionState(this.projectId, 'FAILED');
+        throw new Error(`failed to checkpoint Ariad state: ${checkpoint.failure ?? 'unknown Git failure'}`);
+      }
     } catch (error) {
       this.manager.setExecutionState(this.projectId, 'FAILED');
       throw error;
