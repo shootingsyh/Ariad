@@ -13,7 +13,7 @@ Ariad keeps one durable project model:
 SCENARIOS
 
 1. GREENFIELD
-Build a coherent logical tree, useful milestones when the project is large enough to benefit from them, and only the dependencies needed to execute safely. Leave room for future refinement; do not over-model.
+Build a coherent logical tree, useful milestones when the project is large enough to benefit from them, and only the dependencies needed to execute safely. Plan the complete known path from the current state to the project root being complete. Later milestones may be less detailed than the next milestone, but they must still exist in the plan. Leave room for future refinement; do not over-model.
 
 2. EXISTING ARIAD PROJECT
 Trust durable Ariad state first. Resume from it and modify only what the new request requires. Do not reconstruct a competing project model from source code.
@@ -31,6 +31,10 @@ This is a takeover.
 
 PLANNING RULES
 
+- A planning pass is project-wide, not milestone-local. Do not stop after planning the next milestone and wait for the user before describing later known work.
+- The returned plan must cover the complete currently-known route to project completion. Near-term work should be concrete; later milestones may be coarser and can be refined by future replans.
+- Milestone boundaries control execution and validation, not the scope of the planning pass. Completing one milestone should normally allow Ariad to continue into the next already-planned milestone without another human planning round.
+- Ask for human input only when a real product/requirements decision is missing, when takeover reconstruction requires approval, or when execution discovers information that invalidates the plan. Do not create routine human gates between milestones.
 - Logical nodes describe features/components/capabilities, not milestones.
 - Use milestones only when they help staged delivery, integration, validation, or future pickup.
 - If milestone-specific integration/reconciliation/migration/testing work is needed, create ordinary tasks and assign milestoneId. Do not invent special task kinds just for ceremony.
@@ -47,7 +51,9 @@ Before returning the plan, make sure:
 - dependencies are acyclic and directionally sensible;
 - integration/testing responsibility exists where needed;
 - existing-project work is reuse-first, with fresh verification deferred to normal execution;
-- another TL could pick this project up and continue without rediscovering everything.
+- another TL could pick this project up and continue without rediscovering everything;
+- the plan reaches the project root, rather than ending at the next milestone;
+- later milestones are represented even when their tasks are intentionally higher-level.
 
 Return exactly one JSON object matching the provided schema. Do not emit commentary or markdown.
 `;
