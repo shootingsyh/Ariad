@@ -13,8 +13,6 @@ const HISTORY_SCHEMA = {
   },
 };
 
-const MILESTONE_WORK_KINDS = new Set(['connection', 'reconcile', 'test']);
-
 export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
   type: 'object',
   required: ['version', 'projectSummary', 'rootTaskId', 'tasks'],
@@ -44,6 +42,7 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
           intent: { type: 'string', minLength: 1 },
           parentId: { type: ['string', 'null'] },
           dependsOn: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+          milestoneId: { type: ['string', 'null'] },
           acceptanceCriteria: {
             type: 'array',
             minItems: 1,
@@ -54,8 +53,6 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
         },
       },
     },
-    // New plans should always emit this. It remains optional in the schema so older
-    // persisted v2 plans can still be loaded and migrated without a flag day.
     milestones: {
       type: 'array',
       minItems: 1,
@@ -68,8 +65,6 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
           'parentId',
           'dependsOn',
           'logicalTaskIds',
-          'workTasks',
-          'completionTaskId',
           'acceptanceCriteria',
           'testStrategy',
         ],
@@ -81,38 +76,6 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
           parentId: { type: ['string', 'null'] },
           dependsOn: { type: 'array', items: { type: 'string' }, uniqueItems: true },
           logicalTaskIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-          workTasks: {
-            type: 'array',
-            minItems: 1,
-            items: {
-              type: 'object',
-              required: [
-                'id',
-                'title',
-                'kind',
-                'intent',
-                'dependsOn',
-                'acceptanceCriteria',
-                'testStrategy',
-              ],
-              additionalProperties: false,
-              properties: {
-                id: { type: 'string', minLength: 1 },
-                title: { type: 'string', minLength: 1 },
-                kind: { enum: ['connection', 'reconcile', 'test'] },
-                intent: { type: 'string', minLength: 1 },
-                dependsOn: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-                acceptanceCriteria: {
-                  type: 'array',
-                  minItems: 1,
-                  items: { type: 'string', minLength: 1 },
-                },
-                testStrategy: { type: 'string', minLength: 1 },
-                history: HISTORY_SCHEMA,
-              },
-            },
-          },
-          completionTaskId: { type: 'string', minLength: 1 },
           acceptanceCriteria: {
             type: 'array',
             minItems: 1,
@@ -186,29 +149,24 @@ function milestonePrerequisiteClosure(milestonesById, milestoneId) {
   return seen;
 }
 
-function addUniqueDependency(task, depId) {
-  if (task.id === depId) return;
-  if (!task.dependsOn.includes(depId)) task.dependsOn.push(depId);
-}
-
 function normalizeMilestones(plan, logicalById) {
-  if (plan.milestones == null) return { milestones: [], milestonesById: new Map(), milestoneByLogicalTask: new Map(), workById: new Map() };
+  if (plan.milestones == null) {
+    return { milestones: [], milestonesById: new Map() };
+  }
   if (!Array.isArray(plan.milestones) || plan.milestones.length === 0) {
     fail('$.milestones', 'must be a non-empty array when present');
   }
 
   const milestones = [];
   const milestonesById = new Map();
-  const milestoneByLogicalTask = new Map();
-  const workById = new Map();
 
   for (let index = 0; index < plan.milestones.length; index += 1) {
     const item = plan.milestones[index];
     const path = `$.milestones[${index}]`;
     if (!item || typeof item !== 'object' || Array.isArray(item)) fail(path, 'must be an object');
+
     const allowed = new Set([
-      'id', 'title', 'goal', 'parentId', 'dependsOn', 'logicalTaskIds',
-      'workTasks', 'completionTaskId', 'acceptanceCriteria', 'testStrategy',
+      'id', 'title', 'goal', 'parentId', 'dependsOn', 'logicalTaskIds', 'acceptanceCriteria', 'testStrategy',
     ]);
     for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
 
@@ -221,41 +179,6 @@ function normalizeMilestones(plan, logicalById) {
     assertStringArray(item.logicalTaskIds, `${path}.logicalTaskIds`);
     assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
     assertString(item.testStrategy, `${path}.testStrategy`);
-    assertString(item.completionTaskId, `${path}.completionTaskId`);
-    if (!Array.isArray(item.workTasks) || item.workTasks.length === 0) {
-      fail(`${path}.workTasks`, 'must contain milestone-owned connection/reconcile/test work');
-    }
-
-    const workTasks = item.workTasks.map((task, taskIndex) => {
-      const taskPath = `${path}.workTasks[${taskIndex}]`;
-      if (!task || typeof task !== 'object' || Array.isArray(task)) fail(taskPath, 'must be an object');
-      const allowedTask = new Set([
-        'id', 'title', 'kind', 'intent', 'dependsOn', 'acceptanceCriteria', 'testStrategy', 'history',
-      ]);
-      for (const key of Object.keys(task)) if (!allowedTask.has(key)) fail(`${taskPath}.${key}`, 'unexpected property');
-      assertString(task.id, `${taskPath}.id`);
-      if (logicalById.has(task.id) || workById.has(task.id)) {
-        fail(`${taskPath}.id`, `task id collides with another logical or milestone task: ${task.id}`);
-      }
-      assertString(task.title, `${taskPath}.title`);
-      if (!MILESTONE_WORK_KINDS.has(task.kind)) fail(`${taskPath}.kind`, 'must be connection, reconcile, or test');
-      assertString(task.intent, `${taskPath}.intent`);
-      assertStringArray(task.dependsOn, `${taskPath}.dependsOn`);
-      assertStringArray(task.acceptanceCriteria, `${taskPath}.acceptanceCriteria`, { nonEmpty: true });
-      assertString(task.testStrategy, `${taskPath}.testStrategy`);
-      const normalized = {
-        id: task.id,
-        title: task.title,
-        kind: task.kind,
-        intent: task.intent,
-        dependsOn: [...task.dependsOn],
-        acceptanceCriteria: [...task.acceptanceCriteria],
-        testStrategy: task.testStrategy,
-        history: normalizeHistory(task.history, `${taskPath}.history`),
-      };
-      workById.set(task.id, { ...normalized, milestoneId: item.id });
-      return normalized;
-    });
 
     const normalized = {
       id: item.id,
@@ -264,8 +187,6 @@ function normalizeMilestones(plan, logicalById) {
       parentId: item.parentId,
       dependsOn: [...item.dependsOn],
       logicalTaskIds: [...item.logicalTaskIds],
-      workTasks,
-      completionTaskId: item.completionTaskId,
       acceptanceCriteria: [...item.acceptanceCriteria],
       testStrategy: item.testStrategy,
     };
@@ -284,29 +205,10 @@ function normalizeMilestones(plan, logicalById) {
       if (!milestonesById.has(depId)) fail(`milestone:${milestone.id}.dependsOn`, `unknown milestone dependency ${depId}`);
       if (depId === milestone.id) fail(`milestone:${milestone.id}.dependsOn`, 'must not depend on itself');
     }
-
     for (const logicalTaskId of milestone.logicalTaskIds) {
       if (!logicalById.has(logicalTaskId)) {
         fail(`milestone:${milestone.id}.logicalTaskIds`, `unknown logical task ${logicalTaskId}`);
       }
-      if (milestoneByLogicalTask.has(logicalTaskId)) {
-        fail(
-          `milestone:${milestone.id}.logicalTaskIds`,
-          `logical task ${logicalTaskId} is already assigned to milestone ${milestoneByLogicalTask.get(logicalTaskId)}`
-        );
-      }
-      milestoneByLogicalTask.set(logicalTaskId, milestone.id);
-    }
-
-    const completion = workById.get(milestone.completionTaskId);
-    if (!completion || completion.milestoneId !== milestone.id) {
-      fail(
-        `milestone:${milestone.id}.completionTaskId`,
-        'must reference a work task owned by the same milestone'
-      );
-    }
-    if (completion.kind !== 'test') {
-      fail(`milestone:${milestone.id}.completionTaskId`, 'must reference a milestone test task');
     }
   }
 
@@ -323,101 +225,7 @@ function normalizeMilestones(plan, logicalById) {
     'milestone dependencies'
   );
 
-  const allTaskIds = new Set([...logicalById.keys(), ...workById.keys()]);
-  for (const [id, work] of workById) {
-    for (const depId of work.dependsOn) {
-      if (!allTaskIds.has(depId)) fail(`milestoneTask:${id}.dependsOn`, `unknown dependency ${depId}`);
-      if (depId === id) fail(`milestoneTask:${id}.dependsOn`, 'must not depend on itself');
-    }
-  }
-
-  return { milestones, milestonesById, milestoneByLogicalTask, workById };
-}
-
-function compileExecutionTasks({ logicalTasks, rootTaskId, milestoneState }) {
-  const execution = logicalTasks.map(task => ({
-    ...structuredClone(task),
-    origin: 'logical',
-  }));
-
-  if (!milestoneState || milestoneState.milestones.length === 0) return execution;
-
-  const { milestones, milestonesById, milestoneByLogicalTask, workById } = milestoneState;
-  const childrenByMilestone = new Map(milestones.map(item => [item.id, []]));
-  for (const milestone of milestones) {
-    if (milestone.parentId) childrenByMilestone.get(milestone.parentId).push(milestone.id);
-  }
-
-  const executionById = new Map(execution.map(task => [task.id, task]));
-  const milestoneByTask = new Map(milestoneByLogicalTask);
-  for (const [id, work] of workById) {
-    milestoneByTask.set(id, work.milestoneId);
-    executionById.set(id, {
-      id,
-      scope: 'delivery',
-      state: 'READY',
-      stage: work.kind === 'test' ? 'tester' : 'developer',
-      parentId: null,
-      dependsOn: [...work.dependsOn],
-      title: work.title,
-      intent: work.intent,
-      acceptanceCriteria: [...work.acceptanceCriteria],
-      testStrategy: work.testStrategy,
-      history: structuredClone(work.history ?? []),
-      origin: 'milestone',
-      milestoneId: work.milestoneId,
-      milestoneKind: work.kind,
-    });
-  }
-
-  // A milestone dependency is a phase gate. All work assigned to the later
-  // milestone waits for the earlier milestone's completion test.
-  for (const [taskId, milestoneId] of milestoneByTask) {
-    const task = executionById.get(taskId);
-    for (const depMilestoneId of milestonesById.get(milestoneId)?.dependsOn ?? []) {
-      addUniqueDependency(task, milestonesById.get(depMilestoneId).completionTaskId);
-    }
-  }
-
-  // Completion is an actual milestone-owned TEST node. It waits for all logical
-  // leaves/work owned by the milestone and all child milestone completion tests.
-  for (const milestone of milestones) {
-    const completion = executionById.get(milestone.completionTaskId);
-    for (const logicalTaskId of milestone.logicalTaskIds) addUniqueDependency(completion, logicalTaskId);
-    for (const work of milestone.workTasks) {
-      if (work.id !== milestone.completionTaskId) addUniqueDependency(completion, work.id);
-    }
-    for (const childId of childrenByMilestone.get(milestone.id) ?? []) {
-      addUniqueDependency(completion, milestonesById.get(childId).completionTaskId);
-    }
-  }
-
-  // Cross-milestone task dependencies may only point backward through the
-  // milestone dependency graph. This prevents an earlier milestone from
-  // depending on work that belongs to a future milestone.
-  for (const task of executionById.values()) {
-    const taskMilestone = milestoneByTask.get(task.id);
-    if (!taskMilestone) continue;
-    const allowedEarlier = milestonePrerequisiteClosure(milestonesById, taskMilestone);
-    for (const depId of task.dependsOn) {
-      const depMilestone = milestoneByTask.get(depId);
-      if (!depMilestone || depMilestone === taskMilestone) continue;
-      if (!allowedEarlier.has(depMilestone)) {
-        fail(
-          `task:${task.id}.dependsOn`,
-          `cross-milestone dependency on ${depId} (${depMilestone}) is not allowed from ${taskMilestone}; add the milestone prerequisite instead`
-        );
-      }
-    }
-  }
-
-  // Whole-project logical completion waits for every top-level milestone gate.
-  const root = executionById.get(rootTaskId);
-  for (const milestone of milestones.filter(item => item.parentId === null)) {
-    addUniqueDependency(root, milestone.completionTaskId);
-  }
-
-  return [...executionById.values()];
+  return { milestones, milestonesById };
 }
 
 export function validateTechLeadPlan(plan) {
@@ -444,6 +252,7 @@ export function validateTechLeadPlan(plan) {
       'intent',
       'parentId',
       'dependsOn',
+      'milestoneId',
       'acceptanceCriteria',
       'testStrategy',
       'history',
@@ -456,6 +265,7 @@ export function validateTechLeadPlan(plan) {
     assertString(task.intent, `${path}.intent`);
     if (task.parentId !== null) assertString(task.parentId, `${path}.parentId`);
     assertStringArray(task.dependsOn, `${path}.dependsOn`);
+    if (task.milestoneId != null) assertString(task.milestoneId, `${path}.milestoneId`);
     assertStringArray(task.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
     assertString(task.testStrategy, `${path}.testStrategy`);
 
@@ -466,6 +276,7 @@ export function validateTechLeadPlan(plan) {
       stage: 'developer',
       parentId: task.parentId,
       dependsOn: [...task.dependsOn],
+      milestoneId: task.milestoneId ?? null,
       title: task.title,
       intent: task.intent,
       acceptanceCriteria: [...task.acceptanceCriteria],
@@ -497,28 +308,51 @@ export function validateTechLeadPlan(plan) {
     }
   }
 
-  // Validate the logical tree independently before milestone execution work is added.
+  const milestoneState = normalizeMilestones(plan, byId);
+  if (root.milestoneId != null) {
+    fail(`task:${root.id}.milestoneId`, 'the logical project root must not belong to a milestone');
+  }
+
+  if (milestoneState.milestones.length > 0) {
+    for (const task of normalized) {
+      if (task.milestoneId != null && !milestoneState.milestonesById.has(task.milestoneId)) {
+        fail(`task:${task.id}.milestoneId`, `unknown milestone ${task.milestoneId}`);
+      }
+    }
+
+    for (const milestone of milestoneState.milestones) {
+      for (const taskId of milestone.logicalTaskIds) {
+        const task = byId.get(taskId);
+        if (task.milestoneId == null) task.milestoneId = milestone.id;
+        else if (task.milestoneId !== milestone.id) {
+          fail(
+            `milestone:${milestone.id}.logicalTaskIds`,
+            `task ${taskId} already belongs to milestone ${task.milestoneId}`
+          );
+        }
+      }
+    }
+
+    for (const task of normalized) {
+      if (!task.milestoneId) continue;
+      const allowedEarlier = milestonePrerequisiteClosure(milestoneState.milestonesById, task.milestoneId);
+      for (const depId of task.dependsOn) {
+        const dep = byId.get(depId);
+        if (!dep?.milestoneId || dep.milestoneId === task.milestoneId) continue;
+        if (!allowedEarlier.has(dep.milestoneId)) {
+          fail(
+            `task:${task.id}.dependsOn`,
+            `cross-milestone dependency on ${depId} (${dep.milestoneId}) is not allowed from ${task.milestoneId}; add the prerequisite milestone relationship or change the task structure`
+          );
+        }
+      }
+    }
+  }
+
   try {
     buildExecutionGraph(normalized);
   } catch (error) {
     fail('$.tasks', error?.message ?? String(error));
-  }
-
-  const milestoneState = normalizeMilestones(plan, byId);
-  if (milestoneState?.milestoneByLogicalTask?.has(plan.rootTaskId)) {
-    fail('$.milestones', 'the logical project root must not be assigned inside a milestone');
-  }
-
-  const executionTasks = compileExecutionTasks({
-    logicalTasks: normalized,
-    rootTaskId: plan.rootTaskId,
-    milestoneState,
-  });
-
-  try {
-    buildExecutionGraph(executionTasks);
-  } catch (error) {
-    fail('$.milestones', error?.message ?? String(error));
   }
 
   return {
@@ -533,15 +367,14 @@ export function validateTechLeadPlan(plan) {
         intent: task.intent,
         parentId: task.parentId,
         dependsOn: [...task.dependsOn],
+        milestoneId: task.milestoneId ?? null,
         acceptanceCriteria: [...task.acceptanceCriteria],
         testStrategy: task.testStrategy,
         history: structuredClone(task.history ?? []),
       })),
-      ...(milestoneState && milestoneState.milestones.length > 0
+      ...(milestoneState.milestones.length > 0
         ? { milestones: structuredClone(milestoneState.milestones) }
         : {}),
     },
-    // Derived compiler output. Never persist this as a second source of plan truth.
-    executionTasks: executionTasks.map(task => structuredClone(task)),
   };
 }
