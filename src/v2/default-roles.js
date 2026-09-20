@@ -177,7 +177,9 @@ export function createDefaultV2Roles({
     },
 
     tester: {
-      prepare: ({ task }) => prepareLlm(task, null),
+      prepare: ({ task }) => prepareLlm(task, null, {
+        evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
+      }),
       transition: ({ task, result }) => {
         if (result.outcome === 'PASS') return { stage: 'reviewer', state: 'READY' };
         if (result.outcome === 'NOT_PASS') {
@@ -190,7 +192,9 @@ export function createDefaultV2Roles({
     },
 
     reviewer: {
-      prepare: ({ task }) => prepareLlm(task, null),
+      prepare: ({ task }) => prepareLlm(task, null, {
+        evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
+      }),
       async transition({ task, result }) {
         if (result.outcome === 'NOT_PASS') {
           return failureCount(task) >= 3
