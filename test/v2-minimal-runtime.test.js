@@ -996,7 +996,7 @@ test('milestone tree compiles connection/reconcile/test work into one execution 
     ],
   };
 
-  const validated = validateTechLeadPlan(plan).plan;
+  const validated = validateTechLeadPlan(plan);
   const byId = new Map(validated.executionTasks.map(task => [task.id, task]));
 
   assert.equal(byId.get('M1_CONNECT').origin, 'milestone');
@@ -1148,9 +1148,9 @@ test('applyDeliveryPlan materializes milestone test at tester stage', () => {
         acceptanceCriteria: ['usable'],
         testStrategy: 'smoke',
       }],
-    }).plan;
+    });
 
-    store.applyDeliveryPlan('P-milestone', validated);
+    store.applyDeliveryPlan('P-milestone', validated.plan, { executionTasks: validated.executionTasks });
     const testTask = store.getTask('M1_TEST');
     assert.equal(testTask.stage, 'tester');
     assert.equal(testTask.origin, 'milestone');
