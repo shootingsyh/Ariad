@@ -207,7 +207,7 @@ export default defineFeaturePlugin({
             if (!input.name) throw new Error('name is required');
             const project = manager.create(input.name, {
               goal: input.goal ?? null,
-              mode: input.mode ?? 'NEW',
+              mode: input.mode ?? null,
               sourcePath: input.sourcePath ?? null,
               projectAgent: null,
             });
@@ -242,7 +242,7 @@ export default defineFeaturePlugin({
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             const project = manager.create(name, {
               goal: goal ?? null,
-              mode: mode ?? 'NEW',
+              mode: mode ?? null,
               sourcePath: sourcePath ?? null,
               frontdeskBinding: {
                 host: 'openclaw',
