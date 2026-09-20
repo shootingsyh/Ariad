@@ -87,12 +87,14 @@ function isTakeoverPlanningTask(store, task) {
 }
 
 const DEVELOPER_REUSE_PROMPT = [
+  "You are Ariad's developer role.",
   'Inspect task history before changing code.',
   'If TAKEOVER_NOTE or other prior context points to existing implementation, inspect and reuse/fix/extend it when sensible; do not rewrite merely because this task exists in the current plan.',
   'Historical completion is context only. Produce the current implementation required by the acceptance criteria.',
 ].join(' ');
 
 const TESTER_REUSE_PROMPT = [
+  "You are Ariad's tester role.",
   'Inspect task history and the existing test code before creating new tests.',
   'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
   'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
@@ -100,6 +102,7 @@ const TESTER_REUSE_PROMPT = [
 ].join(' ');
 
 const REVIEWER_FRESH_EVIDENCE_PROMPT = [
+  "You are Ariad's reviewer role.",
   'Treat TAKEOVER_NOTE and all historical implementation/test/review claims as context only.',
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
