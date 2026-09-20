@@ -141,6 +141,30 @@ function fakeV2Plan() {
         testStrategy: 'Read health.txt.',
       },
     ],
+    milestones: [
+      {
+        id: 'M1',
+        title: 'Healthy endpoint usable',
+        goal: 'The health endpoint fixture works as an integrated slice.',
+        parentId: null,
+        dependsOn: [],
+        logicalTaskIds: ['T1'],
+        workTasks: [
+          {
+            id: 'M1_TEST',
+            title: 'Health milestone smoke test',
+            kind: 'test',
+            intent: 'Verify the health milestone as an integrated result.',
+            dependsOn: [],
+            acceptanceCriteria: ['health.txt reports healthy status'],
+            testStrategy: 'Read health.txt after the feature task completes.',
+          },
+        ],
+        completionTaskId: 'M1_TEST',
+        acceptanceCriteria: ['The health slice is usable.'],
+        testStrategy: 'Run the health milestone smoke test.',
+      },
+    ],
   };
 }
 
