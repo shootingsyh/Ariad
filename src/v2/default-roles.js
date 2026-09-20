@@ -372,6 +372,7 @@ export function createDefaultV2Roles({
         const takeover = isTakeoverPlanningTask(store, task);
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
+          'Review both the logical feature/component tree and the milestone tree. Milestones should represent meaningful integrated outcomes with credible connection/reconcile work and milestone-level acceptance tests.',
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
@@ -380,7 +381,7 @@ export function createDefaultV2Roles({
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null },
             takeover,
-            plan: validation?.plan ?? latestPlanInFlow(store, task, artifactRoot),
+            plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
           }, null, 2),
         ].filter(Boolean).join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
@@ -388,8 +389,8 @@ export function createDefaultV2Roles({
       transition: ({ task, result }) => {
         if (result.outcome === 'PLAN_ACCEPTED') {
           const plan = latestPlanInFlow(store, task, artifactRoot);
-          validateTechLeadPlan(plan);
-          store.applyDeliveryPlan(task.projectId, plan);
+          const validated = validateTechLeadPlan(plan);
+          store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           if (takeover && !hasHumanDecision) {
