@@ -49,6 +49,16 @@ export class V2Scheduler {
           this.store.updateTask(skipId, skipped.version, { state: 'SKIPPED', execution: null });
         }
       }
+      if (typeof role.afterPersist === 'function') {
+        const followUp = await role.afterPersist({ task: updated, result });
+        if (followUp) {
+          const { patch: followUpPatch = {}, transitionHistory: followUpHistory = null } = followUp;
+          updated = this.store.updateTask(updated.id, updated.version, followUpPatch);
+          if (followUpHistory) {
+            updated = this.store.appendTaskHistory(updated.id, updated.version, followUpHistory);
+          }
+        }
+      }
     }
   }
 
