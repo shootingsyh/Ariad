@@ -827,11 +827,11 @@ test('accepted takeover plan pauses at human review until a human decision is re
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-take-gate', pmBinding: 'pm:P-take-gate' });
+    store.createProject({ id: 'P-take-gate', pmBinding: 'pm:P-take-gate', mode: 'TAKEOVER', sourcePath: '/tmp/existing-repo' });
     store.enqueuePlanningRequest({
       id: 'restore-1',
       projectId: 'P-take-gate',
-      request: { purpose: 'RESTORE_PROJECT_STATE' },
+      request: { purpose: 'INITIAL_PLAN' },
     });
     const plan = validateTechLeadPlan({
       version: 2,
