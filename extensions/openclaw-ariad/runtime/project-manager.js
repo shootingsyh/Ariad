@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -27,19 +27,41 @@ export class AriadProjectManager {
   paths(name) {
     const id = slugify(name);
     const root = join(this.projectsRoot, id);
+    const workspace = join(root, 'workspace');
+    const ariad = join(workspace, '.ariad');
     return {
       id,
       root,
-      manifest: join(root, 'project.json'),
-      workspace: join(root, 'workspace'),
-      ariad: join(root, '.ariad'),
-      db: join(root, '.ariad', 'state.db'),
+      workspace,
+      ariad,
+      manifest: join(ariad, 'project.json'),
+      db: join(ariad, 'state.db'),
+      legacyManifest: join(root, 'project.json'),
+      legacyAriad: join(root, '.ariad'),
     };
+  }
+
+  migrateLegacyLayout(name) {
+    const p = this.paths(name);
+    if (existsSync(p.manifest) || !existsSync(p.legacyManifest)) return p;
+    mkdirSync(p.workspace, { recursive: true });
+    if (existsSync(p.legacyAriad) && !existsSync(p.ariad)) {
+      renameSync(p.legacyAriad, p.ariad);
+    } else {
+      mkdirSync(p.ariad, { recursive: true });
+    }
+    const legacy = readJson(p.legacyManifest);
+    writeJson(p.manifest, {
+      ...legacy,
+      workspace: p.workspace,
+      stateDb: p.db,
+    });
+    return p;
   }
 
   create(name, { goal = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
     const p = this.paths(name);
-    if (existsSync(p.manifest)) throw new Error(`Ariad project already exists: ${p.id}`);
+    if (existsSync(p.manifest) || existsSync(p.legacyManifest)) throw new Error(`Ariad project already exists: ${p.id}`);
     mkdirSync(p.workspace, { recursive: true });
     mkdirSync(p.ariad, { recursive: true });
     if (!existsSync(join(p.workspace, '.git'))) {
@@ -67,12 +89,16 @@ export class AriadProjectManager {
   list() {
     if (!existsSync(this.projectsRoot)) return [];
     return readdirSync(this.projectsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && existsSync(join(this.projectsRoot, entry.name, 'project.json')))
+      .filter((entry) => {
+        if (!entry.isDirectory()) return false;
+        const p = this.paths(entry.name);
+        return existsSync(p.manifest) || existsSync(p.legacyManifest);
+      })
       .map((entry) => this.status(entry.name));
   }
 
   status(name) {
-    const p = this.paths(name);
+    const p = this.migrateLegacyLayout(name);
     if (!existsSync(p.manifest)) throw new Error(`unknown Ariad project: ${p.id}`);
     const manifest = readJson(p.manifest);
     const frontdeskBinding = manifest.frontdeskBinding ?? manifest.projectAgent ?? null;
