@@ -19,10 +19,13 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
       frontdeskBinding: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha' },
     });
     const beta = manager.create('Beta Project', { goal: 'build beta' });
+    const existingRepo = join(dir, 'existing-repo');
+    mkdirSync(join(existingRepo, '.git'), { recursive: true });
+    writeFileSync(join(existingRepo, 'README.md'), '# existing\n');
     const takeover = manager.create('Takeover Project', {
       goal: 'assess existing repo',
       mode: 'TAKEOVER',
-      sourcePath: join(dir, 'existing-repo'),
+      sourcePath: existingRepo,
     });
 
     assert.equal(alpha.id, 'alpha-project');
@@ -39,7 +42,12 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.equal(alpha.desiredState, 'STOPPED');
     assert.equal(beta.desiredState, 'STOPPED');
     assert.equal(takeover.mode, 'TAKEOVER');
-    assert.equal(takeover.sourcePath, join(dir, 'existing-repo'));
+    assert.equal(takeover.sourcePath, existingRepo);
+    assert.equal(takeover.workspace, existingRepo);
+    assert.equal(takeover.stateDb, join(existingRepo, '.ariad', 'state.db'));
+    assert.equal(takeover.adopted, true);
+    assert.ok(existsSync(join(existingRepo, '.ariad', 'project.json')));
+    assert.equal(existsSync(join(takeover.root, 'workspace')), false);
 
     manager.setDesiredState('alpha-project', 'RUNNING');
     assert.equal(manager.status('alpha-project').desiredState, 'RUNNING');
@@ -155,6 +163,65 @@ test('Ariad dashboard starts and serves project JSON without owning project stat
     assert.match(page, /Read-only live view/);
   } finally {
     await dashboard.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('existing isolated takeover can adopt a real repo and move Ariad durable state', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-adopt-existing-'));
+  const projectsRoot = join(dir, 'projects');
+  const manager = new AriadProjectManager({ projectsRoot });
+  try {
+    const project = manager.create('SRPG Takeover', {
+      goal: 'reconstruct existing SRPG',
+      mode: 'TAKEOVER',
+    });
+    const oldWorkspace = project.workspace;
+    mkdirSync(join(oldWorkspace, '.ariad', 'docs'), { recursive: true });
+    writeFileSync(join(oldWorkspace, '.ariad', 'docs', 'TAKEOVER.md'), 'reconstruction\n');
+    writeFileSync(join(oldWorkspace, '.ariad', 'state.db'), 'sqlite-fixture');
+
+    const target = join(dir, 'srpg-project');
+    mkdirSync(join(target, '.git'), { recursive: true });
+    writeFileSync(join(target, 'project.godot'), '[application]\n');
+
+    const adopted = manager.adopt('srpg-takeover', target);
+    assert.equal(adopted.workspace, target);
+    assert.equal(adopted.sourcePath, target);
+    assert.equal(adopted.adopted, true);
+    assert.equal(adopted.mode, 'TAKEOVER');
+    assert.equal(adopted.stateDb, join(target, '.ariad', 'state.db'));
+    assert.equal(readFileSync(join(target, '.ariad', 'docs', 'TAKEOVER.md'), 'utf8'), 'reconstruction\n');
+    assert.equal(readFileSync(join(target, '.ariad', 'state.db'), 'utf8'), 'sqlite-fixture');
+    assert.equal(existsSync(oldWorkspace), false);
+    assert.ok(existsSync(join(projectsRoot, 'srpg-takeover', 'project-ref.json')));
+
+    manager.setDesiredState('srpg-takeover', 'RUNNING');
+    assert.equal(manager.status('srpg-takeover').workspace, target);
+    assert.equal(manager.status('srpg-takeover').desiredState, 'RUNNING');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('adopt refuses to hide product files created in the isolated workspace', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-adopt-conflict-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+  try {
+    const project = manager.create('Conflict Takeover', { mode: 'TAKEOVER' });
+    writeFileSync(join(project.workspace, 'unexpected-code.txt'), 'do not lose me');
+
+    const target = join(dir, 'real-repo');
+    mkdirSync(join(target, '.git'), { recursive: true });
+
+    assert.throws(
+      () => manager.adopt('conflict-takeover', target),
+      /contains product files outside \.ariad\/\.git/
+    );
+    assert.ok(existsSync(join(project.workspace, 'unexpected-code.txt')));
+    assert.equal(existsSync(join(target, '.ariad', 'project.json')), false);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
