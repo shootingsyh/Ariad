@@ -323,6 +323,7 @@ export class SQLiteV2Store {
         deliveryPlanVersion: (project.deliveryPlanVersion ?? 0) + 1,
         deliveryRootTaskId: plan.rootTaskId,
         deliveryPlanSummary: plan.projectSummary ?? '',
+        milestones: structuredClone(plan.milestones ?? []),
       });
 
       this.db.exec('COMMIT');
