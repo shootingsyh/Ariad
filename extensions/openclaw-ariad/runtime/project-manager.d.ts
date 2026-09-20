@@ -10,6 +10,7 @@ export interface AriadProjectStatus {
   goal: string | null;
   mode: 'NEW' | 'TAKEOVER';
   sourcePath: string | null;
+  adopted: boolean;
   createdAt: string;
   workspace: string;
   stateDb: string;
@@ -27,6 +28,7 @@ export interface AriadProjectManagerOptions {
 export class AriadProjectManager {
   constructor(options: AriadProjectManagerOptions);
   create(name: string, options?: { goal?: string | null; mode?: 'NEW' | 'TAKEOVER' | null; sourcePath?: string | null; frontdeskBinding?: FrontdeskBinding | null; projectAgent?: FrontdeskBinding | null }): AriadProjectStatus;
+  adopt(name: string, sourcePath?: string | null): AriadProjectStatus;
   list(): AriadProjectStatus[];
   status(name: string): AriadProjectStatus;
   setDesiredState(name: string, desiredState: 'RUNNING' | 'STOPPED'): AriadProjectStatus;
