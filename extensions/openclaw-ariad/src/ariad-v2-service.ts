@@ -333,6 +333,7 @@ export class AriadV2Service {
             project,
             provider: this.provider,
             pushSourceControl: this.pushSourceControl,
+            logger: this.logger,
           });
           this.runtimes.set(project.id, runtime);
         }
