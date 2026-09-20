@@ -422,7 +422,7 @@ function compileExecutionTasks({ logicalTasks, rootTaskId, milestoneState }) {
 
 export function validateTechLeadPlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) fail('$', 'must be an object');
-  const allowedTop = new Set(['version', 'projectSummary', 'rootTaskId', 'tasks', 'milestones', 'executionTasks']);
+  const allowedTop = new Set(['version', 'projectSummary', 'rootTaskId', 'tasks', 'milestones']);
   for (const key of Object.keys(plan)) if (!allowedTop.has(key)) fail(`$.${key}`, 'unexpected property');
 
   if (plan.version !== 2) fail('$.version', 'must equal 2');
@@ -540,7 +540,8 @@ export function validateTechLeadPlan(plan) {
       ...(milestoneState && milestoneState.milestones.length > 0
         ? { milestones: structuredClone(milestoneState.milestones) }
         : {}),
-      executionTasks: executionTasks.map(task => structuredClone(task)),
     },
+    // Derived compiler output. Never persist this as a second source of plan truth.
+    executionTasks: executionTasks.map(task => structuredClone(task)),
   };
 }
