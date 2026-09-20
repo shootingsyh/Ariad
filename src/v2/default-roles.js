@@ -390,7 +390,7 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLAN_ACCEPTED') {
           const plan = latestPlanInFlow(store, task, artifactRoot);
           const validated = validateTechLeadPlan(plan);
-          store.applyDeliveryPlan(task.projectId, validated.plan);
+          store.applyDeliveryPlan(task.projectId, validated.plan, { executionTasks: validated.executionTasks });
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           if (takeover && !hasHumanDecision) {
