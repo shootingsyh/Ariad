@@ -14,6 +14,11 @@ import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstra
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
+import {
+  ensurePlannerArtifactLayout,
+  loadPlannerArtifactPlan,
+  validatePlannerArtifactPlan,
+} from '../src/v2/planner-artifacts.js';
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-v2-'));
@@ -325,25 +330,20 @@ test('PM appends planning requests without creating separate plan/replan graphs'
 });
 
 
-test('parent-child hierarchy becomes a virtual child-to-parent execution dependency', () => {
+test('logical parent-child hierarchy does not create execution dependencies', () => {
   const tasks = [
     { id: 'ROOT', scope: 'delivery', state: 'READY' },
     { id: 'FEATURE', scope: 'delivery', parentId: 'ROOT', state: 'READY' },
     { id: 'LEAF', scope: 'delivery', parentId: 'FEATURE', state: 'READY' },
   ];
 
-  let graph = buildExecutionGraph(tasks);
-  assert.deepEqual(graph.prerequisitesOf('ROOT'), ['FEATURE']);
-  assert.deepEqual(graph.prerequisitesOf('FEATURE'), ['LEAF']);
-  assert.deepEqual(graph.dependentsOf('LEAF'), ['FEATURE']);
-  assert.equal(graph.isRunnable(tasks[0]), false);
-  assert.equal(graph.isRunnable(tasks[1]), false);
+  const graph = buildExecutionGraph(tasks);
+  assert.deepEqual(graph.prerequisitesOf('ROOT'), []);
+  assert.deepEqual(graph.prerequisitesOf('FEATURE'), []);
+  assert.deepEqual(graph.prerequisitesOf('LEAF'), []);
+  assert.equal(graph.isRunnable(tasks[0]), true);
+  assert.equal(graph.isRunnable(tasks[1]), true);
   assert.equal(graph.isRunnable(tasks[2]), true);
-
-  const progressed = tasks.map(task => task.id === 'LEAF' ? { ...task, state: 'DONE' } : task);
-  graph = buildExecutionGraph(progressed);
-  assert.equal(graph.isRunnable(graph.byId.get('FEATURE')), true);
-  assert.equal(graph.isRunnable(graph.byId.get('ROOT')), false);
 });
 
 test('scheduler prefers runnable task with largest downstream unblock impact', async () => {
@@ -470,15 +470,15 @@ test('Tech Lead v2 plan validator rejects redundant parent dependency', () => {
   assert.throws(() => validateTechLeadPlan(plan), /must not repeat parent\/child ordering/);
 });
 
-test('Tech Lead v2 plan validator catches cycle created by explicit plus virtual hierarchy edges', () => {
+test('Tech Lead v2 plan validator catches explicit execution cycles independently of logical hierarchy', () => {
   const plan = {
     version: 2,
     projectSummary: 'cycle',
     rootTaskId: 'ROOT',
     tasks: [
       { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
-      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: [], acceptanceCriteria: ['a'], testStrategy: 'a' },
-      { id: 'B', title: 'B', intent: 'b', parentId: 'A', dependsOn: ['ROOT'], acceptanceCriteria: ['b'], testStrategy: 'b' },
+      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: ['B'], acceptanceCriteria: ['a'], testStrategy: 'a' },
+      { id: 'B', title: 'B', intent: 'b', parentId: 'ROOT', dependsOn: ['A'], acceptanceCriteria: ['b'], testStrategy: 'b' },
     ],
   };
   assert.throws(() => validateTechLeadPlan(plan), /execution graph contains a cycle/);
@@ -498,7 +498,7 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /TAKEOVER_NOTE/);
   assert.match(prompt, /fresh verification/i);
   assert.match(prompt, /stop for human review/i);
-  assert.match(prompt, /earlier\/non-prerequisite milestones must not depend on later milestone work/i);
+  assert.match(prompt, /child milestones complete before parent integration work/i);
   assert.match(prompt, /another TL could pick this project up/i);
   assert.match(prompt, /project-wide, not milestone-local/i);
   assert.match(prompt, /complete currently-known route to project completion/i);
@@ -506,6 +506,96 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /Do not create routine human gates between milestones/i);
   assert.match(prompt, /plan reaches the project root/i);
 });
+
+test('split planner artifacts use flat dotted ids and milestone hierarchy derives execution prerequisites', () => {
+  const { dir } = tempDb();
+  try {
+    const artifactRoot = path.join(dir, 'artifacts');
+    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
+
+    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
+      id: 'game',
+      title: 'Game',
+      summary: 'Complete game',
+      parentId: null,
+    }));
+    fs.writeFileSync(path.join(logicalDir, 'game.battle.json'), JSON.stringify({
+      id: 'game.battle',
+      title: 'Battle',
+      summary: 'Battle capability',
+      parentId: 'game',
+    }));
+
+    fs.writeFileSync(path.join(milestoneDir, 'M1.json'), JSON.stringify({
+      id: 'M1',
+      title: 'Integrated slice',
+      goal: 'Integrate the child battle slice.',
+      parentId: null,
+      dependsOn: [],
+      logicalRefs: ['game'],
+      acceptanceCriteria: ['Whole slice works end to end.'],
+      testStrategy: 'Run whole-slice E2E.',
+      tasks: [{
+        id: 'T-INTEGRATE',
+        title: 'Integrate slice',
+        intent: 'Verify the whole slice.',
+        dependsOn: [],
+        logicalRefs: ['game'],
+        acceptanceCriteria: ['Integration passes.'],
+        testStrategy: 'Run E2E.',
+      }],
+    }));
+    fs.writeFileSync(path.join(milestoneDir, 'M1.1.json'), JSON.stringify({
+      id: 'M1.1',
+      title: 'Battle slice',
+      goal: 'Deliver battle capability.',
+      parentId: 'M1',
+      dependsOn: [],
+      logicalRefs: ['game.battle'],
+      acceptanceCriteria: ['Battle works.'],
+      testStrategy: 'Run battle tests.',
+      tasks: [{
+        id: 'T-BATTLE',
+        title: 'Battle implementation',
+        intent: 'Deliver battle.',
+        dependsOn: [],
+        logicalRefs: ['game.battle'],
+        acceptanceCriteria: ['Battle is usable.'],
+        testStrategy: 'Run battle test.',
+      }],
+    }));
+
+    const raw = loadPlannerArtifactPlan(artifactRoot);
+    const validated = validatePlannerArtifactPlan(raw).plan;
+    assert.equal(validated.version, 3);
+    assert.equal(validated.logicalRootId, 'game');
+    assert.deepEqual(validated.tasks.find(task => task.id === 'T-BATTLE').dependsOn, []);
+    assert.deepEqual(validated.tasks.find(task => task.id === 'T-INTEGRATE').dependsOn, ['T-BATTLE']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('split planner artifact registry rejects subdirectories and filename/id drift', () => {
+  const { dir } = tempDb();
+  try {
+    const artifactRoot = path.join(dir, 'artifacts');
+    const { logicalDir } = ensurePlannerArtifactLayout(artifactRoot);
+    fs.mkdirSync(path.join(logicalDir, 'nested'));
+    assert.throws(() => loadPlannerArtifactPlan(artifactRoot), /subdirectories are not allowed/);
+    fs.rmSync(path.join(logicalDir, 'nested'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(logicalDir, 'wrong.json'), JSON.stringify({
+      id: 'game',
+      title: 'Game',
+      summary: 'Game',
+      parentId: null,
+    }));
+    assert.throws(() => loadPlannerArtifactPlan(artifactRoot), /must equal filename id wrong/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 
 
 test('scheduler drains planning batches before dispatching delivery work', async () => {
