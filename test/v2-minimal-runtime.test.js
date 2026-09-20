@@ -490,10 +490,10 @@ test('Tech Lead prompt explicitly separates decomposition, dependency, and graph
     schema: TECH_LEAD_PLAN_SCHEMA,
   });
   assert.match(prompt, /PASS 1 — LOGICAL TREE/);
-  assert.match(prompt, /PASS 2 — MILESTONE TREE/);
+  assert.match(prompt, /PASS 2 — MILESTONE STRUCTURE/);
   assert.match(prompt, /PASS 3 — EXECUTION DEPENDENCIES/);
   assert.match(prompt, /PASS 4 — GRAPH REVIEW/);
-  assert.match(prompt, /connection\/reconcile\/test/i);
+  assert.match(prompt, /integration\/test\/reconcile/i);
   assert.match(prompt, /earlier milestone/i);
   assert.match(prompt, /Never add parentId as a dependsOn entry/i);
   assert.match(prompt, /interface\/contract/i);
