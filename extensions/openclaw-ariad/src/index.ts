@@ -201,12 +201,14 @@ export default defineFeaturePlugin({
 
       api.registerGatewayMethod('ariad.ci.project', async ({ params, respond }) => {
         try {
-          const input = (params ?? {}) as { action?: string; name?: string; goal?: string };
+          const input = (params ?? {}) as { action?: string; name?: string; goal?: string; mode?: 'NEW' | 'TAKEOVER'; sourcePath?: string };
           if (!input.action) throw new Error('action is required');
           if (input.action === 'create') {
             if (!input.name) throw new Error('name is required');
             const project = manager.create(input.name, {
               goal: input.goal ?? null,
+              mode: input.mode ?? 'NEW',
+              sourcePath: input.sourcePath ?? null,
               projectAgent: null,
             });
             respond(true, { project: v2Service.status(project.id) });
@@ -230,7 +232,7 @@ export default defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal, decision, agentId, sessionKey } = input;
+        const { action, name, goal, mode, sourcePath, decision, agentId, sessionKey } = input;
         let details: unknown;
         if (action === 'list') {
           details = { action, projects: v2Service.list() };
@@ -240,6 +242,8 @@ export default defineFeaturePlugin({
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             const project = manager.create(name, {
               goal: goal ?? null,
+              mode: mode ?? 'NEW',
+              sourcePath: sourcePath ?? null,
               frontdeskBinding: {
                 host: 'openclaw',
                 agentId: toolContext?.agentId ?? null,
