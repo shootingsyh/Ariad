@@ -235,10 +235,10 @@ export class SQLiteV2Store {
     });
   }
 
-  applyDeliveryPlan(projectId, plan) {
+  applyDeliveryPlan(projectId, plan, { executionTasks = null } = {}) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
-    const deliverySpecs = Array.isArray(plan?.executionTasks) && plan.executionTasks.length > 0
-      ? plan.executionTasks
+    const deliverySpecs = Array.isArray(executionTasks) && executionTasks.length > 0
+      ? executionTasks
       : plan?.tasks;
     if (!plan?.rootTaskId || !Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
       throw new Error('delivery plan requires rootTaskId and tasks');
