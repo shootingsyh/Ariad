@@ -21,6 +21,11 @@ export const contract = defineFeatureContract({
         ]),
         name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
         goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
+        mode: Type.Optional(Type.Union([
+          Type.Literal('NEW'),
+          Type.Literal('TAKEOVER'),
+        ], { description: 'Project lifecycle mode. Use TAKEOVER for reconstructing an existing non-Ariad project; this forces a human review gate before delivery.' })),
+        sourcePath: Type.Optional(Type.String({ description: 'Existing repository path used as takeover evidence/context. Required by convention for TAKEOVER until direct repo adoption is supported.' })),
         decision: Type.Optional(Type.String({ description: 'User decision answering the current NEEDS_HUMAN request. Required for decide.' })),
         agentId: Type.Optional(Type.String({ description: 'OpenClaw agent id to bind as Frontdesk. Defaults to the calling agent.' })),
         sessionKey: Type.Optional(Type.String({ description: 'OpenClaw session key to bind as Frontdesk. Defaults to the calling session.' })),
