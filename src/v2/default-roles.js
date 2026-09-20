@@ -2,6 +2,12 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
+import {
+  ensurePlannerArtifactLayout,
+  loadPlannerArtifactPlan,
+  plannerArtifactInstructions,
+  validatePlannerArtifactPlan,
+} from './planner-artifacts.js';
 
 function latestRoleResult(task) {
   const history = task?.history ?? [];
@@ -29,12 +35,23 @@ function resolveArtifactResult(result, artifactRoot) {
 }
 
 function latestPlanInFlow(store, task, artifactRoot) {
+  const artifactPlan = loadPlannerArtifactPlan(artifactRoot);
+  if (artifactPlan) {
+    try {
+      return validatePlannerArtifactPlan(artifactPlan).plan;
+    } catch {
+      // A planner may be between bounded artifact writes. Validation is the
+      // authoritative completeness gate; keep looking for a prior candidate
+      // while the split artifact set is incomplete.
+    }
+  }
+
   const tasks = flowTasks(store, task);
   for (let i = tasks.length - 1; i >= 0; i -= 1) {
     const raw = latestRoleResult(tasks[i])?.result;
     const result = resolveArtifactResult(raw, artifactRoot);
     const candidate = result?.plan ?? result;
-    if (candidate?.version === 2 && Array.isArray(candidate?.tasks)) return candidate;
+    if ([2, 3].includes(candidate?.version) && Array.isArray(candidate?.tasks)) return candidate;
   }
   return null;
 }
@@ -131,16 +148,22 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   };
 
   if (purpose === 'PLANNER_DECOMPOSE') {
-    return buildTechLeadPrompt({ projectContext: context, schema: TECH_LEAD_PLAN_SCHEMA });
+    return [
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
+      plannerArtifactInstructions(artifactRoot),
+      'Create the complete known project-wide Logical Tree and Milestone execution tree as bounded artifacts. Later milestones may be coarser, but known future scope must remain represented.',
+    ].join('\n\n');
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
     return [
       'You are Ariad\'s Tech Lead dependency pass.',
-      'Take the supplied candidate plan, preserve its logical tree and milestone tree unless correction is necessary, and return a complete corrected v2 plan.',
-      'Add only precise logical/work-task dependsOn edges and milestone dependsOn prerequisites. Never repeat parent-child ordering.',
-      'Enforce milestone direction: work in an earlier milestone must not depend on a later/non-prerequisite milestone.',
-      buildTechLeadPrompt({ projectContext: context, schema: TECH_LEAD_PLAN_SCHEMA }),
+      'Inspect the existing planner artifacts and reconcile execution dependencies in place. Do not emit a monolithic plan.',
+      'Logical parentage is semantic only and never creates an execution dependency.',
+      'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
+      'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
+      plannerArtifactInstructions(artifactRoot),
     ].join('\n\n');
   }
 
@@ -148,11 +171,10 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     return [
       'You are Ariad\'s Tech Lead repair pass.',
-      'Repair the latest candidate plan using the critic findings below. Return the complete corrected v2 plan.',
+      'Repair only the affected planner artifacts using the critic findings below. Do not rewrite or re-emit the complete project plan.',
       'Do not add unrelated scope.',
       JSON.stringify({ context, critic: previous }, null, 2),
-      'OUTPUT SCHEMA',
-      JSON.stringify(TECH_LEAD_PLAN_SCHEMA, null, 2),
+      plannerArtifactInstructions(artifactRoot),
     ].join('\n\n');
   }
 
@@ -188,12 +210,6 @@ export function createDefaultV2Roles({
   artifactRoot = null,
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
-
-  const plannerArtifact = task => {
-    if (!artifactRoot) return null;
-    const safe = String(task.id).replace(/[^a-zA-Z0-9._-]+/g, '-');
-    return { ref: `planner/${safe}.json`, path: resolve(artifactRoot, 'planner', `${safe}.json`) };
-  };
 
   const prepareLlm = (task, v2Prompt, extra = {}) => ({
     provider: providerId,
@@ -299,22 +315,14 @@ export function createDefaultV2Roles({
 
     tech_lead: {
       prepare: ({ project, task }) => {
-        const artifact = plannerArtifact(task);
-        if (artifact) mkdirSync(resolve(artifactRoot, 'planner'), { recursive: true });
-        const base = plannerPrompt({ store, project, task, artifactRoot });
-        const prompt = artifact ? [
-          base,
+        if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
+        const prompt = [
+          plannerPrompt({ store, project, task, artifactRoot }),
           '',
-          'LARGE RESULT TRANSPORT',
-          `Write the COMPLETE v2 plan JSON object to this exact file path using the file write tool: ${artifact.path}`,
-          'Do not put the full plan in your final reply.',
-          'After the file is successfully written, return ONLY this small JSON object:',
-          JSON.stringify({
-            executionStatus: 'COMPLETED',
-            outcome: 'PLANNED',
-            result: { artifactRef: artifact.ref, summary: 'v2 delivery plan written' },
-          }),
-        ].join('\n') : base;
+          'FINAL REPLY',
+          'After completing all required file writes, return only:',
+          '{"executionStatus":"COMPLETED","outcome":"PLANNED","result":{"summary":"planner artifacts updated"}}',
+        ].join('\n');
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
@@ -350,7 +358,9 @@ export function createDefaultV2Roles({
             };
           }
           try {
-            const validated = validateTechLeadPlan(candidate);
+            const validated = candidate.version === 3
+              ? validatePlannerArtifactPlan(candidate)
+              : validateTechLeadPlan(candidate);
             return {
               outcome: 'PASS',
               result: { valid: true, plan: validated.plan, error: null },
@@ -396,7 +406,9 @@ export function createDefaultV2Roles({
       transition: ({ task, result }) => {
         if (result.outcome === 'PLAN_ACCEPTED') {
           const plan = latestPlanInFlow(store, task, artifactRoot);
-          const validated = validateTechLeadPlan(plan);
+          const validated = plan?.version === 3
+            ? validatePlannerArtifactPlan(plan)
+            : validateTechLeadPlan(plan);
           store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
