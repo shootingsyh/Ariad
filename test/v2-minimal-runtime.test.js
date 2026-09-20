@@ -13,6 +13,7 @@ import { V2Supervisor } from '../src/v2/supervisor.js';
 import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstrap.js';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
+import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-v2-'));
@@ -729,6 +730,162 @@ test('scheduler persists a stable attempt identity before provider start', async
     await scheduler.tick('P14');
     assert.equal(seen.attemptId, 'P14:T14:developer:1');
     assert.equal(seen.idempotencyKey, 'ariad:v2:P14:T14:developer:1');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('takeover task history survives validation and is persisted without duplicate notes', () => {
+  const { dir, file } = tempDb();
+  try {
+    const plan = {
+      version: 2,
+      projectSummary: 'Recovered project',
+      rootTaskId: 'ROOT',
+      tasks: [{
+        id: 'ROOT',
+        title: 'Recovered project',
+        intent: 'Preserve and finish the existing project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['Current project behavior is freshly verified.'],
+        testStrategy: 'Run the current project acceptance suite.',
+        history: [{
+          type: 'TAKEOVER_NOTE',
+          summary: 'Existing implementation is present; inspect and reuse it before replacing code.',
+          existingCode: ['src/existing.js'],
+        }],
+      }],
+    };
+    const validated = validateTechLeadPlan(plan).plan;
+    assert.equal(validated.tasks[0].history[0].type, 'TAKEOVER_NOTE');
+
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-take-history' });
+    store.applyDeliveryPlan('P-take-history', validated);
+    assert.equal(store.getTask('ROOT').history.length, 1);
+
+    store.applyDeliveryPlan('P-take-history', validated);
+    assert.equal(store.getTask('ROOT').history.length, 1);
+
+    const revised = structuredClone(validated);
+    revised.tasks[0].history.push({
+      type: 'TAKEOVER_NOTE',
+      summary: 'Existing tests were found and should be freshly rerun.',
+    });
+    store.applyDeliveryPlan('P-take-history', revised);
+    assert.equal(store.getTask('ROOT').history.length, 2);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('default delivery roles are reuse-first but require fresh verification evidence', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-reuse' });
+    store.createTask({
+      id: 'T-reuse',
+      projectId: 'P-reuse',
+      history: [{
+        type: 'TAKEOVER_NOTE',
+        summary: 'Existing code and tests are available.',
+      }],
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('T-reuse');
+    assert.match(definitions.developer.prepare({ task }).context.v2Prompt, /reuse\/fix\/extend/i);
+    assert.match(definitions.tester.prepare({ task }).context.v2Prompt, /freshly executed/i);
+    assert.match(definitions.reviewer.prepare({ task }).context.v2Prompt, /fresh evidence/i);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('accepted takeover plan pauses at human review until a human decision is recorded', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-take-gate', pmBinding: 'pm:P-take-gate' });
+    store.enqueuePlanningRequest({
+      id: 'restore-1',
+      projectId: 'P-take-gate',
+      request: { purpose: 'RESTORE_PROJECT_STATE' },
+    });
+    const plan = validateTechLeadPlan({
+      version: 2,
+      projectSummary: 'Recovered',
+      rootTaskId: 'ROOT',
+      tasks: [{
+        id: 'ROOT',
+        title: 'Recovered root',
+        intent: 'Finish the recovered project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['Recovered project is freshly verified.'],
+        testStrategy: 'Run current acceptance checks.',
+        history: [{ type: 'TAKEOVER_NOTE', summary: 'Reuse existing implementation.' }],
+      }],
+    }).plan;
+    store.createPlanningBatch({
+      projectId: 'P-take-gate',
+      batchId: 'batch-take',
+      requestIds: ['restore-1'],
+      tasks: [
+        {
+          id: 'TL-take',
+          stage: 'tech_lead',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            result: { plan },
+          }],
+        },
+        {
+          id: 'PM-take',
+          stage: 'pm',
+          dependsOn: ['TL-take'],
+          input: { planningBatchId: 'batch-take', purpose: 'PLANNER_PM_REVIEW' },
+        },
+      ],
+    });
+
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    let pmTask = store.getTask('PM-take');
+    const first = definitions.pm.transition({
+      task: pmTask,
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.' } },
+    });
+    assert.equal(first.state, 'NEEDS_HUMAN');
+    assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW');
+    assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
+
+    pmTask = store.appendTaskHistory('PM-take', pmTask.version, {
+      type: 'HUMAN_DECISION',
+      decision: 'accept',
+    });
+    const second = definitions.pm.transition({
+      task: pmTask,
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.' } },
+    });
+    assert.equal(second.state, 'DONE');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
