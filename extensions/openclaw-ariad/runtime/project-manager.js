@@ -159,6 +159,15 @@ export class AriadProjectManager {
 
   adopt(name, sourcePath) {
     const base = this.paths(name);
+    const exists = existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef);
+    if (!exists) {
+      if (!sourcePath) throw new Error('sourcePath is required for adoption');
+      return this.create(name, {
+        mode: 'TAKEOVER',
+        sourcePath,
+      });
+    }
+
     const current = this.status(base.id);
     if (current.adopted) return current;
     if (current.desiredState !== 'STOPPED') throw new Error('project must be STOPPED before adoption');
