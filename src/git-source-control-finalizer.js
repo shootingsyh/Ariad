@@ -68,7 +68,12 @@ export class GitSourceControlFinalizer {
   async finalize({ taskId, strategyEpoch, devCycle }) {
     try {
       runGit(this.workspace, ['rev-parse', '--is-inside-work-tree']);
-      runGit(this.workspace, ['add', '-A']);
+      runGit(this.workspace, [
+        'add', '-A', '--', '.',
+        ':(exclude).ariad/state.db-wal',
+        ':(exclude).ariad/state.db-shm',
+        ':(exclude).ariad/state.db-journal',
+      ]);
       stageAriadState(this.workspace);
 
       const staged = runGit(this.workspace, ['diff', '--cached', '--name-only']);
