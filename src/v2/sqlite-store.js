@@ -238,8 +238,11 @@ export class SQLiteV2Store {
   applyDeliveryPlan(projectId, plan) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     const deliverySpecs = plan?.tasks;
-    if (!plan?.rootTaskId || !Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
-      throw new Error('delivery plan requires rootTaskId and tasks');
+    if (!Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
+      throw new Error('delivery plan requires tasks');
+    }
+    if (plan?.version !== 3 && !plan?.rootTaskId) {
+      throw new Error('legacy delivery plan requires rootTaskId');
     }
 
     const incoming = new Map(deliverySpecs.map(task => [task.id, task]));
@@ -264,6 +267,7 @@ export class SQLiteV2Store {
         const patch = {
           parentId: spec.parentId ?? null,
           dependsOn: [...(spec.dependsOn ?? [])],
+          logicalRefs: [...(spec.logicalRefs ?? [])],
           title: spec.title,
           intent: spec.intent,
           acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
@@ -275,6 +279,7 @@ export class SQLiteV2Store {
             acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
             testStrategy: spec.testStrategy,
             milestoneId: spec.milestoneId ?? null,
+            logicalRefs: [...(spec.logicalRefs ?? [])],
           },
         };
 
@@ -314,8 +319,10 @@ export class SQLiteV2Store {
       const project = this.getProject(projectId);
       this.updateProject(projectId, project.version, {
         deliveryPlanVersion: (project.deliveryPlanVersion ?? 0) + 1,
-        deliveryRootTaskId: plan.rootTaskId,
+        deliveryRootTaskId: plan.rootTaskId ?? null,
         deliveryPlanSummary: plan.projectSummary ?? '',
+        logicalRootId: plan.logicalRootId ?? null,
+        logicalNodes: structuredClone(plan.logicalNodes ?? []),
         milestones: structuredClone(plan.milestones ?? []),
       });
 
