@@ -235,11 +235,9 @@ export class SQLiteV2Store {
     });
   }
 
-  applyDeliveryPlan(projectId, plan, { executionTasks = null } = {}) {
+  applyDeliveryPlan(projectId, plan) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
-    const deliverySpecs = Array.isArray(executionTasks) && executionTasks.length > 0
-      ? executionTasks
-      : plan?.tasks;
+    const deliverySpecs = plan?.tasks;
     if (!plan?.rootTaskId || !Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
       throw new Error('delivery plan requires rootTaskId and tasks');
     }
@@ -270,17 +268,13 @@ export class SQLiteV2Store {
           intent: spec.intent,
           acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
           testStrategy: spec.testStrategy,
-          origin: spec.origin ?? existing?.origin ?? 'logical',
           milestoneId: spec.milestoneId ?? null,
-          milestoneKind: spec.milestoneKind ?? null,
           input: {
             ...(existing?.input ?? {}),
             intent: spec.intent,
             acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
             testStrategy: spec.testStrategy,
-            origin: spec.origin ?? existing?.origin ?? 'logical',
             milestoneId: spec.milestoneId ?? null,
-            milestoneKind: spec.milestoneKind ?? null,
           },
         };
 
@@ -289,7 +283,7 @@ export class SQLiteV2Store {
             id: spec.id,
             projectId,
             scope: 'delivery',
-            stage: spec.stage ?? 'developer',
+            stage: 'developer',
             state: 'READY',
             history: structuredClone(spec.history ?? []),
             artifacts: [],
@@ -311,9 +305,8 @@ export class SQLiteV2Store {
         this.updateTask(existing.id, existing.version, {
           ...patch,
           history: [...existingHistory, ...structuredClone(appendedHistory)],
-          // Preserve execution progress for stable task ids across replans. A task
-          // reactivated by planning restarts at the compiler-selected initial stage.
-          stage: resetForPlan ? (spec.stage ?? 'developer') : existing.stage,
+          // Preserve execution progress for stable task ids across replans.
+          stage: resetForPlan ? 'developer' : existing.stage,
           state: resetForPlan ? 'READY' : existing.state,
         });
       }
