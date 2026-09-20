@@ -107,9 +107,15 @@ const REVIEWER_FRESH_EVIDENCE_PROMPT = [
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
 
+function plannerPublicPlan(plan) {
+  if (!plan) return null;
+  const { executionTasks, ...publicPlan } = plan;
+  return publicPlan;
+}
+
 function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
-  const currentPlan = latestPlanInFlow(store, task, artifactRoot);
+  const currentPlan = plannerPublicPlan(latestPlanInFlow(store, task, artifactRoot));
   const context = {
     project: {
       id: project.id,
@@ -127,8 +133,9 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   if (purpose === 'PLANNER_DEPENDENCIES') {
     return [
       'You are Ariad\'s Tech Lead dependency pass.',
-      'Take the supplied candidate plan, preserve its logical tree unless necessary, and return a complete corrected v2 plan.',
-      'Add only precise cross-branch dependsOn edges. Never repeat parent-child ordering.',
+      'Take the supplied candidate plan, preserve its logical tree and milestone tree unless correction is necessary, and return a complete corrected v2 plan.',
+      'Add only precise logical/work-task dependsOn edges and milestone dependsOn prerequisites. Never repeat parent-child ordering.',
+      'Enforce milestone direction: work in an earlier milestone must not depend on a later/non-prerequisite milestone.',
       buildTechLeadPrompt({ projectContext: context, schema: TECH_LEAD_PLAN_SCHEMA }),
     ].join('\n\n');
   }
@@ -152,7 +159,7 @@ function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
   return [
     'You are Ariad\'s delivery-plan critic.',
-    'Review the candidate v2 delivery plan and validator result. Focus on missing dependencies, over-broad serialization, bad hierarchy, missing integration/E2E responsibility, and tasks that are too large.',
+    'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone-tree quality, missing milestone connection/reconcile/test work, weak milestone acceptance tests, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
     'Return JSON only:',
     '{"executionStatus":"COMPLETED","outcome":"CLEAN|MINOR_ONLY|ISSUES","result":{"issues":[{"severity":"error|major|minor","message":"string"}],"summary":"string"}}',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
@@ -160,7 +167,7 @@ function criticPrompt({ store, project, task, artifactRoot }) {
       project: { id: project.id, spec: project.spec ?? null },
       round: task.input?.round ?? null,
       validation,
-      plan: validation?.plan ?? latestPlanInFlow(store, task, artifactRoot),
+      plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
     }, null, 2),
   ].join('\n\n');
 }
