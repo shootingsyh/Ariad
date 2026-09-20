@@ -56,6 +56,8 @@ class ProjectRuntime {
       this.store.createProject({
         id: project.id,
         spec: project.goal ?? null,
+        mode: project.mode ?? 'NEW',
+        sourcePath: project.sourcePath ?? null,
         workspace: project.workspace,
         pmBinding: `pm:${project.id}`,
       });
@@ -108,8 +110,21 @@ class ProjectRuntime {
     const hasTasks = this.store.listTasks(project.id).length > 0;
     const hasPlanning = this.store.listPlanningRequests(project.id).length > 0;
     if (!hasTasks && !hasPlanning) {
+      const mode = project.mode ?? 'NEW';
       const empty = workspaceIsEmpty(project.workspace);
-      if (empty) {
+      if (mode === 'TAKEOVER') {
+        this.store.enqueuePlanningRequest({
+          id: `bootstrap:${project.id}:takeover`,
+          projectId: project.id,
+          request: {
+            purpose: 'RESTORE_PROJECT_STATE',
+            goal: project.goal ?? null,
+            sourcePath: project.sourcePath ?? null,
+            instruction: 'Reconstruct this existing project into Ariad durable state, preserve/reuse valid work, and stop for human takeover review before any delivery work starts.',
+          },
+          context: { bootstrap: true, mode: 'TAKEOVER', sourcePath: project.sourcePath ?? null },
+        });
+      } else if (empty) {
         if (project.goal) {
           this.store.enqueuePlanningRequest({
             id: `bootstrap:${project.id}:goal`,
