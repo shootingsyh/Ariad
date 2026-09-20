@@ -1157,6 +1157,8 @@ test('applyDeliveryPlan materializes milestone test at tester stage', () => {
     assert.equal(testTask.milestoneId, 'M1');
     assert.equal(testTask.milestoneKind, 'test');
     assert.ok(testTask.dependsOn.includes('FEATURE'));
+    assert.equal(store.getProject('P-milestone').milestones[0].id, 'M1');
+    assert.equal(store.getProject('P-milestone').milestones[0].completionTaskId, 'M1_TEST');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
