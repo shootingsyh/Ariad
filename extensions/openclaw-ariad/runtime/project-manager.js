@@ -16,6 +16,14 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function ensureAriadGitignore(ariadDir) {
+  const file = join(ariadDir, '.gitignore');
+  if (!existsSync(file)) {
+    writeFileSync(file, 'state.db-wal\nstate.db-shm\nstate.db-journal\n', 'utf8');
+  }
+}
+
+
 export class AriadProjectManager {
   constructor({ projectsRoot, now = () => new Date() }) {
     if (!projectsRoot) throw new Error('projectsRoot is required');
@@ -51,6 +59,7 @@ export class AriadProjectManager {
       mkdirSync(p.ariad, { recursive: true });
     }
     const legacy = readJson(p.legacyManifest);
+    ensureAriadGitignore(p.ariad);
     if (!existsSync(p.manifest)) renameSync(p.legacyManifest, p.manifest);
     writeJson(p.manifest, {
       ...legacy,
@@ -65,6 +74,7 @@ export class AriadProjectManager {
     if (existsSync(p.manifest) || existsSync(p.legacyManifest)) throw new Error(`Ariad project already exists: ${p.id}`);
     mkdirSync(p.workspace, { recursive: true });
     mkdirSync(p.ariad, { recursive: true });
+    ensureAriadGitignore(p.ariad);
     if (!existsSync(join(p.workspace, '.git'))) {
       try {
         execFileSync('git', ['init', '-b', 'main'], { cwd: p.workspace, stdio: 'ignore' });
