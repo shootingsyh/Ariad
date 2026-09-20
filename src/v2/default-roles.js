@@ -76,6 +76,34 @@ function planningSkipIds(task, round) {
   return [];
 }
 
+function planningBatchRequests(store, task) {
+  const batchId = task.input?.planningBatchId;
+  if (!batchId) return [];
+  return store.listPlanningRequests(task.projectId).filter(item => item.batchId === batchId);
+}
+
+function isTakeoverPlanningTask(store, task) {
+  return planningBatchRequests(store, task).some(item => item.request?.purpose === 'RESTORE_PROJECT_STATE');
+}
+
+const DEVELOPER_REUSE_PROMPT = [
+  'Inspect task history before changing code.',
+  'If TAKEOVER_NOTE or other prior context points to existing implementation, inspect and reuse/fix/extend it when sensible; do not rewrite merely because this task exists in the current plan.',
+  'Historical completion is context only. Produce the current implementation required by the acceptance criteria.',
+].join(' ');
+
+const TESTER_REUSE_PROMPT = [
+  'Inspect task history and the existing test code before creating new tests.',
+  'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
+  'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
+  'Map each acceptance criterion to actual verification, and do not treat the existence of a similarly named test as sufficient coverage.',
+].join(' ');
+
+const REVIEWER_FRESH_EVIDENCE_PROMPT = [
+  'Treat TAKEOVER_NOTE and all historical implementation/test/review claims as context only.',
+  'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
+].join(' ');
+
 function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
   const currentPlan = latestPlanInFlow(store, task, artifactRoot);
@@ -172,12 +200,12 @@ export function createDefaultV2Roles({
 
   return {
     developer: {
-      prepare: ({ task }) => prepareLlm(task, null),
+      prepare: ({ task }) => prepareLlm(task, DEVELOPER_REUSE_PROMPT),
       transition: () => ({ stage: 'tester', state: 'READY' }),
     },
 
     tester: {
-      prepare: ({ task }) => prepareLlm(task, null, {
+      prepare: ({ task }) => prepareLlm(task, TESTER_REUSE_PROMPT, {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition: ({ task, result }) => {
@@ -192,7 +220,7 @@ export function createDefaultV2Roles({
     },
 
     reviewer: {
-      prepare: ({ task }) => prepareLlm(task, null, {
+      prepare: ({ task }) => prepareLlm(task, REVIEWER_FRESH_EVIDENCE_PROMPT, {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition({ task, result }) {
@@ -331,15 +359,20 @@ export function createDefaultV2Roles({
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
         const validation = predecessorResults(store, task)[0]?.result ?? null;
+        const takeover = isTakeoverPlanningTask(store, task);
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
+          takeover
+            ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
+            : null,
           'Return JSON only:',
           '{"executionStatus":"COMPLETED","outcome":"PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","questions":["string"]}}',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null },
+            takeover,
             plan: validation?.plan ?? latestPlanInFlow(store, task, artifactRoot),
           }, null, 2),
-        ].join('\n\n');
+        ].filter(Boolean).join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
       },
       transition: ({ task, result }) => {
@@ -347,6 +380,20 @@ export function createDefaultV2Roles({
           const plan = latestPlanInFlow(store, task, artifactRoot);
           validateTechLeadPlan(plan);
           store.applyDeliveryPlan(task.projectId, plan);
+          const takeover = isTakeoverPlanningTask(store, task);
+          const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
+          if (takeover && !hasHumanDecision) {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'TAKEOVER_REVIEW',
+                role: 'pm',
+                summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
           return { state: 'DONE' };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
