@@ -500,6 +500,11 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /stop for human review/i);
   assert.match(prompt, /earlier\/non-prerequisite milestones must not depend on later milestone work/i);
   assert.match(prompt, /another TL could pick this project up/i);
+  assert.match(prompt, /project-wide, not milestone-local/i);
+  assert.match(prompt, /complete currently-known route to project completion/i);
+  assert.match(prompt, /should normally allow Ariad to continue into the next already-planned milestone/i);
+  assert.match(prompt, /Do not create routine human gates between milestones/i);
+  assert.match(prompt, /plan reaches the project root/i);
 });
 
 
