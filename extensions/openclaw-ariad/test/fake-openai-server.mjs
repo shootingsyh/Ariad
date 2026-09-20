@@ -158,7 +158,8 @@ function fakeV2Plan() {
 
 function isV2PlanningPrompt(request) {
   const text = requestText(request);
-  return /delivery tree|dependency pass|repair pass/i.test(text) && /"version"\s*:\s*\{\s*"const"\s*:\s*2/.test(text);
+  return /delivery tree|dependency pass|repair pass|PLANNER ARTIFACT TRANSPORT/i.test(text)
+    && (/"version"\s*:\s*\{\s*"const"\s*:\s*2/.test(text) || /PLANNER ARTIFACT TRANSPORT/i.test(text));
 }
 
 function isV2CriticPrompt(request) {
