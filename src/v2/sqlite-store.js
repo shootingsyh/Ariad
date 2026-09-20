@@ -282,7 +282,7 @@ export class SQLiteV2Store {
             scope: 'delivery',
             stage: 'developer',
             state: 'READY',
-            history: [],
+            history: structuredClone(spec.history ?? []),
             artifacts: [],
             execution: null,
             ...patch,
@@ -294,8 +294,13 @@ export class SQLiteV2Store {
           throw new Error(`delivery plan task id collides outside project delivery graph: ${spec.id}`);
         }
 
+        const existingHistory = existing.history ?? [];
+        const incomingHistory = spec.history ?? [];
+        const serializedExisting = new Set(existingHistory.map(entry => JSON.stringify(entry)));
+        const appendedHistory = incomingHistory.filter(entry => !serializedExisting.has(JSON.stringify(entry)));
         this.updateTask(existing.id, existing.version, {
           ...patch,
+          history: [...existingHistory, ...structuredClone(appendedHistory)],
           // Preserve execution progress for stable task ids across replans.
           state: ['OBSOLETE', 'WAITING_REPLAN'].includes(existing.state) ? 'READY' : existing.state,
         });
