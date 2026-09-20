@@ -498,7 +498,7 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /TAKEOVER_NOTE/);
   assert.match(prompt, /fresh verification/i);
   assert.match(prompt, /stop for human review/i);
-  assert.match(prompt, /child milestones complete before parent integration work/i);
+  assert.match(prompt, /children complete before parent integration work/i);
   assert.match(prompt, /another TL could pick this project up/i);
   assert.match(prompt, /project-wide, not milestone-local/i);
   assert.match(prompt, /complete currently-known route to project completion/i);
