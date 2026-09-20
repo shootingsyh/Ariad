@@ -20,7 +20,16 @@ export function bootstrapProject({ store, projectId, directoryEmpty, flowId = `b
     projectId,
     request: {
       purpose: 'RESTORE_PROJECT_STATE',
-      instruction: 'Inspect the existing repository, reconstruct the delivery tree and dependencies, and preserve valid existing work.',
+      instruction: [
+        'Take over this existing repository.',
+        'If durable Ariad state already exists, resume from it instead of reconstructing the project.',
+        'Otherwise, first look for existing plans, roadmaps, milestone documents, architecture docs, tests, and project history and reuse them when they remain valid.',
+        'Reconstruct the complete logical feature/component tree and milestone structure before delivery starts. If no reliable plan exists, infer project intent and current state from code, tests, docs, and git history.',
+        'Preserve and reuse valid existing implementation and tests. Existing code is not a reason to rewrite; existing tests should be inspected, corrected/extended/removed only when needed, and then freshly rerun.',
+        'Record per-task takeover findings as task history notes so Developer and Tester receive the prior context naturally.',
+        'Generate/update the human-readable Ariad takeover/project documents needed to explain project intent, logical structure, milestones, architecture, test strategy, uncertainty, and the proposed next work.',
+        'After reconstruction, stop for human takeover review before normal delivery proceeds.',
+      ].join(' '),
     },
     context: { bootstrap: true },
   });
