@@ -19,6 +19,11 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
       frontdeskBinding: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha' },
     });
     const beta = manager.create('Beta Project', { goal: 'build beta' });
+    const takeover = manager.create('Takeover Project', {
+      goal: 'assess existing repo',
+      mode: 'TAKEOVER',
+      sourcePath: join(dir, 'existing-repo'),
+    });
 
     assert.equal(alpha.id, 'alpha-project');
     assert.equal(beta.id, 'beta-project');
@@ -33,6 +38,8 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.ok(existsSync(join(beta.workspace, '.ariad', 'project.json')));
     assert.equal(alpha.desiredState, 'STOPPED');
     assert.equal(beta.desiredState, 'STOPPED');
+    assert.equal(takeover.mode, 'TAKEOVER');
+    assert.equal(takeover.sourcePath, join(dir, 'existing-repo'));
 
     manager.setDesiredState('alpha-project', 'RUNNING');
     assert.equal(manager.status('alpha-project').desiredState, 'RUNNING');
@@ -43,8 +50,10 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.equal(manager.status('beta-project').desiredState, 'RUNNING', 'stopping one project must not affect another');
 
     const listed = manager.list();
-    assert.deepEqual(listed.map((p) => p.id).sort(), ['alpha-project', 'beta-project']);
+    assert.deepEqual(listed.map((p) => p.id).sort(), ['alpha-project', 'beta-project', 'takeover-project']);
     assert.match(readFileSync(join(beta.workspace, '.ariad', 'project.json'), 'utf8'), /build beta/);
+    assert.throws(() => manager.create('Bad Mode', { mode: 'RESTORE' }), /invalid project mode/);
+
     assert.deepEqual(manager.status('alpha-project').frontdeskBinding, {
       host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha',
     });
