@@ -67,12 +67,11 @@ export class GitSourceControlFinalizer {
   async finalize({ taskId, strategyEpoch, devCycle }) {
     try {
       runGit(this.workspace, ['rev-parse', '--is-inside-work-tree']);
-      runGit(this.workspace, [
-        'add', '-A', '--', '.',
-        ':(exclude).ariad/state.db-wal',
-        ':(exclude).ariad/state.db-shm',
-        ':(exclude).ariad/state.db-journal',
-      ]);
+      // Normal product staging respects repository ignore rules, including
+      // .ariad/.gitignore for transient SQLite sidecars.
+      runGit(this.workspace, ['add', '-A']);
+      // Ariad durable state is first-class project data even if the product
+      // repository historically ignored .ariad/.
       stageAriadState(this.workspace);
 
       const staged = runGit(this.workspace, ['diff', '--cached', '--name-only']);
