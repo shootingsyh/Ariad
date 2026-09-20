@@ -268,8 +268,6 @@ export default defineFeaturePlugin({
             details = { action, project: v2Service.status(name) };
           } else if (action === 'adopt') {
             if (!sourcePath) throw new Error('sourcePath is required for action adopt');
-            const project = manager.status(name);
-            if (project.desiredState !== 'STOPPED') throw new Error('project must be STOPPED before adoption');
             details = { action, project: manager.adopt(name, sourcePath) };
           } else if (action === 'start') {
             details = { action, project: await v2Service.ensureRunning(name) };
