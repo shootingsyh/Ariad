@@ -237,12 +237,15 @@ export class SQLiteV2Store {
 
   applyDeliveryPlan(projectId, plan) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
-    if (!plan?.rootTaskId || !Array.isArray(plan.tasks) || plan.tasks.length === 0) {
+    const deliverySpecs = Array.isArray(plan?.executionTasks) && plan.executionTasks.length > 0
+      ? plan.executionTasks
+      : plan?.tasks;
+    if (!plan?.rootTaskId || !Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
       throw new Error('delivery plan requires rootTaskId and tasks');
     }
 
-    const incoming = new Map(plan.tasks.map(task => [task.id, task]));
-    if (incoming.size !== plan.tasks.length) throw new Error('delivery plan contains duplicate task ids');
+    const incoming = new Map(deliverySpecs.map(task => [task.id, task]));
+    if (incoming.size !== deliverySpecs.length) throw new Error('delivery plan contains duplicate task ids');
 
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -258,7 +261,7 @@ export class SQLiteV2Store {
         });
       }
 
-      for (const spec of plan.tasks) {
+      for (const spec of deliverySpecs) {
         const existing = this.getTask(spec.id);
         const patch = {
           parentId: spec.parentId ?? null,
@@ -267,11 +270,17 @@ export class SQLiteV2Store {
           intent: spec.intent,
           acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
           testStrategy: spec.testStrategy,
+          origin: spec.origin ?? existing?.origin ?? 'logical',
+          milestoneId: spec.milestoneId ?? null,
+          milestoneKind: spec.milestoneKind ?? null,
           input: {
             ...(existing?.input ?? {}),
             intent: spec.intent,
             acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
             testStrategy: spec.testStrategy,
+            origin: spec.origin ?? existing?.origin ?? 'logical',
+            milestoneId: spec.milestoneId ?? null,
+            milestoneKind: spec.milestoneKind ?? null,
           },
         };
 
@@ -280,7 +289,7 @@ export class SQLiteV2Store {
             id: spec.id,
             projectId,
             scope: 'delivery',
-            stage: 'developer',
+            stage: spec.stage ?? 'developer',
             state: 'READY',
             history: structuredClone(spec.history ?? []),
             artifacts: [],
@@ -298,11 +307,14 @@ export class SQLiteV2Store {
         const incomingHistory = spec.history ?? [];
         const serializedExisting = new Set(existingHistory.map(entry => JSON.stringify(entry)));
         const appendedHistory = incomingHistory.filter(entry => !serializedExisting.has(JSON.stringify(entry)));
+        const resetForPlan = ['OBSOLETE', 'WAITING_REPLAN'].includes(existing.state);
         this.updateTask(existing.id, existing.version, {
           ...patch,
           history: [...existingHistory, ...structuredClone(appendedHistory)],
-          // Preserve execution progress for stable task ids across replans.
-          state: ['OBSOLETE', 'WAITING_REPLAN'].includes(existing.state) ? 'READY' : existing.state,
+          // Preserve execution progress for stable task ids across replans. A task
+          // reactivated by planning restarts at the compiler-selected initial stage.
+          stage: resetForPlan ? (spec.stage ?? 'developer') : existing.stage,
+          state: resetForPlan ? 'READY' : existing.state,
         });
       }
 
