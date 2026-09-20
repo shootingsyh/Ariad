@@ -1,6 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
 function runGit(workspace, args) {
   return execFileSync('git', args, {
@@ -16,19 +14,20 @@ function failureMessage(error) {
   return stderr || stdout || error?.message || String(error);
 }
 
-function ariadPaths(workspace) {
-  return [
-    '.ariad/project.json',
-    '.ariad/state.db',
-    '.ariad/artifacts',
-  ].filter(path => existsSync(join(workspace, path)));
-}
-
 function stageAriadState(workspace) {
-  const paths = ariadPaths(workspace);
-  if (paths.length === 0) return [];
-  runGit(workspace, ['add', '-f', '--', ...paths]);
-  return paths;
+  try {
+    runGit(workspace, [
+      'add', '-f', '-A', '--', '.ariad',
+      ':(exclude).ariad/state.db-wal',
+      ':(exclude).ariad/state.db-shm',
+      ':(exclude).ariad/state.db-journal',
+    ]);
+    return ['.ariad'];
+  } catch (error) {
+    const message = failureMessage(error);
+    if (/pathspec .*\.ariad.* did not match/i.test(message)) return [];
+    throw error;
+  }
 }
 
 
