@@ -50,6 +50,7 @@ export class AriadProjectManager {
   }
 
   migrateLegacyLayout(name) {
+    if (!['NEW', 'TAKEOVER'].includes(mode)) throw new Error(`invalid project mode: ${mode}`);
     const p = this.paths(name);
     if (existsSync(p.manifest) || !existsSync(p.legacyManifest)) return p;
     mkdirSync(p.workspace, { recursive: true });
@@ -69,7 +70,7 @@ export class AriadProjectManager {
     return p;
   }
 
-  create(name, { goal = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
+  create(name, { goal = null, mode = 'NEW', sourcePath = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
     const p = this.paths(name);
     if (existsSync(p.manifest) || existsSync(p.legacyManifest)) throw new Error(`Ariad project already exists: ${p.id}`);
     mkdirSync(p.workspace, { recursive: true });
@@ -87,6 +88,8 @@ export class AriadProjectManager {
       id: p.id,
       name: String(name),
       goal,
+      mode,
+      sourcePath: sourcePath ? resolve(sourcePath) : null,
       createdAt,
       workspace: p.workspace,
       stateDb: p.db,
