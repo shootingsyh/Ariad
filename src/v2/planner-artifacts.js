@@ -241,7 +241,8 @@ export function validatePlannerArtifactPlan(plan) {
       ...milestone.dependsOn,
     ];
     const derived = prerequisiteMilestoneIds.flatMap(id => milestoneState.byId.get(id).tasks.map(task => task.id));
-    for (const task of milestone.tasks) {
+    for (const milestoneTask of milestone.tasks) {
+      const task = taskById.get(milestoneTask.id);
       task.dependsOn = [...new Set([...task.dependsOn, ...derived])];
     }
   }
