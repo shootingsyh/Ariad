@@ -135,7 +135,7 @@ try {
 
   const projectRoot = join(projectsRoot, 'v2-production');
   const workspace = join(projectRoot, 'workspace');
-  const dbPath = join(projectRoot, '.ariad', 'state.db');
+  const dbPath = join(workspace, '.ariad', 'state.db');
 
   assert.equal(existsSync(join(workspace, 'health.txt')), true);
   assert.equal(readFileSync(join(workspace, 'health.txt'), 'utf8'), 'status=healthy\ncycle=2\n');
