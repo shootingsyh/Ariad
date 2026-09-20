@@ -41,6 +41,9 @@ test('git finalizer commits workspace changes without pushing when disabled', as
 test('state checkpoint commits only .ariad and leaves unfinished product changes uncommitted', async () => {
   const dir = initRepo();
   try {
+    writeFileSync(join(dir, '.gitignore'), '.ariad/\n');
+    git(dir, ['add', '.gitignore']);
+    git(dir, ['-c', 'user.name=Seed', '-c', 'user.email=seed@localhost', 'commit', '-m', 'ignore runtime state']);
     mkdirSync(join(dir, '.ariad', 'artifacts'), { recursive: true });
     writeFileSync(join(dir, '.ariad', 'project.json'), '{"id":"P1"}\n');
     writeFileSync(join(dir, '.ariad', 'state.db'), 'db-state');
