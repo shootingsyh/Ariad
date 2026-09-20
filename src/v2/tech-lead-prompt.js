@@ -36,65 +36,39 @@ When the planning request is a takeover/restore of an existing repository:
 
 PLANNING METHOD
 
-For every newly generated plan, produce BOTH a logical feature/component tree and a milestone tree. They are orthogonal views of the same project.
+Keep the model simple and durable. The Tech Lead has freedom to shape milestones and integration work as long as the project remains understandable and executable.
 
 PASS 1 — LOGICAL TREE
-Build the logical feature/component/capability tree first.
-- Start from whole-project completion.
-- Split by coherent product/system responsibility.
-- Continue until leaves are focused enough to implement and test.
-- Do not name logical nodes M1/M2/etc. Logical nodes describe WHAT the project is.
-- Do not use milestones or dependencies to compensate for a poor logical tree.
-- Shared technical foundations may be siblings of product features if that reflects the project structure.
-- Cross-cutting product behavior belongs at the lowest logical ancestor that truly owns it.
-- The single logical root is project completion and must NOT be assigned inside a milestone.
+Build the logical feature/component/capability tree.
+- Logical nodes describe WHAT the project is: features, components, capabilities, subsystems, and focused work.
+- Do not use M1/M2/etc. as logical node names.
+- Keep the tree coherent enough that a future Tech Lead can pick the project back up.
+- The single logical root represents whole-project completion and does not belong to a milestone.
 
-PASS 2 — MILESTONE TREE
-Build a separate milestone tree describing HOW the project is integrated and accepted over time.
-- A milestone is not a feature/component node. It has its own goal, acceptance criteria, and test strategy.
-- parentId organizes milestone hierarchy. It is grouping, not temporal ordering.
-- dependsOn expresses temporal milestone prerequisites.
-- logicalTaskIds are references to logical-tree nodes delivered/validated in this milestone. Do not duplicate those logical nodes.
-- A logical task may belong to at most one milestone.
-- A milestone may own additional workTasks that do not belong in the logical tree:
-  - kind=connection for cross-component wiring/integration,
-  - kind=reconcile for resolving interfaces/state/data/behavior across completed logical work,
-  - kind=test for milestone-level smoke/integration/E2E acceptance.
-- completionTaskId MUST identify one of that milestone's kind=test workTasks. That test is the milestone completion gate.
-- The completion test should verify the milestone goal as a working integrated result, not merely count completed child tasks.
-- Parent milestone completion implicitly waits for child milestone completion.
-- Prefer a small number of meaningful milestones. Do not turn every task into a milestone.
-- Existing projects with useful historical milestones should preserve/reconcile them rather than inventing a completely new phase structure without reason.
+PASS 2 — MILESTONE STRUCTURE
+Describe meaningful delivery/integration checkpoints.
+- Milestones are a separate project view, not logical-tree parents.
+- Each milestone has id/title/goal, optional parentId hierarchy, prerequisite milestone dependsOn, logicalTaskIds, acceptanceCriteria, and testStrategy.
+- Ordinary tasks may also carry milestoneId. If a milestone needs connection, reconciliation, migration, integration, smoke-test, E2E, or other work, create ordinary tasks for that work and assign them to the milestone.
+- Do NOT force every milestone to have a special synthetic completion node or a prescribed set of task kinds.
+- Do NOT turn every task into a milestone. Use milestones where they improve project recovery, integration, and validation.
+- For existing projects, preserve/reconcile useful historical milestone structure when possible.
 
 PASS 3 — EXECUTION DEPENDENCIES
-Now inspect logical nodes and milestone-owned nodes and ask:
-"What work outside this node's own logical children must already be DONE before this node can sensibly begin?"
+Add only dependencies that are truly required.
+- Prefer the narrowest stable prerequisite.
+- Never repeat logical parent/child ordering in dependsOn.
+- Cross-milestone direction must make sense: a task in an earlier/non-prerequisite milestone must not depend on work in a later milestone.
+- If task A in milestone M2 depends on task B in M1, M1 should be a prerequisite of M2 (directly or transitively).
+- Within those constraints, use engineering judgment. Do not over-serialize independent work.
 
-Add dependsOn only for those requirements.
-- Prefer dependency on the narrowest stable prerequisite.
-- If consumers only need an interface/contract, depend on the interface task, not the entire provider feature.
-- A fake implementation can unblock integration before the real implementation is ready.
-- Avoid coarse edges such as "UI depends on Backend" when only specific integration nodes need a backend contract.
-- Avoid redundant transitive dependencies unless they communicate an independently required artifact.
-- Watch high fan-out primitives such as interfaces/contracts; these often should be early runnable leaves because many branches depend on them.
-- Never add parentId as a dependsOn entry.
-- Milestone dependencies are phase gates: work in a later milestone may depend on the completion test of an earlier prerequisite milestone.
-- An earlier milestone MUST NOT depend on tasks that belong to a later/non-prerequisite milestone.
-- When a cross-milestone task dependency is necessary, the dependency milestone must also be reachable through milestone dependsOn. The validator enforces this.
-
-PASS 4 — GRAPH REVIEW
-Review the compiled execution DAG mentally before emitting JSON.
-- Ensure there is exactly one logical root.
-- Ensure every non-root logical node has one valid logical parent.
-- Ensure milestone parent links form an acyclic tree/forest and milestone dependsOn links form an acyclic prerequisite graph.
-- Ensure milestone-owned connection/reconcile/test nodes are not inserted into the logical feature tree.
-- Ensure every completionTaskId is a real milestone-owned test node.
-- Ensure no dependency references an unknown node.
-- Ensure no cycle can be formed by logical child -> parent edges, explicit task dependencies, milestone phase gates, milestone completion gates, and parent-milestone completion.
-- Look for missing interface/contract prerequisites.
-- Look for dependencies that are too broad and unnecessarily serialize independent work.
-- Look for a leaf that is actually too large and should be decomposed.
-- Make sure milestone tests prove useful integrated outcomes and that completing all milestones would actually make the logical project root complete.
+PASS 4 — REVIEW FOR CONTINUITY
+Before emitting the plan, ask whether another Tech Lead could pick it up and keep going.
+- Is the logical tree understandable?
+- Are milestone goals meaningful and recoverable from durable state?
+- Are dependencies acyclic and directionally sensible?
+- Is integration/testing responsibility represented somewhere, without forcing unnecessary ceremony?
+- Would finishing the planned work actually advance the project toward its goal?
 
 TASK QUALITY
 
@@ -108,16 +82,14 @@ Every logical task must include:
 - testStrategy: how this node will be validated during its TEST phase
 - history: optional prior-context entries. During takeover, use TAKEOVER_NOTE entries to record reusable existing implementation/tests and uncertainty; never use them as proof that current acceptance passed.
 
-Every new plan must also include milestones. Each milestone includes:
+New plans should normally include milestones when the project is substantial enough to benefit from staged delivery/recovery. Each milestone includes:
 - id/title/goal
-- parentId for milestone hierarchy
-- dependsOn for earlier milestone prerequisites
-- logicalTaskIds referencing logical-tree nodes
-- milestone-owned workTasks for connection/reconcile/test work
-- completionTaskId pointing at its milestone-level test gate
-- acceptanceCriteria and testStrategy for the milestone as an integrated product state
+- optional parentId hierarchy
+- dependsOn for prerequisite milestones
+- logicalTaskIds referencing relevant logical-tree work
+- acceptanceCriteria and testStrategy for the milestone as an integrated checkpoint
 
-Milestone workTasks use the same acceptance/test discipline as logical tasks. A kind=test milestone task starts at TEST rather than DEV in the compiled execution graph.
+Ordinary tasks may carry milestoneId. Use normal tasks for whatever milestone-specific integration/test/reconcile work is actually needed; do not manufacture task categories just to satisfy the schema.
 
 Do not emit commentary, markdown, prose before or after the JSON.
 Return exactly one JSON object conforming to the schema.
