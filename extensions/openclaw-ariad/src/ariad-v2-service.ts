@@ -122,7 +122,7 @@ class ProjectRuntime {
             sourcePath: project.sourcePath ?? null,
             instruction: 'Reconstruct this existing project into Ariad durable state, preserve/reuse valid work, and stop for human takeover review before any delivery work starts.',
           },
-          context: { bootstrap: true, mode: 'TAKEOVER', sourcePath: project.sourcePath ?? null },
+          context: { bootstrap: true, mode: 'TAKEOVER', sourcePath: project.sourcePath ?? null } as any,
         });
       } else if (empty) {
         if (project.goal) {
