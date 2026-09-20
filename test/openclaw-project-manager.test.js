@@ -225,3 +225,27 @@ test('adopt refuses to hide product files created in the isolated workspace', ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('adopt can register an untracked existing repository as a TAKEOVER project', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-adopt-register-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+  try {
+    const target = join(dir, 'existing-repo');
+    mkdirSync(join(target, '.git'), { recursive: true });
+    writeFileSync(join(target, 'README.md'), '# existing\n');
+
+    assert.deepEqual(manager.list(), []);
+    const adopted = manager.adopt('srpg', target);
+    assert.equal(adopted.id, 'srpg');
+    assert.equal(adopted.mode, 'TAKEOVER');
+    assert.equal(adopted.adopted, true);
+    assert.equal(adopted.workspace, target);
+    assert.equal(adopted.sourcePath, target);
+    assert.ok(existsSync(join(target, '.ariad', 'project.json')));
+    assert.ok(existsSync(join(dir, 'projects', 'srpg', 'project-ref.json')));
+    assert.equal(manager.list().length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
