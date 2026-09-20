@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AriadProjectManager, slugify } from '../extensions/openclaw-ariad/runtime/project-manager.js';
@@ -27,6 +27,10 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.notEqual(alpha.stateDb, beta.stateDb);
     assert.ok(existsSync(join(alpha.root, 'workspace')));
     assert.ok(existsSync(join(beta.root, 'workspace')));
+    assert.equal(alpha.stateDb, join(alpha.workspace, '.ariad', 'state.db'));
+    assert.equal(beta.stateDb, join(beta.workspace, '.ariad', 'state.db'));
+    assert.ok(existsSync(join(alpha.workspace, '.ariad', 'project.json')));
+    assert.ok(existsSync(join(beta.workspace, '.ariad', 'project.json')));
     assert.equal(alpha.desiredState, 'STOPPED');
     assert.equal(beta.desiredState, 'STOPPED');
 
@@ -40,7 +44,7 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
 
     const listed = manager.list();
     assert.deepEqual(listed.map((p) => p.id).sort(), ['alpha-project', 'beta-project']);
-    assert.match(readFileSync(join(beta.root, 'project.json'), 'utf8'), /build beta/);
+    assert.match(readFileSync(join(beta.workspace, '.ariad', 'project.json'), 'utf8'), /build beta/);
     assert.deepEqual(manager.status('alpha-project').frontdeskBinding, {
       host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha',
     });
@@ -54,6 +58,37 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.equal(manager.status('alpha-project').desiredState, 'STOPPED');
     manager.unbindFrontdesk('alpha-project');
     assert.equal(manager.status('alpha-project').frontdeskBinding, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy host-side project state migrates into the workspace repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-openclaw-legacy-layout-'));
+  const projectsRoot = join(dir, 'projects');
+  const root = join(projectsRoot, 'legacy-layout');
+  const workspace = join(root, 'workspace');
+  const legacyAriad = join(root, '.ariad');
+  try {
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(legacyAriad, { recursive: true });
+    writeFileSync(join(root, 'project.json'), JSON.stringify({
+      id: 'legacy-layout',
+      name: 'Legacy Layout',
+      goal: 'migrate me',
+      workspace,
+      stateDb: join(legacyAriad, 'state.db'),
+      desiredState: 'STOPPED',
+      executionState: 'IDLE',
+    }));
+    writeFileSync(join(legacyAriad, 'state.db'), 'legacy-db');
+    const manager = new AriadProjectManager({ projectsRoot });
+    const project = manager.status('legacy-layout');
+    assert.equal(project.stateDb, join(workspace, '.ariad', 'state.db'));
+    assert.ok(existsSync(join(workspace, '.ariad', 'project.json')));
+    assert.ok(existsSync(join(workspace, '.ariad', 'state.db')));
+    assert.equal(existsSync(join(root, 'project.json')), false);
+    assert.equal(existsSync(join(root, '.ariad')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
