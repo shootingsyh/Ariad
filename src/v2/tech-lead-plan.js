@@ -35,6 +35,18 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
             items: { type: 'string', minLength: 1 },
           },
           testStrategy: { type: 'string', minLength: 1 },
+          history: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['type', 'summary'],
+              additionalProperties: true,
+              properties: {
+                type: { type: 'string', minLength: 1 },
+                summary: { type: 'string', minLength: 1 },
+              },
+            },
+          },
         },
       },
     },
@@ -88,6 +100,7 @@ export function validateTechLeadPlan(plan) {
       'dependsOn',
       'acceptanceCriteria',
       'testStrategy',
+      'history',
     ]);
     for (const key of Object.keys(task)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
 
@@ -99,6 +112,15 @@ export function validateTechLeadPlan(plan) {
     assertStringArray(task.dependsOn, `${path}.dependsOn`);
     assertStringArray(task.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
     assertString(task.testStrategy, `${path}.testStrategy`);
+    if (task.history != null) {
+      if (!Array.isArray(task.history)) fail(`${path}.history`, 'must be an array');
+      task.history.forEach((entry, historyIndex) => {
+        const historyPath = `${path}.history[${historyIndex}]`;
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(historyPath, 'must be an object');
+        assertString(entry.type, `${historyPath}.type`);
+        assertString(entry.summary, `${historyPath}.summary`);
+      });
+    }
 
     const normalizedTask = {
       id: task.id,
@@ -110,6 +132,7 @@ export function validateTechLeadPlan(plan) {
       intent: task.intent,
       acceptanceCriteria: [...task.acceptanceCriteria],
       testStrategy: task.testStrategy,
+      history: structuredClone(task.history ?? []),
     };
     byId.set(task.id, normalizedTask);
     normalized.push(normalizedTask);
@@ -156,6 +179,7 @@ export function validateTechLeadPlan(plan) {
         dependsOn: [...task.dependsOn],
         acceptanceCriteria: [...task.acceptanceCriteria],
         testStrategy: task.testStrategy,
+        history: structuredClone(task.history ?? []),
       })),
     },
   };
