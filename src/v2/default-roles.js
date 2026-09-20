@@ -83,6 +83,8 @@ function planningBatchRequests(store, task) {
 }
 
 function isTakeoverPlanningTask(store, task) {
+  const project = store.getProject(task.projectId);
+  if (project?.mode === 'TAKEOVER') return true;
   return planningBatchRequests(store, task).some(item => item.request?.purpose === 'RESTORE_PROJECT_STATE');
 }
 
@@ -120,6 +122,8 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
     project: {
       id: project.id,
       spec: project.spec ?? null,
+      mode: project.mode ?? 'NEW',
+      sourcePath: project.sourcePath ?? null,
       deliveryPlanSummary: project.deliveryPlanSummary ?? null,
     },
     planningRequests: task.input?.requests ?? [],
@@ -161,6 +165,7 @@ function criticPrompt({ store, project, task, artifactRoot }) {
     'You are Ariad\'s delivery-plan critic.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
+    'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
     'Return JSON only:',
     '{"executionStatus":"COMPLETED","outcome":"CLEAN|MINOR_ONLY|ISSUES","result":{"issues":[{"severity":"error|major|minor","message":"string"}],"summary":"string"}}',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
@@ -374,13 +379,14 @@ export function createDefaultV2Roles({
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
+          'For takeover, compare the known authoritative roadmap/docs and the logical tree against the milestone list. Do not accept if known later major scope is missing from milestones, or if the milestone list contains placeholder/unused/TBD entries instead of real checkpoints.',
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
           'Return JSON only:',
           '{"executionStatus":"COMPLETED","outcome":"PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","questions":["string"]}}',
           JSON.stringify({
-            project: { id: project.id, spec: project.spec ?? null },
+            project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
             plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
           }, null, 2),
