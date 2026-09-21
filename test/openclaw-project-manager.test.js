@@ -4,6 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AriadProjectManager, slugify } from '../extensions/openclaw-ariad/runtime/project-manager.js';
+import {
+  ARIAD_MODEL_ROLES,
+  requireCompleteRoleModels,
+} from '../extensions/openclaw-ariad/runtime/role-models.js';
 import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
 
 test('OpenClaw Ariad project manager isolates project folders and durable desired state', () => {
@@ -75,6 +79,40 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.equal(manager.status('alpha-project').desiredState, 'STOPPED');
     manager.unbindFrontdesk('alpha-project');
     assert.equal(manager.status('alpha-project').frontdeskBinding, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('Ariad role model policy is durable and supports partial per-role updates', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-openclaw-models-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+  try {
+    const initial = Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'llamacpp/qwen3.8-27b']));
+    const created = manager.create('Model Project', {
+      goal: 'model routing',
+      roleModels: initial,
+    });
+    assert.deepEqual(created.roleModels, initial);
+    assert.deepEqual(requireCompleteRoleModels(created.roleModels), initial);
+
+    const updated = manager.setRoleModels('model-project', {
+      pm: 'muse/muse-code',
+      project_debugger: 'openai-codex/gpt-5.6-codex',
+    });
+    assert.equal(updated.roleModels.pm, 'muse/muse-code');
+    assert.equal(updated.roleModels.project_debugger, 'openai-codex/gpt-5.6-codex');
+    assert.equal(updated.roleModels.developer, 'llamacpp/qwen3.8-27b');
+
+    assert.throws(
+      () => requireCompleteRoleModels({ developer: 'llamacpp/qwen3.8-27b' }),
+      /missing:/,
+    );
+    assert.throws(
+      () => manager.setRoleModels('model-project', { tester: 'qwen3.8-27b' }),
+      /explicit provider\/model ref/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
