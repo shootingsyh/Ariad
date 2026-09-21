@@ -1,4 +1,5 @@
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
+import { roleResultToolName } from './role-result-tools.js';
 
 type V2ExecutionSpec = {
   projectId: string;
@@ -47,6 +48,7 @@ export class OpenClawV2Provider {
       roleModelRef: modelRef,
       provider: selectedProvider,
       model: selectedModel,
+      ...(roleResultToolName(spec.role) ? { resultToolName: roleResultToolName(spec.role) } : {}),
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
       ...(typeof spec.context?.v2Prompt === 'string' ? { v2Prompt: spec.context.v2Prompt } : {}),
       ...(spec.workspace ? { workspace: spec.workspace } : {}),
