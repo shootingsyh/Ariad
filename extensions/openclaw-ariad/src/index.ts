@@ -38,6 +38,7 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
         '',
         'ARIAD RESULT CONTRACT',
         `Before ending this role, you MUST successfully call ${toolName} exactly once.`,
+        `Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT: ${String(context.attemptId ?? '')}`,
         'That tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
         'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
         'Once the tool accepts the result, it is sealed. Any text you produce afterward is informational only and is ignored by Ariad.',
