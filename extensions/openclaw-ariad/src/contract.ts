@@ -1,6 +1,16 @@
 import { Type } from 'typebox';
 import { defineFeatureContract } from 'openclaw/plugin-sdk/feature-contract';
 
+const RoleModelsSchema = Type.Object({
+  developer: Type.Optional(Type.String()),
+  tester: Type.Optional(Type.String()),
+  reviewer: Type.Optional(Type.String()),
+  project_debugger: Type.Optional(Type.String()),
+  tech_lead: Type.Optional(Type.String()),
+  tech_lead_critic: Type.Optional(Type.String()),
+  pm: Type.Optional(Type.String()),
+}, { additionalProperties: false });
+
 export const contract = defineFeatureContract({
   pluginId: 'ariad',
   operations: {
@@ -19,6 +29,8 @@ export const contract = defineFeatureContract({
           Type.Literal('bind_frontdesk'),
           Type.Literal('unbind_frontdesk'),
           Type.Literal('frontdesk_status'),
+          Type.Literal('models'),
+          Type.Literal('set_role_models'),
         ]),
         name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
         goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
@@ -30,6 +42,7 @@ export const contract = defineFeatureContract({
         decision: Type.Optional(Type.String({ description: 'User decision answering the current NEEDS_HUMAN request. Required for decide.' })),
         agentId: Type.Optional(Type.String({ description: 'OpenClaw agent id to bind as Frontdesk. Defaults to the calling agent.' })),
         sessionKey: Type.Optional(Type.String({ description: 'OpenClaw session key to bind as Frontdesk. Defaults to the calling session.' })),
+        roleModels: Type.Optional(RoleModelsSchema),
       }, { additionalProperties: false }),
       output: Type.Object({
         action: Type.String(),
