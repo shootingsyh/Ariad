@@ -55,6 +55,10 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
 
     manager.setDesiredState('alpha-project', 'RUNNING');
     assert.equal(manager.status('alpha-project').desiredState, 'RUNNING');
+    manager.setDesiredState('alpha-project', 'PAUSED');
+    assert.equal(manager.status('alpha-project').desiredState, 'PAUSED');
+    manager.setDesiredState('alpha-project', 'RUNNING');
+    assert.equal(manager.status('alpha-project').desiredState, 'RUNNING');
     assert.equal(manager.status('beta-project').desiredState, 'STOPPED');
     manager.setDesiredState('beta-project', 'RUNNING');
     manager.setDesiredState('alpha-project', 'STOPPED');

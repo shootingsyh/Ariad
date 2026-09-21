@@ -261,7 +261,7 @@ export class AriadProjectManager {
   }
 
   setDesiredState(name, desiredState) {
-    if (!['RUNNING', 'STOPPED'].includes(desiredState)) throw new Error(`invalid desired state: ${desiredState}`);
+    if (!['RUNNING', 'PAUSED', 'STOPPED'].includes(desiredState)) throw new Error(`invalid desired state: ${desiredState}`);
     return this.writeManifest(name, { desiredState });
   }
 

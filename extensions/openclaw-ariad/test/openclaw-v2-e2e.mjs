@@ -132,6 +132,16 @@ try {
     goal: 'Create a tiny deterministic health endpoint and verify it.',
   });
   gatewayCall('ariad.ci.project', { action: 'start', name: 'v2-production' });
+  const paused = gatewayCall('ariad.ci.project', { action: 'pause', name: 'v2-production' });
+  assert.match(paused, /"desiredState"\s*:\s*"PAUSED"/);
+
+  await new Promise(resolvePause => setTimeout(resolvePause, 1200));
+  const pausedStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
+  assert.match(pausedStatus, /"desiredState"\s*:\s*"PAUSED"/);
+  assert.doesNotMatch(pausedStatus, /"executionState"\s*:\s*"SUCCEEDED"/, 'pause must freeze scheduler before project completion');
+
+  const resumed = gatewayCall('ariad.ci.project', { action: 'resume', name: 'v2-production' });
+  assert.match(resumed, /"desiredState"\s*:\s*"RUNNING"/);
 
   let status = '';
   await waitFor(() => {

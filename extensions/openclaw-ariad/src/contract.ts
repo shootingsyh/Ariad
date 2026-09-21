@@ -17,7 +17,7 @@ export const contract = defineFeatureContract({
   operations: {
     project: {
       kind: 'action',
-      description: 'Create, list, inspect, start, stop, bind or unbind a project Frontdesk, inspect its binding, or answer a pending human decision. The creating conversation becomes the default Frontdesk binding.',
+      description: 'Create, list, inspect, start, pause, resume, stop, bind or unbind a project Frontdesk, inspect its binding, or answer a pending human decision. Pause is a direct control-plane action that freezes scheduling without cancelling in-flight role runs. The creating conversation becomes the default Frontdesk binding.',
       input: Type.Object({
         action: Type.Union([
           Type.Literal('create'),
@@ -25,6 +25,8 @@ export const contract = defineFeatureContract({
           Type.Literal('status'),
           Type.Literal('adopt'),
           Type.Literal('start'),
+          Type.Literal('pause'),
+          Type.Literal('resume'),
           Type.Literal('stop'),
           Type.Literal('decide'),
           Type.Literal('bind_frontdesk'),

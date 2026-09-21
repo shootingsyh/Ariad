@@ -332,10 +332,16 @@ const plugin = defineFeaturePlugin({
             return;
           }
           if (!input.name) throw new Error('name is required');
-          if (input.action === 'start') {
+          if (input.action === 'start' || input.action === 'resume') {
             const project = manager.status(input.name);
             assertModelOverridePolicy(project.roleModels as Record<string, string>);
-            respond(true, { project: await v2Service.ensureRunning(input.name) });
+            respond(true, { project: input.action === 'start'
+              ? await v2Service.ensureRunning(input.name)
+              : await v2Service.ensureResumed(input.name) });
+            return;
+          }
+          if (input.action === 'pause') {
+            respond(true, { project: await v2Service.ensurePaused(input.name) });
             return;
           }
           if (input.action === 'status') {
@@ -401,13 +407,20 @@ const plugin = defineFeaturePlugin({
           } else if (action === 'adopt') {
             if (!sourcePath) throw new Error('sourcePath is required for action adopt');
             details = { action, project: manager.adopt(name, sourcePath) };
-          } else if (action === 'start') {
+          } else if (action === 'start' || action === 'resume') {
             const project = manager.status(name);
             const configuredRoleModels = requireCompleteRoleModels(
               (project.roleModels ?? {}) as Record<string, string>
             ) as Record<string, string>;
             assertModelOverridePolicy(configuredRoleModels);
-            details = { action, project: await v2Service.ensureRunning(name) };
+            details = {
+              action,
+              project: action === 'start'
+                ? await v2Service.ensureRunning(name)
+                : await v2Service.ensureResumed(name),
+            };
+          } else if (action === 'pause') {
+            details = { action, project: await v2Service.ensurePaused(name) };
           } else if (action === 'stop') {
             details = { action, project: await v2Service.ensureStopped(name) };
           } else if (action === 'bind_frontdesk') {

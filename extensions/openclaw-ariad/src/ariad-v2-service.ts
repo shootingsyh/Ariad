@@ -178,12 +178,12 @@ class ProjectRuntime {
     };
   }
 
-  async tick() {
+  async tick({ schedule = true }: { schedule?: boolean } = {}) {
     if (this.ticking) return;
     this.ticking = true;
     try {
       await this.supervisor.audit(this.projectId);
-      await this.scheduler.tick(this.projectId);
+      if (schedule) await this.scheduler.tick(this.projectId);
 
       const tasks = this.store.listTasks(this.projectId);
       const delivery = tasks.filter(task => task.scope === 'delivery');
@@ -419,6 +419,24 @@ export class AriadV2Service {
     return this.status(name);
   }
 
+  async ensurePaused(name: string) {
+    const current = this.manager.status(name);
+    if (current.desiredState === 'STOPPED') {
+      throw new Error(`project ${current.id} is STOPPED; start or resume it before pausing`);
+    }
+    this.manager.setDesiredState(name, 'PAUSED');
+    await this.reconcile();
+    return this.status(name);
+  }
+
+  async ensureResumed(name: string) {
+    const current = this.manager.status(name);
+    requireCompleteRoleModels(current.roleModels ?? {});
+    this.manager.setDesiredState(name, 'RUNNING');
+    await this.reconcile();
+    return this.status(name);
+  }
+
   async ensureStopped(name: string) {
     this.manager.setDesiredState(name, 'STOPPED');
     const runtime = this.runtimes.get(name);
@@ -442,7 +460,7 @@ export class AriadV2Service {
     }
 
     for (const project of this.manager.list()) {
-      if (project.desiredState !== 'RUNNING') continue;
+      if (!['RUNNING', 'PAUSED'].includes(project.desiredState)) continue;
       let runtime = this.runtimes.get(project.id);
       if (!runtime) {
         runtime = new ProjectRuntime({
@@ -475,7 +493,7 @@ export class AriadV2Service {
     const project = this.manager.status(binding.projectId);
     let runtime = this.runtimes.get(project.id);
     if (!runtime) {
-      if (project.desiredState !== 'RUNNING') throw new Error(`project ${project.id} is not running`);
+      if (!['RUNNING', 'PAUSED'].includes(project.desiredState)) throw new Error(`project ${project.id} is not running or paused`);
       runtime = new ProjectRuntime({
         manager: this.manager,
         project,
@@ -515,7 +533,7 @@ export class AriadV2Service {
     this.reconciling = true;
     try {
       for (const project of this.manager.list()) {
-        if (project.desiredState !== 'RUNNING') {
+        if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
             existing.close();
@@ -539,7 +557,7 @@ export class AriadV2Service {
         }
 
         try {
-          await runtime.tick();
+          await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
           const updated = this.manager.status(project.id);
           if (
             updated.executionState !== project.executionState &&
