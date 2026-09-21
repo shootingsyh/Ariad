@@ -165,7 +165,15 @@ class ProjectRuntime {
       },
       activeTasks: tasks
         .filter(task => !['DONE', 'SKIPPED', 'OBSOLETE'].includes(task.state))
-        .map(task => ({ id: task.id, stage: task.stage, state: task.state })),
+        .map(task => {
+          const interruption = [...(task.history ?? [])].reverse().find(entry => entry?.type === 'SYSTEM_INTERRUPTION');
+          return {
+            id: task.id,
+            stage: task.stage,
+            state: task.state,
+            ...(interruption?.failure ? { lastSystemFailure: interruption.failure } : {}),
+          };
+        }),
     };
   }
 
