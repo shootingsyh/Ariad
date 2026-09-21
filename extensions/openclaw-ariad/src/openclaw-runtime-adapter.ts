@@ -12,6 +12,7 @@ type RuntimeAdapterOptions = {
   renderMessage?: (role: string, context: Record<string, unknown>) => string;
   cancelRun?: (runId: string) => Promise<unknown> | unknown;
   pollTimeoutMs?: number;
+  onSessionBound?: (binding: { sessionKey: string; projectId: string; taskId: string; role: string; attemptId: string }) => void;
 };
 
 function parseJsonText(text: string): any {
@@ -50,6 +51,7 @@ export class OpenClawRuntimeAdapter {
   private readonly renderMessage: (role: string, context: Record<string, unknown>) => string;
   private readonly cancelRun?: (runId: string) => Promise<unknown> | unknown;
   private readonly pollTimeoutMs: number;
+  private readonly onSessionBound?: RuntimeAdapterOptions['onSessionBound'];
   private readonly sessions = new Map<string, string>();
 
   constructor(options: RuntimeAdapterOptions) {
@@ -61,6 +63,7 @@ export class OpenClawRuntimeAdapter {
     this.renderMessage = options.renderMessage ?? ((role, context) => JSON.stringify({ role, context }));
     this.cancelRun = options.cancelRun;
     this.pollTimeoutMs = options.pollTimeoutMs ?? 5_000;
+    this.onSessionBound = options.onSessionBound;
   }
 
   async install() {
@@ -88,7 +91,21 @@ export class OpenClawRuntimeAdapter {
       ...(this.model ? { model: this.model } : {}),
     });
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
-    this.sessions.set(launched.runId, launched.sessionKey ?? requestedSessionKey);
+    const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
+    this.sessions.set(launched.runId, boundSessionKey);
+    if (
+      typeof context.projectId === 'string'
+      && typeof context.taskId === 'string'
+      && typeof context.attemptId === 'string'
+    ) {
+      this.onSessionBound?.({
+        sessionKey: boundSessionKey,
+        projectId: context.projectId,
+        taskId: context.taskId,
+        role: input.role,
+        attemptId: context.attemptId,
+      });
+    }
     return { runtimeId: this.id, runId: input.runId, externalId: launched.runId, state: 'RUNNING' };
   }
 
