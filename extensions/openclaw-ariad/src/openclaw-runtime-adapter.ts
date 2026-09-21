@@ -113,6 +113,9 @@ export class OpenClawRuntimeAdapter {
       ...(workspace ? { cwd: workspace } : {}),
       ...(selectedProvider ? { provider: selectedProvider } : {}),
       ...(selectedModel ? { model: selectedModel } : {}),
+      ...(typeof context.resultToolName === 'string' && context.resultToolName.trim()
+        ? { toolsAlsoAllow: [context.resultToolName.trim()] }
+        : {}),
     });
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
