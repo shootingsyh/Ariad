@@ -1,3 +1,13 @@
+function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
+  if (!attemptId) return null;
+  return [...(task?.history ?? [])].reverse().find(
+    entry => entry?.type === 'ROLE_RESULT'
+      && entry?.source === 'role_result_tool'
+      && entry?.attemptId === attemptId
+      && entry?.role === task.stage
+  ) ?? null;
+}
+
 function systemFailureCount(task) {
   let count = 0;
   const history = task.history ?? [];
@@ -42,12 +52,7 @@ export class V2Supervisor {
       if (task.state !== 'WORKING') continue;
       const execution = task.execution;
 
-      const submittedResult = [...(task.history ?? [])].reverse().find(
-        entry => entry?.type === 'ROLE_RESULT'
-          && entry?.source === 'role_result_tool'
-          && entry?.attemptId === execution?.attemptId
-          && entry?.role === task.stage
-      );
+      const submittedResult = submittedRoleToolResult(task, execution?.attemptId);
       if (submittedResult) {
         const current = this.store.getTask(task.id);
         this.store.updateTask(task.id, current.version, {
@@ -88,6 +93,21 @@ export class V2Supervisor {
       if (status?.state === 'RUNNING' || status?.state === 'QUEUED') continue;
 
       const current = this.store.getTask(task.id);
+
+      // The role result tool can commit while waitForRun() is observing the
+      // provider's terminal turn. Re-check durable history after polling so a
+      // valid sealed result always wins over any prose emitted afterward.
+      const postPollSubmittedResult = submittedRoleToolResult(current, execution.attemptId);
+      if (postPollSubmittedResult) {
+        this.store.updateTask(task.id, current.version, {
+          state: 'RESULT_READY',
+          execution: null,
+          artifacts: [...(current.artifacts ?? []), ...(postPollSubmittedResult.artifacts ?? [])],
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
       if (status?.state === 'COMPLETED') {
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'ROLE_RESULT',
