@@ -54,6 +54,11 @@ function hasCalledTool(request, name) {
   );
 }
 
+function requestAttemptId(request) {
+  const text = requestText(request);
+  return text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1] ?? null;
+}
+
 function roleResultToolCall(request) {
   const role = requestRole(request);
   const name = roleResultTools[role];
