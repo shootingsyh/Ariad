@@ -34,6 +34,59 @@ function hasToolResult(request) {
   return (request.messages ?? []).some((message) => message?.role === 'tool');
 }
 
+const roleResultTools = {
+  developer: 'ariad_developer_result',
+  tester: 'ariad_tester_result',
+  reviewer: 'ariad_reviewer_result',
+  project_debugger: 'ariad_project_debugger_result',
+  tech_lead: 'ariad_tech_lead_result',
+  tech_lead_critic: 'ariad_tech_lead_critic_result',
+  pm: 'ariad_pm_result',
+};
+
+function requestToolNames(request) {
+  return new Set((request.tools ?? []).map((tool) => tool?.function?.name).filter(Boolean));
+}
+
+function hasCalledTool(request, name) {
+  return (request.messages ?? []).some((message) =>
+    (message?.tool_calls ?? []).some((call) => call?.function?.name === name)
+  );
+}
+
+function roleResultToolCall(request) {
+  const role = requestRole(request);
+  const name = roleResultTools[role];
+  if (!name || !requestToolNames(request).has(name) || hasCalledTool(request, name)) return null;
+
+  const taskId = requestTaskId(request);
+  const cycle = requestCycle(request);
+  const hasPriorToolWork = hasToolResult(request);
+  const canSubmitWithoutWorkTool = ['tech_lead_critic', 'pm'].includes(role);
+  if (!hasPriorToolWork && !canSubmitWithoutWorkTool) return null;
+
+  let outcome = 'PASS';
+  if (role === 'tech_lead') outcome = 'PLANNED';
+  else if (role === 'tech_lead_critic') outcome = 'CLEAN';
+  else if (role === 'pm') outcome = 'PLAN_ACCEPTED';
+  else if (role === 'reviewer' && taskId === 'T1' && cycle === 1) outcome = 'NOT_PASS';
+
+  let result = { source: 'fake-provider', cycle, taskId };
+  if (role === 'tech_lead_critic') result = { issues: [], summary: 'No substantive issues.' };
+  if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', guidance: '', questions: [] };
+
+  return {
+    name,
+    arguments: {
+      outcome,
+      summary: `${role} submitted structured result`,
+      keyPoints: [],
+      artifacts: [],
+      result,
+    },
+  };
+}
+
 function plannerArtifactTransport(request) {
   const text = requestText(request);
   const path = text.match(/exact file path using the file write tool:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
@@ -55,6 +108,8 @@ function isProjectExecutionRole(request) {
 }
 
 function toolCallFor(request) {
+  const roleResult = roleResultToolCall(request);
+  if (roleResult) return roleResult;
   if (hasToolResult(request)) return null;
   const artifact = plannerArtifactTransport(request);
   if (artifact) {
@@ -258,7 +313,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const reply = JSON.stringify(roleReply(request));
+    const role = requestRole(request);
+    const resultToolName = roleResultTools[role];
+    const reply = resultToolName && hasCalledTool(request, resultToolName)
+      ? '结构化结果已经通过 Ariad result tool 提交；这段自然语言只是结束语。'
+      : JSON.stringify(roleReply(request));
     if (request.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       streamChunk(res, { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'fake', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] });
