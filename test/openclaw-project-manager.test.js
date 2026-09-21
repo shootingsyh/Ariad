@@ -117,10 +117,19 @@ test('project ids cannot escape the configured projects root', () => {
   assert.throws(() => slugify('---'), /letters or numbers/);
 });
 
-test('OpenClaw plugin manifest owns exactly one Ariad tool and starts with Gateway', () => {
+test('OpenClaw plugin manifest declares project and role-result tools and starts with Gateway', () => {
   const manifest = JSON.parse(readFileSync(new URL('../extensions/openclaw-ariad/openclaw.plugin.json', import.meta.url), 'utf8'));
   assert.equal(manifest.id, 'ariad');
-  assert.deepEqual(manifest.contracts.tools, ['ariad_project']);
+  assert.deepEqual(manifest.contracts.tools, [
+    'ariad_project',
+    'ariad_developer_result',
+    'ariad_tester_result',
+    'ariad_reviewer_result',
+    'ariad_project_debugger_result',
+    'ariad_tech_lead_result',
+    'ariad_tech_lead_critic_result',
+    'ariad_pm_result',
+  ]);
   assert.equal(manifest.activation.onStartup, true);
 });
 
