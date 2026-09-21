@@ -13,9 +13,13 @@ type V2ExecutionSpec = {
 export class OpenClawV2Provider {
   readonly id = 'openclaw-v2';
   private readonly runtime: OpenClawRuntimeAdapter;
+  private readonly resolveModelRef?: (projectId: string, role: string) => string | null | undefined;
 
-  constructor(runtime: OpenClawRuntimeAdapter) {
+  constructor(runtime: OpenClawRuntimeAdapter, options: {
+    resolveModelRef?: (projectId: string, role: string) => string | null | undefined;
+  } = {}) {
     this.runtime = runtime;
+    this.resolveModelRef = options.resolveModelRef;
   }
 
   async start(spec: V2ExecutionSpec) {
@@ -27,10 +31,20 @@ export class OpenClawV2Provider {
       ? spec.attemptId
       : ['v2', spec.projectId, spec.taskId].join(':');
 
+    const modelRef = this.resolveModelRef?.(spec.projectId, spec.role) ?? null;
+    if (!modelRef) throw new Error(`No explicit Ariad model configured for role ${spec.role} in project ${spec.projectId}`);
+    const slash = modelRef.indexOf('/');
+    if (slash <= 0 || slash === modelRef.length - 1) throw new Error(`Invalid Ariad model ref: ${modelRef}`);
+    const selectedProvider = modelRef.slice(0, slash);
+    const selectedModel = modelRef.slice(slash + 1);
+
     const context = {
       ...(spec.context ?? {}),
       projectId: spec.projectId,
       taskId: spec.taskId,
+      roleModelRef: modelRef,
+      provider: selectedProvider,
+      model: selectedModel,
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
       ...(typeof spec.context?.v2Prompt === 'string' ? { v2Prompt: spec.context.v2Prompt } : {}),
       ...(spec.workspace ? { workspace: spec.workspace } : {}),
