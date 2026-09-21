@@ -2,16 +2,35 @@ import http from 'node:http';
 
 const port = Number(process.env.ARIAD_FAKE_PROVIDER_PORT || 18081);
 
+function messageText(message) {
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) return message.content.map((part) => part?.text ?? '').join(' ');
+  return '';
+}
+
 function requestText(request) {
-  return (request.messages ?? []).map((message) => {
-    if (typeof message?.content === 'string') return message.content;
-    if (Array.isArray(message?.content)) return message.content.map((part) => part?.text ?? '').join(' ');
-    return '';
-  }).join('\n');
+  return (request.messages ?? []).map(messageText).join('\n');
+}
+
+function currentTurnStart(request) {
+  const messages = request.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return i;
+  }
+  return 0;
+}
+
+function currentTurnMessages(request) {
+  return (request.messages ?? []).slice(currentTurnStart(request));
+}
+
+function currentPromptText(request) {
+  const messages = request.messages ?? [];
+  return messageText(messages[currentTurnStart(request)] ?? {});
 }
 
 function requestRole(request) {
-  const text = requestText(request);
+  const text = currentPromptText(request);
   if (/Ariad's Tech Lead/i.test(text) || /Tech Lead dependency pass/i.test(text) || /Tech Lead repair pass/i.test(text)) return 'tech_lead';
   if (/delivery-plan critic/i.test(text)) return 'tech_lead_critic';
   if (/PM reviewing a validated delivery plan/i.test(text)) return 'pm';
@@ -19,19 +38,19 @@ function requestRole(request) {
 }
 
 function requestCycle(request) {
-  return Number(requestText(request).match(/"devCycle":(\d+)/)?.[1] ?? 0);
+  return Number(currentPromptText(request).match(/"devCycle":(\d+)/)?.[1] ?? 0);
 }
 
 function requestTaskId(request) {
-  return requestText(request).match(/"taskId":"([^"]+)"/)?.[1] ?? null;
+  return currentPromptText(request).match(/"taskId":"([^"]+)"/)?.[1] ?? null;
 }
 
 function hasWorkspace(request) {
-  return /"workspace":"[^"]+"/.test(requestText(request));
+  return /"workspace":"[^"]+"/.test(currentPromptText(request));
 }
 
 function hasToolResult(request) {
-  return (request.messages ?? []).some((message) => message?.role === 'tool');
+  return currentTurnMessages(request).some((message) => message?.role === 'tool');
 }
 
 const roleResultTools = {
@@ -50,16 +69,28 @@ function requestToolNames(request) {
 }
 
 function hasCalledTool(request, name) {
-  return (request.messages ?? []).some((message) =>
+  return currentTurnMessages(request).some((message) =>
     (message?.tool_calls ?? []).some((call) => call?.function?.name === name)
   );
 }
 
 function requestAttemptId(request) {
-  const text = requestText(request);
+  const text = currentPromptText(request);
   return text.match(/Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT:\s*([^\n]+)/i)?.[1]?.trim()
     ?? text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1]
     ?? null;
+}
+
+function requestCriterionIds(request) {
+  const text = currentPromptText(request);
+  const match = text.match(/"acceptanceCriterionIds":(\[[^\]]*\])/);
+  if (!match) return [];
+  try {
+    const ids = JSON.parse(match[1]);
+    return Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function roleResultToolCall(request) {
@@ -84,6 +115,16 @@ function roleResultToolCall(request) {
   let result = { source: 'fake-provider', cycle, taskId };
   if (role === 'tech_lead' && isV2PlanningPrompt(request)) result = fakeV2Plan();
   if (role === 'tech_lead_critic') result = { issues: [], summary: 'No substantive issues.' };
+  if (role === 'tester') {
+    result = {
+      criteria: requestCriterionIds(request).map(criterionId => ({
+        criterionId,
+        status: 'SATISFIED',
+        evidence: ['fake-provider verification'],
+        reason: 'Fake provider verified this criterion for E2E.',
+      })),
+    };
+  }
   if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', startDelivery: true, guidance: '', questions: [] };
 
   return {
@@ -295,7 +336,22 @@ function roleReply(request) {
   }
   if (role === 'artist') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId } };
   if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
-  if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
+  if (role === 'tester') return {
+    executionStatus: 'COMPLETED',
+    outcome: 'PASS',
+    result: {
+      criteria: requestCriterionIds(request).map(criterionId => ({
+        criterionId,
+        status: 'SATISFIED',
+        evidence: ['fake-provider verification'],
+        reason: 'Fake provider verified this criterion for E2E.',
+      })),
+      source: 'fake-provider',
+      cycle,
+      taskId,
+      toolExecuted: hasToolResult(request),
+    },
+  };
   if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['needs semantic fix'] } };
   if (role === 'reviewer') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } };

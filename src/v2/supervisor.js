@@ -97,6 +97,24 @@ export class V2Supervisor {
         continue;
       }
 
+      if (status?.state === 'COMPLETED' && execution.completionProtocol === 'role_result_tool') {
+        const failure = 'MISSING_ROLE_RESULT_TOOL';
+        const incident = await this.#incident(task, failure);
+        incidents.push(incident);
+        this.store.appendTaskHistory(task.id, current.version, {
+          type: 'SYSTEM_INTERRUPTION',
+          role: task.stage,
+          failure,
+          protocolVersion: execution.protocolVersion ?? 'role-result-v2',
+          at: incident.at,
+        }, {
+          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+          execution: null,
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
       if (status?.state === 'COMPLETED') {
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'ROLE_RESULT',

@@ -14,6 +14,7 @@ import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstra
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
+import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import {
   ensurePlannerArtifactLayout,
   loadPlannerArtifactPlan,
@@ -179,6 +180,84 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
   }
 });
 
+
+
+test('tester aggregate verdict is computed from required criterion statuses', () => {
+  const task = {
+    acceptanceCriteria: ['Windows runtime smoke passes', 'Full playthrough clears every required map'],
+  };
+  const result = aggregateTesterSubmission(task, {
+    outcome: 'PASS',
+    summary: 'model claimed pass',
+    result: {
+      criteria: [
+        { criterionId: 'AC1', status: 'SATISFIED', evidence: ['windows-run.log'], reason: 'executed' },
+        { criterionId: 'AC2', status: 'FAILED', evidence: ['playthrough.json'], reason: 'one defeat' },
+      ],
+    },
+  });
+  assert.equal(result.outcome, 'NOT_PASS');
+  assert.equal(result.result.aggregate.submittedOutcome, 'PASS');
+  assert.equal(result.result.aggregate.failed, 1);
+
+  const unverified = aggregateTesterSubmission(task, {
+    outcome: 'PASS',
+    summary: 'proxy evidence only',
+    result: {
+      criteria: [
+        { criterionId: 'AC1', status: 'UNVERIFIED', evidence: ['binary exists'], reason: 'not executed' },
+        { criterionId: 'AC2', status: 'SATISFIED', evidence: ['playthrough.json'], reason: 'cleared' },
+      ],
+    },
+  });
+  assert.equal(unverified.outcome, 'NOT_PASS');
+  assert.equal(unverified.result.aggregate.unverified, 1);
+});
+
+test('role-result-tool attempts cannot succeed from provider terminal completion alone', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-tool-only' });
+    store.createTask({
+      id: 'T-tool-only',
+      projectId: 'P-tool-only',
+      stage: 'tester',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'terminal-pass',
+        attemptId: 'P-tool-only:T-tool-only:tester:1',
+        completionProtocol: 'role_result_tool',
+        protocolVersion: 'role-result-v2',
+        resources: [],
+      },
+    });
+
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() {
+        return { state: 'COMPLETED', outcome: 'PASS', summary: 'terminal text claimed success' };
+      },
+      async cancel() {},
+    });
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-tool-only');
+    const task = store.getTask('T-tool-only');
+    assert.equal(task.state, 'READY');
+    assert.equal(task.execution, null);
+    assert.equal(task.history.some(entry => entry?.type === 'ROLE_RESULT'), false);
+    assert.equal(task.history.at(-1)?.failure, 'MISSING_ROLE_RESULT_TOOL');
+    assert.equal(store.listIncidents('P-tool-only').at(-1)?.failure, 'MISSING_ROLE_RESULT_TOOL');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('supervisor recovers an orphaned WORKING task that already has a sealed role-tool result', async () => {
   const { dir, file } = tempDb();

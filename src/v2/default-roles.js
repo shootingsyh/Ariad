@@ -3,6 +3,7 @@ import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
+import { acceptanceCriterionIds } from './acceptance.js';
 import {
   ensurePlannerArtifactLayout,
   loadPlannerArtifactPlan,
@@ -163,7 +164,8 @@ const TESTER_REUSE_PROMPT = [
   'Inspect task history and the existing test code before creating new tests.',
   'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
   'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
-  'Map each acceptance criterion to actual verification, and do not treat the existence of a similarly named test as sufficient coverage.',
+  'Map each acceptance criterion id to actual verification, and do not treat the existence of a similarly named test as sufficient coverage.',
+  'For every required criterion return one criteria entry with status SATISFIED, FAILED, UNVERIFIED, or BLOCKED plus evidence and reason. Ariad computes the aggregate verdict; you cannot make PASS override an unsatisfied criterion.',
 ].join(' ');
 
 const REVIEWER_FRESH_EVIDENCE_PROMPT = [
@@ -261,6 +263,7 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => ({
     provider: providerId,
+    completionProtocol: 'role_result_tool',
     workspace,
     context: {
       ...extra,
@@ -270,6 +273,7 @@ export function createDefaultV2Roles({
         title: task.title ?? null,
         intent: task.intent ?? task.input?.intent ?? null,
         acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+        acceptanceCriterionIds: acceptanceCriterionIds(task),
         testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
         art: task.art ?? task.input?.art ?? null,
         history: task.history ?? [],

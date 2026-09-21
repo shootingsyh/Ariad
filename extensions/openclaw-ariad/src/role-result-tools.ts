@@ -85,7 +85,20 @@ const schemas: Record<string, any> = {
   tester: Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
     ...commonFields,
-    result: Type.Optional(Type.Any()),
+    result: Type.Object({
+      criteria: Type.Array(Type.Object({
+        criterionId: Type.String({ minLength: 1 }),
+        status: Type.Union([
+          Type.Literal('SATISFIED'),
+          Type.Literal('FAILED'),
+          Type.Literal('UNVERIFIED'),
+          Type.Literal('BLOCKED'),
+        ]),
+        evidence: Type.Array(Type.Any()),
+        reason: Type.String({ minLength: 1 }),
+      }, { additionalProperties: false })),
+      routeTo: Type.Optional(Type.Literal('artist')),
+    }, { additionalProperties: true }),
   }, { additionalProperties: false }),
   reviewer: Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),

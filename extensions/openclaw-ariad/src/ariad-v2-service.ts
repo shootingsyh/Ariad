@@ -9,6 +9,7 @@ import { V2Scheduler } from '../../../src/v2/scheduler.js';
 import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { FunctionProvider } from '../../../src/v2/function-provider.js';
 import { createDefaultV2Roles } from '../../../src/v2/default-roles.js';
+import { aggregateTesterSubmission } from '../../../src/v2/acceptance.js';
 import { bootstrapProject } from '../../../src/v2/project-bootstrap.js';
 import type { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { requireCompleteRoleModels } from '../runtime/role-models.js';
@@ -371,14 +372,18 @@ class ProjectRuntime {
       return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
     }
 
+    const effectivePayload = role === 'tester'
+      ? aggregateTesterSubmission(task, payload)
+      : payload;
+
     const entry = {
       type: 'ROLE_RESULT',
       role,
-      outcome: payload.outcome,
-      summary: payload.summary,
-      keyPoints: structuredClone(payload.keyPoints ?? []),
-      artifacts: structuredClone(payload.artifacts ?? []),
-      result: structuredClone(payload.result ?? null),
+      outcome: effectivePayload.outcome,
+      summary: effectivePayload.summary,
+      keyPoints: structuredClone(effectivePayload.keyPoints ?? []),
+      artifacts: structuredClone(effectivePayload.artifacts ?? []),
+      result: structuredClone(effectivePayload.result ?? null),
       attemptId,
       source: 'role_result_tool',
       completedAt: new Date().toISOString(),
@@ -388,7 +393,7 @@ class ProjectRuntime {
       task = this.store.appendTaskHistory(task.id, task.version, entry, {
         state: 'RESULT_READY',
         execution: null,
-        artifacts: [...(task.artifacts ?? []), ...(payload.artifacts ?? [])],
+        artifacts: [...(task.artifacts ?? []), ...(effectivePayload.artifacts ?? [])],
       });
     } catch (error) {
       if (!String((error as Error)?.message ?? error).includes('version conflict')) throw error;
