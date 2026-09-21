@@ -41,7 +41,8 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
         `Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT: ${String(context.attemptId ?? '')}`,
         'That tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
         'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
-        'Once the tool accepts the result, it is sealed. Any text you produce afterward is informational only and is ignored by Ariad.',
+        'This tool call MUST be your final action. Finish all work first, then call it.',
+        'Once accepted, Ariad seals the result and terminates this execution. Do not expect another model turn and do not plan to emit prose afterward.',
       ].join('\n')
     : '';
 
@@ -77,8 +78,7 @@ const plugin = defineFeaturePlugin({
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
       cancelRun: async (runId) => {
-        const runs = (api.runtime.tasks as any)?.runs;
-        if (typeof runs?.cancel === 'function') await runs.cancel(runId);
+        await api.runtime.gateway.request('sessions.abort', { runId });
       },
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
@@ -191,6 +191,17 @@ const plugin = defineFeaturePlugin({
         role,
         payload,
       }),
+      terminate: (attemptId) => {
+        // Return the accepted tool result before aborting the exact run.
+        // sessions.abort may wait for settlement, so never await it here.
+        setTimeout(() => {
+          void runtimeAdapter.terminateAttempt(attemptId).catch((error) => {
+            api.logger?.warn?.(
+              `Ariad failed to terminate accepted role attempt ${attemptId}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+        }, 0);
+      },
     });
 
     api.registerService({

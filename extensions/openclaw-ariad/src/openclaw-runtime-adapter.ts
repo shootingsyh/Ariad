@@ -53,6 +53,7 @@ export class OpenClawRuntimeAdapter {
   private readonly pollTimeoutMs: number;
   private readonly onSessionBound?: RuntimeAdapterOptions['onSessionBound'];
   private readonly sessions = new Map<string, string>();
+  private readonly attempts = new Map<string, string>();
 
   constructor(options: RuntimeAdapterOptions) {
     if (!options?.subagent?.run || !options?.subagent?.waitForRun) throw new Error('OpenClaw subagent runtime is required');
@@ -120,6 +121,7 @@ export class OpenClawRuntimeAdapter {
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
     this.sessions.set(launched.runId, boundSessionKey);
+    if (roleBinding) this.attempts.set(roleBinding.attemptId, launched.runId);
     if (roleBinding && boundSessionKey !== requestedSessionKey) {
       this.onSessionBound?.({ sessionKey: boundSessionKey, ...roleBinding });
     }
@@ -176,6 +178,15 @@ export class OpenClawRuntimeAdapter {
     } catch (error) {
       return { state: 'FAILED', failure: `INVALID_ROLE_RESULT:${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  async terminateAttempt(attemptId: string) {
+    const externalId = this.attempts.get(attemptId);
+    if (!externalId) return { requested: false, reason: 'ATTEMPT_NOT_BOUND' };
+    if (!this.cancelRun) return { requested: false, reason: 'CANCEL_UNAVAILABLE' };
+    this.attempts.delete(attemptId);
+    await this.cancelRun(externalId);
+    return { requested: true, externalId };
   }
 
   async cancel(handle: { externalId: string }) {

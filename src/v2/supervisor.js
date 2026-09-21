@@ -72,6 +72,23 @@ export class V2Supervisor {
       }
 
       const provider = this.providers.get(execution.provider);
+
+      // A sealed role-result tool call is authoritative. Never wait for or
+      // parse terminal prose after it. Guarantee the provider run is stopped
+      // before exposing the durable result to the scheduler.
+      const submitted = submittedRoleToolResult(task, execution.attemptId);
+      if (submitted) {
+        await provider.cancel({ externalId: execution.externalId, taskId: task.id });
+        const current = this.store.getTask(task.id);
+        this.store.updateTask(task.id, current.version, {
+          state: 'RESULT_READY',
+          execution: null,
+          artifacts: [...(current.artifacts ?? []), ...(submitted.artifacts ?? [])],
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
       let status;
       try {
         status = await provider.poll({ externalId: execution.externalId, taskId: task.id });

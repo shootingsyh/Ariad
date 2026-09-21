@@ -180,7 +180,7 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
 });
 
 
-test('supervisor waits for run termination then consumes sealed role-tool result instead of provider prose', async () => {
+test('supervisor cancels a sealed role-tool run before any provider prose poll', async () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
@@ -210,6 +210,7 @@ test('supervisor waits for run termination then consumes sealed role-tool result
     });
 
     let polls = 0;
+    let cancels = 0;
     const provider = {
       id: 'fake',
       async start() { throw new Error('not used'); },
@@ -217,7 +218,10 @@ test('supervisor waits for run termination then consumes sealed role-tool result
         polls += 1;
         return { state: 'FAILED', failure: 'INVALID_ROLE_RESULT: prose' };
       },
-      async cancel() {},
+      async cancel(handle) {
+        cancels += 1;
+        assert.equal(handle.externalId, 'would-return-prose');
+      },
     };
     const providers = new ProviderRegistry();
     providers.register(provider);
@@ -227,7 +231,8 @@ test('supervisor waits for run termination then consumes sealed role-tool result
 
     await supervisor.audit('P-role-tool');
     const task = store.getTask('T-role-tool');
-    assert.equal(polls, 1);
+    assert.equal(polls, 0);
+    assert.equal(cancels, 1);
     assert.equal(task.state, 'RESULT_READY');
     assert.equal(task.execution, null);
     assert.deepEqual(task.artifacts, ['evidence.json']);

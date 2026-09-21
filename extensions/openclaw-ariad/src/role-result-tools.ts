@@ -142,7 +142,7 @@ export function roleResultToolMetadata() {
   return Object.entries(ROLE_RESULT_TOOL_NAMES).map(([role, name]) => ({
     name,
     label: `Ariad ${role} result`,
-    description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+    description: `Submit the authoritative structured Ariad result for the current ${role} execution. This MUST be the final action of the role. If arguments are rejected, correct them and retry; once accepted, the execution is terminated.`,
     parameters: schemas[role],
     optional: true,
   }));
@@ -151,27 +151,30 @@ export function roleResultToolMetadata() {
 export function registerRoleResultTools({
   api,
   submit,
+  terminate,
 }: {
   api: any;
   submit: (attemptId: string, role: string, payload: Omit<RoleResultPayload, 'attemptId'>) => Promise<any> | any;
+  terminate?: (attemptId: string) => void;
 }) {
   for (const [role, name] of Object.entries(ROLE_RESULT_TOOL_NAMES)) {
     api.registerTool({
       name,
       label: `Ariad ${role} result`,
-      description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+      description: `Submit the authoritative structured Ariad result for the current ${role} execution. This MUST be the final action of the role. If arguments are rejected, correct them and retry; once accepted, the execution is terminated.`,
       parameters: schemas[role],
       async execute(_toolCallId: string, params: RoleResultPayload) {
         const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
         if (!attemptId) throw new Error('attemptId is required.');
         const { attemptId: _attemptId, ...payload } = params;
         const result = await submit(attemptId, role, payload);
+        if (result?.accepted) terminate?.(attemptId);
         return {
           content: [{
             type: 'text',
             text: result.alreadySubmitted
-              ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
-              : 'Ariad result accepted and sealed. No further result submission is needed.',
+              ? 'Ariad result is already sealed; this execution is terminating.'
+              : 'Ariad result accepted and sealed; this execution is terminating.',
           }],
           details: result,
         };
