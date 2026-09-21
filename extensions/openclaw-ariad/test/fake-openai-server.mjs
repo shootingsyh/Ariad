@@ -231,7 +231,19 @@ function isV2PmPrompt(request) {
   return /PM reviewing a validated delivery plan/i.test(requestText(request));
 }
 
+function logRoleResultToolResponse(request) {
+  const role = requestRole(request);
+  const name = roleResultTools[role];
+  if (!name || !hasCalledTool(request, name)) return;
+  const toolMessages = (request.messages ?? []).filter(message => message?.role === 'tool');
+  const latest = toolMessages.at(-1);
+  if (latest) {
+    console.log(`ARIAD_FAKE_ROLE_TOOL_RESULT role=${role} tool=${name} content=${JSON.stringify(latest.content)}`);
+  }
+}
+
 function roleReply(request) {
+  logRoleResultToolResponse(request);
   const cycle = requestCycle(request);
   const role = requestRole(request);
   const taskId = requestTaskId(request);
