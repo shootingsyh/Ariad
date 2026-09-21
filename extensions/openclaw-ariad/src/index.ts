@@ -367,7 +367,7 @@ const plugin = defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal, mode, sourcePath, decision, agentId, sessionKey, roleModels } = input;
+        const { action, name, goal, request, mode, sourcePath, decision, agentId, sessionKey, roleModels } = input;
         let details: unknown;
         if (action === 'list') {
           details = { action, projects: v2Service.list() };
@@ -426,6 +426,9 @@ const plugin = defineFeaturePlugin({
             };
           } else if (action === 'pause') {
             details = { action, project: await v2Service.ensurePaused(name) };
+          } else if (action === 'iterate') {
+            if (!request?.trim()) throw new Error('request is required for action iterate');
+            details = { action, result: await v2Service.iterate(name, request) };
           } else if (action === 'stop') {
             details = { action, project: await v2Service.ensureStopped(name) };
           } else if (action === 'bind_frontdesk') {

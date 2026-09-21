@@ -18,7 +18,7 @@ type ProjectManager = {
   status(name: string): any;
   setDesiredState(name: string, state: string): any;
   setExecutionState(name: string, state: string): any;
-  setVersionState(name: string, value: { projectVersion?: number; activeVersion?: number }): any;
+  setVersionState?(name: string, value: { projectVersion?: number; activeVersion?: number }): any;
 };
 
 function workspaceIsEmpty(path: string) {
@@ -230,9 +230,9 @@ class ProjectRuntime {
         sourceKind: 'iteration',
         fromVersion: completedVersion,
         targetVersion: activeVersion,
-      },
+      } as any,
     });
-    this.manager.setVersionState(this.projectId, { projectVersion: completedVersion, activeVersion });
+    this.manager.setVersionState?.(this.projectId, { projectVersion: completedVersion, activeVersion });
     return { planningRequest, project: this.status() };
   }
 
@@ -275,7 +275,7 @@ class ProjectRuntime {
               },
             ],
           });
-          this.manager.setVersionState(this.projectId, {
+          this.manager.setVersionState?.(this.projectId, {
             projectVersion: activeVersion,
             activeVersion,
           });
