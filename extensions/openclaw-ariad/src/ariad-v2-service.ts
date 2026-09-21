@@ -222,6 +222,23 @@ class ProjectRuntime {
     }
   }
 
+  findAttempt(attemptId: string, role?: string) {
+    const task = this.store.listTasks(this.projectId).find((item: any) =>
+      item?.execution?.attemptId === attemptId
+      || (item?.history ?? []).some((entry: any) =>
+        entry?.type === 'ROLE_RESULT' && entry?.attemptId === attemptId && entry?.source === 'role_result_tool'
+      )
+    );
+    if (!task) return null;
+    if (role && task.stage !== role) {
+      const matchingResult = (task.history ?? []).some((entry: any) =>
+        entry?.type === 'ROLE_RESULT' && entry?.attemptId === attemptId && entry?.role === role
+      );
+      if (!matchingResult) return null;
+    }
+    return { projectId: this.projectId, taskId: task.id, role: role ?? task.stage, attemptId };
+  }
+
   submitRoleResult({
     taskId,
     role,
@@ -410,6 +427,37 @@ export class AriadV2Service {
       this.runtimes.delete(name);
     }
     return this.status(name);
+  }
+
+  submitRoleResultByAttempt(attemptId: string, role: string, payload: {
+    outcome: string;
+    summary: string;
+    keyPoints?: string[];
+    artifacts?: string[];
+    result?: unknown;
+  }) {
+    for (const runtime of this.runtimes.values()) {
+      const binding = runtime.findAttempt(attemptId, role);
+      if (binding) return runtime.submitRoleResult({ ...binding, payload });
+    }
+
+    for (const project of this.manager.list()) {
+      if (project.desiredState !== 'RUNNING') continue;
+      let runtime = this.runtimes.get(project.id);
+      if (!runtime) {
+        runtime = new ProjectRuntime({
+          manager: this.manager,
+          project,
+          provider: this.provider,
+          pushSourceControl: this.pushSourceControl,
+          logger: this.logger,
+        });
+        this.runtimes.set(project.id, runtime);
+      }
+      const binding = runtime.findAttempt(attemptId, role);
+      if (binding) return runtime.submitRoleResult({ ...binding, payload });
+    }
+    throw new Error(`No durable Ariad role execution matches attemptId ${attemptId}.`);
   }
 
   submitRoleResult(binding: {
