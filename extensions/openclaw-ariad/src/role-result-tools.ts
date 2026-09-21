@@ -145,31 +145,30 @@ export function registerRoleResultTools({
   for (const [role, name] of Object.entries(ROLE_RESULT_TOOL_NAMES)) {
     try {
       api.registerTool(
-        {
-          contextVersion: 2,
-          create(context: any) {
-            const binding = registry.get(context.sessionKey);
-            if (!binding || binding.role !== role) return null;
-            return {
-              name,
-              label: `Ariad ${role} result`,
-              description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
-              parameters: schemas[role],
-              async execute(_toolCallId: string, params: RoleResultPayload) {
-                context.assertInvocationCurrent?.();
-                const result = await submit(binding, params);
-                return {
-                  content: [{
-                    type: 'text',
-                    text: result.alreadySubmitted
-                      ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
-                      : 'Ariad result accepted and sealed. No further result submission is needed.',
-                  }],
-                  details: result,
-                };
-              },
-            };
-          },
+        (context: any) => {
+          const binding = registry.get(context.sessionKey);
+          if (!binding || binding.role !== role) return null;
+          return {
+            name,
+            label: `Ariad ${role} result`,
+            description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+            parameters: schemas[role],
+            async execute(_toolCallId: string, params: RoleResultPayload) {
+              // OpenClaw 2026.9.4 uses the v1 context factory. Durable authority
+              // is enforced by Ariad itself: session binding + role + task state
+              // + exact attemptId must all still match before the history write.
+              const result = await submit(binding, params);
+              return {
+                content: [{
+                  type: 'text',
+                  text: result.alreadySubmitted
+                    ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
+                    : 'Ariad result accepted and sealed. No further result submission is needed.',
+                }],
+                details: result,
+              };
+            },
+          };
         },
         { name },
       );
