@@ -160,6 +160,7 @@ test('OpenClaw plugin manifest declares project and role-result tools and starts
   assert.equal(manifest.id, 'ariad');
   assert.deepEqual(manifest.contracts.tools, [
     'ariad_project',
+    'ariad_artist_result',
     'ariad_developer_result',
     'ariad_tester_result',
     'ariad_reviewer_result',
