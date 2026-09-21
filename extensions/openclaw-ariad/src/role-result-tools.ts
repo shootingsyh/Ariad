@@ -158,38 +158,31 @@ export function registerRoleResultTools({
 }) {
   const names = Object.values(ROLE_RESULT_TOOL_NAMES);
   api.registerTool(
-    (context: any) => {
-      const binding = registry.get(context.sessionKey);
-      if (!binding) return null;
-      const role = binding.role;
-      const name = ROLE_RESULT_TOOL_NAMES[role];
-      if (!name) return null;
-      return {
-        name,
-        label: `Ariad ${role} result`,
-        description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
-        parameters: schemas[role],
-        async execute(_toolCallId: string, params: RoleResultPayload) {
-          const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
-          const active = registry.getAttempt(attemptId);
-          if (!active) throw new Error(`No active Ariad execution matches attemptId ${attemptId || '<missing>'}.`);
-          if (active.role !== role || active.taskId !== binding.taskId) {
-            throw new Error(`Ariad attempt ${attemptId} does not match this ${role} execution.`);
-          }
-          const { attemptId: _attemptId, ...payload } = params;
-          const result = await submit(active, payload);
-          return {
-            content: [{
-              type: 'text',
-              text: result.alreadySubmitted
-                ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
-                : 'Ariad result accepted and sealed. No further result submission is needed.',
-            }],
-            details: result,
-          };
-        },
-      };
-    },
+    (_context: any) => Object.entries(ROLE_RESULT_TOOL_NAMES).map(([role, name]) => ({
+      name,
+      label: `Ariad ${role} result`,
+      description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+      parameters: schemas[role],
+      async execute(_toolCallId: string, params: RoleResultPayload) {
+        const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
+        const binding = registry.getAttempt(attemptId);
+        if (!binding) throw new Error(`No active Ariad execution matches attemptId ${attemptId || '<missing>'}.`);
+        if (binding.role !== role) {
+          throw new Error(`Ariad attempt ${attemptId} belongs to role ${binding.role}, not ${role}.`);
+        }
+        const { attemptId: _attemptId, ...payload } = params;
+        const result = await submit(binding, payload);
+        return {
+          content: [{
+            type: 'text',
+            text: result.alreadySubmitted
+              ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
+              : 'Ariad result accepted and sealed. No further result submission is needed.',
+          }],
+          details: result,
+        };
+      },
+    })),
     { names },
   );
 }
