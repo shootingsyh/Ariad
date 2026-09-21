@@ -1186,6 +1186,7 @@ test('delivery scheduler remains gated until PM explicitly enables delivery', as
         return { id: `run:${input.taskId}` };
       },
       async poll() { return { state: 'RUNNING' }; },
+      async cancel() { return { cancelled: true }; },
     });
     const roleRegistry = new RoleRegistry();
     roleRegistry.register('developer', {
