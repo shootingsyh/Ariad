@@ -143,18 +143,25 @@ try {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   const planning = db.prepare('SELECT state, COUNT(*) count FROM v2_planning_requests GROUP BY state').all();
   const taskRows = db.prepare('SELECT id, data_json FROM v2_tasks ORDER BY rowid').all();
+  const incidentCount = db.prepare('SELECT COUNT(*) count FROM v2_system_incidents').get().count;
   db.close();
 
   assert.equal(planning.some(row => row.state === 'PLANNED' && row.count >= 1), true);
   const tasks = taskRows.map(row => ({ id: row.id, ...JSON.parse(row.data_json) }));
-  assert.equal(tasks.find(task => task.id === 'T1')?.state, 'DONE');
+  const t1 = tasks.find(task => task.id === 'T1');
+  assert.equal(t1?.state, 'DONE');
   assert.equal(tasks.find(task => task.id === 'ROOT')?.state, 'DONE');
+  const structuredRoleResults = (t1?.history ?? []).filter(entry => entry?.source === 'role_result_tool');
+  assert.equal(structuredRoleResults.some(entry => entry.role === 'developer'), true);
+  assert.equal(structuredRoleResults.some(entry => entry.role === 'tester'), true);
+  assert.equal(structuredRoleResults.some(entry => entry.role === 'reviewer'), true);
+  assert.equal(incidentCount, 0, 'structured role submissions should avoid INVALID_ROLE_RESULT incidents');
   assert.equal(tasks.some(task => task.input?.purpose === 'PLANNER_CRITIC' && task.state === 'DONE'), true);
   assert.equal(tasks.some(task => task.input?.round === 2 && task.state === 'SKIPPED'), true, 'clean critic should skip later rounds');
 
   await waitFor(
-    () => providerLog.includes('ARIAD_FAKE_TOOL_CALL role=reviewer cycle=2 tool=read'),
-    'v2 reviewer tool call',
+    () => providerLog.includes('ARIAD_FAKE_TOOL_CALL role=reviewer cycle=2 tool=ariad_reviewer_result'),
+    'v2 reviewer structured result tool call',
     5_000
   );
 
