@@ -343,7 +343,6 @@ const plugin = defineFeaturePlugin({
       },
     };
   },
-}
 });
 
 const staticMetadata = (plugin as any)[toolPluginMetadataSymbol];
