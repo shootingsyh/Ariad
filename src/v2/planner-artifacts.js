@@ -109,7 +109,7 @@ function normalizeLogicalNodes(rawNodes) {
 function normalizeTask(item, milestoneId, logicalById, taskIds) {
   const path = `milestone:${milestoneId}.task:${item?.id ?? '?'}`;
   if (!item || typeof item !== 'object' || Array.isArray(item)) fail(path, 'must be an object');
-  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'history']);
+  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'art', 'history']);
   for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
   assertId(item.id, `${path}.id`);
   if (taskIds.has(item.id)) fail(`${path}.id`, `duplicate task id ${item.id}`);
@@ -121,6 +121,16 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
   for (const ref of item.logicalRefs) if (!logicalById.has(ref)) fail(`${path}.logicalRefs`, `unknown logical ref ${ref}`);
   assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
   assertString(item.testStrategy, `${path}.testStrategy`);
+  if (item.art != null) {
+    if (!item.art || typeof item.art !== 'object' || Array.isArray(item.art)) fail(`${path}.art`, 'must be an object when present');
+    const allowedArt = new Set(['required', 'media', 'deliverables', 'placeholderAllowed']);
+    for (const key of Object.keys(item.art)) if (!allowedArt.has(key)) fail(`${path}.art.${key}`, 'unexpected property');
+    if (typeof item.art.required !== 'boolean') fail(`${path}.art.required`, 'must be boolean');
+    assertStringArray(item.art.media, `${path}.art.media`);
+    for (const media of item.art.media) if (!['image', 'video', 'audio', 'music'].includes(media)) fail(`${path}.art.media`, `unsupported media type ${media}`);
+    assertStringArray(item.art.deliverables, `${path}.art.deliverables`);
+    if (typeof item.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
+  }
   if (item.history != null && !Array.isArray(item.history)) fail(`${path}.history`, 'must be an array when present');
   return {
     id: item.id,
@@ -131,6 +141,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     milestoneId,
     acceptanceCriteria: [...item.acceptanceCriteria],
     testStrategy: item.testStrategy,
+    art: item.art == null ? null : structuredClone(item.art),
     history: structuredClone(item.history ?? []),
   };
 }
@@ -294,7 +305,8 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
     'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
     'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
-    'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","history":[]}',
+    'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","art":null,"history":[]}',
+    'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
     'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
     'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',
     'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',

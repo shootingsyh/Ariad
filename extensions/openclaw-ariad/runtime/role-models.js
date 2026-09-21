@@ -1,4 +1,5 @@
 export const ARIAD_MODEL_ROLES = Object.freeze([
+  'artist',
   'developer',
   'tester',
   'reviewer',

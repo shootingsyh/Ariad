@@ -9,7 +9,7 @@ Ariad keeps one durable project model:
 - Milestone dependsOn: additional prerequisite milestone ordering outside the parent-child relation.
 - Task dependsOn: only precise extra execution prerequisites.
 - Task history: append-only context. Use TAKEOVER_NOTE for useful prior implementation/test context.
-- Every normal task goes through DEV -> TEST -> REVIEW. Existing code/tests may be reused, but current acceptance still requires fresh verification.
+- Every normal task goes through DEV -> TEST -> REVIEW. Tasks requiring new or repaired media assets go through ARTIST -> DEV -> TEST -> REVIEW. Existing code/tests/assets may be reused, but current acceptance still requires fresh verification.
 
 SCENARIOS
 
@@ -43,6 +43,9 @@ PLANNING RULES
 - Milestone dependsOn expresses only extra prerequisite milestone ordering not already implied by parent-child.
 - Cross-milestone task dependencies must follow milestone execution direction.
 - Prefer narrow prerequisites and parallelism. Avoid coarse dependencies that serialize unrelated work.
+- Mark a task with art only when it needs pure media resources (image/video/audio/music). Artist does not own UX, CSS, layout, or interaction design.
+- art must specify required, media, deliverables, and placeholderAllowed. Prefer real assets; placeholders are allowed only when explicitly acceptable.
+- Tester/Reviewer must have a concrete evidence strategy for media-bearing work (for example screenshots/keyframes or audio checks/review).
 - Keep the structure simple enough that a future TL can reconstruct the project's state quickly.
 
 FINAL CHECK

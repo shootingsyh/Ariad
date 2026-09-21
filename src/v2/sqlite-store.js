@@ -272,12 +272,14 @@ export class SQLiteV2Store {
           intent: spec.intent,
           acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
           testStrategy: spec.testStrategy,
+          art: spec.art == null ? null : structuredClone(spec.art),
           milestoneId: spec.milestoneId ?? null,
           input: {
             ...(existing?.input ?? {}),
             intent: spec.intent,
             acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
             testStrategy: spec.testStrategy,
+            art: spec.art == null ? null : structuredClone(spec.art),
             milestoneId: spec.milestoneId ?? null,
             logicalRefs: [...(spec.logicalRefs ?? [])],
           },
@@ -288,7 +290,7 @@ export class SQLiteV2Store {
             id: spec.id,
             projectId,
             scope: 'delivery',
-            stage: 'developer',
+            stage: spec.art?.required ? 'artist' : 'developer',
             state: 'READY',
             history: structuredClone(spec.history ?? []),
             artifacts: [],
@@ -307,11 +309,15 @@ export class SQLiteV2Store {
         const serializedExisting = new Set(existingHistory.map(entry => JSON.stringify(entry)));
         const appendedHistory = incomingHistory.filter(entry => !serializedExisting.has(JSON.stringify(entry)));
         const resetForPlan = ['OBSOLETE', 'WAITING_REPLAN'].includes(existing.state);
+        const newlyRequiresArt = existing.state === 'READY'
+          && existing.stage === 'developer'
+          && spec.art?.required
+          && !existing.art?.required;
         this.updateTask(existing.id, existing.version, {
           ...patch,
           history: [...existingHistory, ...structuredClone(appendedHistory)],
           // Preserve execution progress for stable task ids across replans.
-          stage: resetForPlan ? 'developer' : existing.stage,
+          stage: (resetForPlan || newlyRequiresArt) ? (spec.art?.required ? 'artist' : 'developer') : existing.stage,
           state: resetForPlan ? 'READY' : existing.state,
         });
       }

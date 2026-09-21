@@ -54,6 +54,7 @@ export class RoleResultSessionRegistry {
 }
 
 export const ROLE_RESULT_TOOL_NAMES: Record<string, string> = {
+  artist: 'ariad_artist_result',
   developer: 'ariad_developer_result',
   tester: 'ariad_tester_result',
   reviewer: 'ariad_reviewer_result',
@@ -71,6 +72,11 @@ const commonFields = {
 };
 
 const schemas: Record<string, any> = {
+  artist: Type.Object({
+    outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS'), Type.Literal('NEEDS_CAPABILITY')]),
+    ...commonFields,
+    result: Type.Optional(Type.Any()),
+  }, { additionalProperties: false }),
   developer: Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
     ...commonFields,
@@ -90,6 +96,7 @@ const schemas: Record<string, any> = {
     outcome: Type.Union([
       Type.Literal('WRONG_IMPLEMENTATION_APPROACH'),
       Type.Literal('TASK_TOO_LARGE'),
+      Type.Literal('ASSET_ISSUE'),
       Type.Literal('NEEDS_HUMAN'),
     ]),
     ...commonFields,

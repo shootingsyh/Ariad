@@ -2,6 +2,7 @@ import { Type } from 'typebox';
 import { defineFeatureContract } from 'openclaw/plugin-sdk/feature-contract';
 
 const RoleModelsSchema = Type.Object({
+  artist: Type.Optional(Type.String()),
   developer: Type.Optional(Type.String()),
   tester: Type.Optional(Type.String()),
   reviewer: Type.Optional(Type.String()),

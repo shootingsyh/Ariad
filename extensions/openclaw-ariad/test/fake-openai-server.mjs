@@ -35,6 +35,7 @@ function hasToolResult(request) {
 }
 
 const roleResultTools = {
+  artist: 'ariad_artist_result',
   developer: 'ariad_developer_result',
   tester: 'ariad_tester_result',
   reviewer: 'ariad_reviewer_result',
@@ -292,6 +293,7 @@ function roleReply(request) {
       result: { source: 'fake-provider', reason: 'plan covers requested outcome', guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
     };
   }
+  if (role === 'artist') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId } };
   if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['needs semantic fix'] } };

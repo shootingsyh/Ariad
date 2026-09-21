@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
+import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import {
   ensurePlannerArtifactLayout,
   loadPlannerArtifactPlan,
@@ -140,6 +141,15 @@ function isTakeoverPlanningTask(store, task) {
   return planningBatchRequests(store, task).some(item => item.request?.purpose === 'RESTORE_PROJECT_STATE');
 }
 
+const ARTIST_PROMPT = [
+  "You are Ariad's artist role.",
+  'Create or source only media assets: images, video, music, audio, sprites, textures, backgrounds, illustrations, and similar pure resources.',
+  'Do NOT own UX design, CSS, layout, interaction design, or application logic. Those belong to Developer.',
+  'Use the media tools actually available to you (for example ComfyUI, generation tools, browser/search/download tools). Do not claim an asset was produced if no usable artifact exists.',
+  'If a required capability is unavailable, return NEEDS_CAPABILITY and list the missing capabilities. Only use placeholders when task.art.placeholderAllowed is explicitly true.',
+  'When revisiting after Tester/Reviewer/Debugger feedback, inspect latest history and modify only the affected assets. Developer and the normal regression flow will run afterward.',
+].join(' ');
+
 const DEVELOPER_REUSE_PROMPT = [
   "You are Ariad's developer role.",
   'Inspect task history before changing code.',
@@ -149,6 +159,7 @@ const DEVELOPER_REUSE_PROMPT = [
 
 const TESTER_REUSE_PROMPT = [
   "You are Ariad's tester role.",
+  'When media assets or prior Artist work are involved, capture suitable evidence such as screenshots, rendered frames, clips, or audio metadata/checks. If the asset itself is wrong rather than its integration, return NOT_PASS with result.routeTo="artist".',
   'Inspect task history and the existing test code before creating new tests.',
   'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
   'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
@@ -157,6 +168,7 @@ const TESTER_REUSE_PROMPT = [
 
 const REVIEWER_FRESH_EVIDENCE_PROMPT = [
   "You are Ariad's reviewer role.",
+  'When media/art is involved, inspect Tester evidence and judge overall artistic coherence and normal aesthetic quality in addition to correctness. Reject uncanny/broken people, malformed assets, strange presentation caused by assets, mismatched music/audio, and disguised placeholders. If the resource itself needs repair, return NOT_PASS with result.routeTo="artist".',
   'Treat TAKEOVER_NOTE and all historical implementation/test/review claims as context only.',
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
@@ -257,6 +269,7 @@ export function createDefaultV2Roles({
         intent: task.intent ?? task.input?.intent ?? null,
         acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
         testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
+        art: task.art ?? task.input?.art ?? null,
         history: task.history ?? [],
       },
       devCycle: 1 + failureCount(task),
@@ -265,6 +278,35 @@ export function createDefaultV2Roles({
   });
 
   return {
+    artist: {
+      prepare: ({ task }) => {
+        const art = task.art ?? task.input?.art ?? null;
+        const capabilities = requiredArtCapabilities(art ?? { required: true, media: [] });
+        return prepareLlm(task, ARTIST_PROMPT, {
+          art,
+          capabilityRequirements: capabilities,
+          capabilityRecommendations: artCapabilityRecommendations(capabilities),
+        });
+      },
+      transition: ({ result }) => {
+        if (result.outcome === 'PASS') return { stage: 'developer', state: 'READY' };
+        if (result.outcome === 'NEEDS_CAPABILITY') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'CAPABILITY_REQUIRED',
+              role: 'artist',
+              summary: result.summary ?? 'Artist capability is missing.',
+              missingCapabilities: result.result?.missingCapabilities ?? [],
+              recommendations: result.result?.recommendations ?? [],
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        return { state: 'NEEDS_HUMAN' };
+      },
+    },
+
     developer: {
       prepare: ({ task }) => prepareLlm(task, DEVELOPER_REUSE_PROMPT),
       transition: () => ({ stage: 'tester', state: 'READY' }),
@@ -277,6 +319,7 @@ export function createDefaultV2Roles({
       transition: ({ task, result }) => {
         if (result.outcome === 'PASS') return { stage: 'reviewer', state: 'READY' };
         if (result.outcome === 'NOT_PASS') {
+          if (result.result?.routeTo === 'artist') return { stage: 'artist', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
@@ -291,6 +334,7 @@ export function createDefaultV2Roles({
       }),
       transition({ task, result }) {
         if (result.outcome === 'NOT_PASS') {
+          if (result.result?.routeTo === 'artist') return { stage: 'artist', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
@@ -328,6 +372,7 @@ export function createDefaultV2Roles({
     project_debugger: {
       prepare: ({ task }) => prepareLlm(task, null),
       transition: ({ task, result }) => {
+        if (result.outcome === 'ASSET_ISSUE') return { stage: 'artist', state: 'READY' };
         if (result.outcome === 'WRONG_IMPLEMENTATION_APPROACH') {
           return strategyEpoch(task) >= 3
             ? { state: 'NEEDS_HUMAN' }

@@ -49,6 +49,17 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
             items: { type: 'string', minLength: 1 },
           },
           testStrategy: { type: 'string', minLength: 1 },
+          art: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            required: ['required', 'media', 'deliverables', 'placeholderAllowed'],
+            properties: {
+              required: { type: 'boolean' },
+              media: { type: 'array', uniqueItems: true, items: { enum: ['image', 'video', 'audio', 'music'] } },
+              deliverables: { type: 'array', items: { type: 'string', minLength: 1 } },
+              placeholderAllowed: { type: 'boolean' },
+            },
+          },
           history: HISTORY_SCHEMA,
         },
       },
@@ -255,6 +266,7 @@ export function validateTechLeadPlan(plan) {
       'milestoneId',
       'acceptanceCriteria',
       'testStrategy',
+      'art',
       'history',
     ]);
     for (const key of Object.keys(task)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
@@ -268,12 +280,22 @@ export function validateTechLeadPlan(plan) {
     if (task.milestoneId != null) assertString(task.milestoneId, `${path}.milestoneId`);
     assertStringArray(task.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
     assertString(task.testStrategy, `${path}.testStrategy`);
+    if (task.art != null) {
+      if (!task.art || typeof task.art !== 'object' || Array.isArray(task.art)) fail(`${path}.art`, 'must be an object or null');
+      const artAllowed = new Set(['required', 'media', 'deliverables', 'placeholderAllowed']);
+      for (const key of Object.keys(task.art)) if (!artAllowed.has(key)) fail(`${path}.art.${key}`, 'unexpected property');
+      if (typeof task.art.required !== 'boolean') fail(`${path}.art.required`, 'must be boolean');
+      assertStringArray(task.art.media, `${path}.art.media`);
+      for (const media of task.art.media) if (!['image', 'video', 'audio', 'music'].includes(media)) fail(`${path}.art.media`, `unsupported media type ${media}`);
+      assertStringArray(task.art.deliverables, `${path}.art.deliverables`);
+      if (typeof task.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
+    }
 
     const normalizedTask = {
       id: task.id,
       scope: 'delivery',
       state: 'READY',
-      stage: 'developer',
+      stage: task.art?.required ? 'artist' : 'developer',
       parentId: task.parentId,
       dependsOn: [...task.dependsOn],
       milestoneId: task.milestoneId ?? null,
@@ -281,6 +303,7 @@ export function validateTechLeadPlan(plan) {
       intent: task.intent,
       acceptanceCriteria: [...task.acceptanceCriteria],
       testStrategy: task.testStrategy,
+      art: task.art == null ? null : structuredClone(task.art),
       history: normalizeHistory(task.history, `${path}.history`),
     };
     byId.set(task.id, normalizedTask);
@@ -370,6 +393,7 @@ export function validateTechLeadPlan(plan) {
         milestoneId: task.milestoneId ?? null,
         acceptanceCriteria: [...task.acceptanceCriteria],
         testStrategy: task.testStrategy,
+        art: task.art == null ? null : structuredClone(task.art),
         history: structuredClone(task.history ?? []),
       })),
       ...(milestoneState.milestones.length > 0
