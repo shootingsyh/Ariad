@@ -239,6 +239,65 @@ test('supervisor consumes sealed role-tool result from durable history before po
   }
 });
 
+
+test('supervisor re-checks durable role-tool result committed during provider poll', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-role-tool-race' });
+    store.createTask({
+      id: 'T-role-tool-race',
+      projectId: 'P-role-tool-race',
+      stage: 'tester',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'run-race',
+        attemptId: 'P-role-tool-race:T-role-tool-race:tester:1',
+        resources: [],
+      },
+    });
+
+    const provider = {
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() {
+        const current = store.getTask('T-role-tool-race');
+        store.appendTaskHistory('T-role-tool-race', current.version, {
+          type: 'ROLE_RESULT',
+          role: 'tester',
+          outcome: 'PASS',
+          summary: 'Submitted while poll was waiting.',
+          keyPoints: [],
+          artifacts: [],
+          result: { evidence: 'fresh' },
+          attemptId: 'P-role-tool-race:T-role-tool-race:tester:1',
+          source: 'role_result_tool',
+        });
+        return { state: 'FAILED', failure: 'INVALID_ROLE_RESULT: trailing prose' };
+      },
+      async cancel() {},
+    };
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-role-tool-race');
+    const task = store.getTask('T-role-tool-race');
+    assert.equal(task.state, 'RESULT_READY');
+    assert.equal(task.execution, null);
+    assert.equal(store.listIncidents('P-role-tool-race').length, 0);
+    assert.equal(
+      task.history.filter(entry => entry?.type === 'SYSTEM_INTERRUPTION').length,
+      0,
+    );
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('retry count is derived from task history, not a durable counter', () => {
   const { dir, file } = tempDb();
   try {
