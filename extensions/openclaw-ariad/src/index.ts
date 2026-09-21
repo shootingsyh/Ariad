@@ -11,7 +11,6 @@ import { ResourcePool } from '../../../src/v2/resource-pool.js';
 import { V2Scheduler } from '../../../src/v2/scheduler.js';
 import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
-import { submitDurableRoleResult } from '../runtime/role-result-store.js';
 import {
   ARIAD_MODEL_ROLES,
   normalizeRoleModels,
@@ -25,6 +24,7 @@ import { AriadV2Service } from './ariad-v2-service.js';
 import { AriadDashboardService } from './dashboard-service.js';
 import {
   registerRoleResultTools,
+  RoleResultSessionRegistry,
   roleResultToolMetadata,
   roleResultToolName,
 } from './role-result-tools.js';
@@ -73,10 +73,12 @@ const plugin = defineFeaturePlugin({
     const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
     const pushSourceControl = process.env.ARIAD_SOURCE_CONTROL_PUSH !== '0';
     const manager = new AriadProjectManager({ projectsRoot });
+    const roleResultSessions = new RoleResultSessionRegistry();
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
+      onSessionBound: (binding) => roleResultSessions.bind(binding),
       cancelRun: async (runId) => {
         await api.runtime.gateway.request('sessions.abort', { runId });
       },
@@ -185,12 +187,14 @@ const plugin = defineFeaturePlugin({
 
     registerRoleResultTools({
       api,
-      submit: (attemptId, role, payload) => submitDurableRoleResult({
-        manager,
-        attemptId,
-        role,
-        payload,
-      }),
+      submit: (attemptId, role, payload) => {
+        const binding = roleResultSessions.getAttempt(attemptId);
+        if (!binding) throw new Error(`No live Ariad role execution matches attemptId ${attemptId}.`);
+        if (binding.role !== role) {
+          throw new Error(`Ariad attempt ${attemptId} belongs to role ${binding.role}, not ${role}.`);
+        }
+        return v2Service.submitRoleResult(binding, payload);
+      },
       terminate: (attemptId) => {
         // Return the accepted tool result before aborting the exact run.
         // sessions.abort may wait for settlement, so never await it here.

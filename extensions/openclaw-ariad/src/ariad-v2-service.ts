@@ -30,6 +30,7 @@ class ProjectRuntime {
   private readonly store: SQLiteV2Store;
   private readonly scheduler: V2Scheduler;
   private readonly supervisor: V2Supervisor;
+  private readonly resources: ResourcePool;
   private readonly sourceControl: GitSourceControlFinalizer;
   private readonly logger: any;
   private ticking = false;
@@ -68,7 +69,7 @@ class ProjectRuntime {
     providers.register(provider);
     providers.register(new FunctionProvider());
 
-    const resources = new ResourcePool({});
+    this.resources = new ResourcePool({});
     this.sourceControl = new GitSourceControlFinalizer({
       workspace: project.workspace,
       push: pushSourceControl,
@@ -99,12 +100,12 @@ class ProjectRuntime {
       store: this.store,
       roles: roleRegistry,
       providers,
-      resources,
+      resources: this.resources,
     });
     this.supervisor = new V2Supervisor({
       store: this.store,
       providers,
-      resources,
+      resources: this.resources,
     });
     this.supervisor.recover(project.id);
 
@@ -249,7 +250,10 @@ class ProjectRuntime {
           && entry?.role === role
           && entry?.source === 'role_result_tool'
       );
-      if (existing) return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+      if (existing) {
+        this.resources.release(taskId);
+        return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+      }
       throw new Error(`task ${taskId} is not WORKING`);
     }
     if (task.execution?.attemptId !== attemptId) {
@@ -262,7 +266,10 @@ class ProjectRuntime {
         && entry?.role === role
         && entry?.source === 'role_result_tool'
     );
-    if (existing) return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+    if (existing) {
+      this.resources.release(taskId);
+      return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+    }
 
     const entry = {
       type: 'ROLE_RESULT',
@@ -278,7 +285,11 @@ class ProjectRuntime {
     };
 
     try {
-      task = this.store.appendTaskHistory(task.id, task.version, entry);
+      task = this.store.appendTaskHistory(task.id, task.version, entry, {
+        state: 'RESULT_READY',
+        execution: null,
+        artifacts: [...(task.artifacts ?? []), ...(payload.artifacts ?? [])],
+      });
     } catch (error) {
       if (!String((error as Error)?.message ?? error).includes('version conflict')) throw error;
       task = this.store.getTask(taskId);
@@ -289,8 +300,17 @@ class ProjectRuntime {
           && item?.source === 'role_result_tool'
       );
       if (!raced) throw error;
+      if (task.state === 'WORKING') {
+        task = this.store.updateTask(task.id, task.version, {
+          state: 'RESULT_READY',
+          execution: null,
+          artifacts: [...(task.artifacts ?? []), ...(raced.artifacts ?? [])],
+        });
+      }
+      this.resources.release(taskId);
       return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
     }
+    this.resources.release(taskId);
     return { accepted: true, sealed: true, alreadySubmitted: false, taskId, attemptId };
   }
 
