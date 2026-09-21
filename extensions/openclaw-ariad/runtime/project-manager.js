@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync, cpSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { normalizeRoleModels } from './role-models.js';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -103,7 +104,7 @@ export class AriadProjectManager {
     return { ...base, adopted: false };
   }
 
-  create(name, { goal = null, mode = null, sourcePath = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
+  create(name, { goal = null, mode = null, sourcePath = null, roleModels = {}, frontdeskBinding = null, projectAgent = undefined } = {}) {
     const effectiveMode = mode ?? (sourcePath ? 'TAKEOVER' : 'NEW');
     if (!['NEW', 'TAKEOVER'].includes(effectiveMode)) throw new Error(`invalid project mode: ${effectiveMode}`);
     const base = this.paths(name);
@@ -149,6 +150,7 @@ export class AriadProjectManager {
       stateDb: db,
       desiredState: 'STOPPED',
       executionState: 'IDLE',
+      roleModels: normalizeRoleModels(roleModels),
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {
@@ -235,6 +237,7 @@ export class AriadProjectManager {
       sourcePath: manifest.sourcePath ?? null,
       adopted: manifest.adopted ?? p.adopted ?? false,
       frontdeskBinding,
+      roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
       executionState: manifest.executionState ?? 'IDLE',
       root: p.root,
     };
@@ -245,6 +248,16 @@ export class AriadProjectManager {
     const current = this.status(p.id);
     writeJson(p.manifest, { ...current, root: undefined, ...patch });
     return this.status(p.id);
+  }
+
+  setRoleModels(name, roleModels) {
+    const current = this.status(name);
+    return this.writeManifest(name, {
+      roleModels: {
+        ...(current.roleModels ?? {}),
+        ...normalizeRoleModels(roleModels),
+      },
+    });
   }
 
   setDesiredState(name, desiredState) {
