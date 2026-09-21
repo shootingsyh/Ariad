@@ -143,34 +143,38 @@ export function registerRoleResultTools({
   submit: (binding: RoleResultBinding, payload: RoleResultPayload) => Promise<any> | any;
 }) {
   for (const [role, name] of Object.entries(ROLE_RESULT_TOOL_NAMES)) {
-    api.registerTool(
-      {
-        contextVersion: 2,
-        create(context: any) {
-          const binding = registry.get(context.sessionKey);
-          if (!binding || binding.role !== role) return null;
-          return {
-            name,
-            label: `Ariad ${role} result`,
-            description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
-            parameters: schemas[role],
-            async execute(_toolCallId: string, params: RoleResultPayload) {
-              context.assertInvocationCurrent?.();
-              const result = await submit(binding, params);
-              return {
-                content: [{
-                  type: 'text',
-                  text: result.alreadySubmitted
-                    ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
-                    : 'Ariad result accepted and sealed. No further result submission is needed.',
-                }],
-                details: result,
-              };
-            },
-          };
+    try {
+      api.registerTool(
+        {
+          contextVersion: 2,
+          create(context: any) {
+            const binding = registry.get(context.sessionKey);
+            if (!binding || binding.role !== role) return null;
+            return {
+              name,
+              label: `Ariad ${role} result`,
+              description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+              parameters: schemas[role],
+              async execute(_toolCallId: string, params: RoleResultPayload) {
+                context.assertInvocationCurrent?.();
+                const result = await submit(binding, params);
+                return {
+                  content: [{
+                    type: 'text',
+                    text: result.alreadySubmitted
+                      ? 'Ariad result was already submitted successfully and is sealed; keep the existing result.'
+                      : 'Ariad result accepted and sealed. No further result submission is needed.',
+                  }],
+                  details: result,
+                };
+              },
+            };
+          },
         },
-      },
-      { name },
-    );
+        { name },
+      );
+    } catch (error) {
+      throw new Error(`failed to register Ariad role result tool ${name} for ${role}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
   }
 }
