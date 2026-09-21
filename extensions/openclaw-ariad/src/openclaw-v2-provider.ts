@@ -36,6 +36,7 @@ export class OpenClawV2Provider {
       ...(spec.workspace ? { workspace: spec.workspace } : {}),
       ...(spec.sessionPolicy ? { sessionPolicy: spec.sessionPolicy } : {}),
       ...(spec.idempotencyKey ? { idempotencyKey: spec.idempotencyKey } : {}),
+      ...(spec.attemptId ? { attemptId: spec.attemptId } : {}),
     };
 
     const handle = await this.runtime.start({
