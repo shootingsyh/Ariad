@@ -124,6 +124,15 @@ export function roleResultToolName(role: string) {
   return ROLE_RESULT_TOOL_NAMES[role] ?? null;
 }
 
+export function roleResultToolMetadata() {
+  return Object.entries(ROLE_RESULT_TOOL_NAMES).map(([role, name]) => ({
+    name,
+    label: `Ariad ${role} result`,
+    description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
+    parameters: schemas[role],
+  }));
+}
+
 export function registerRoleResultTools({
   api,
   registry,
