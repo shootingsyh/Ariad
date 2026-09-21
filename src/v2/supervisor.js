@@ -41,6 +41,23 @@ export class V2Supervisor {
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'WORKING') continue;
       const execution = task.execution;
+
+      const submittedResult = [...(task.history ?? [])].reverse().find(
+        entry => entry?.type === 'ROLE_RESULT'
+          && entry?.source === 'role_result_tool'
+          && entry?.attemptId === execution?.attemptId
+          && entry?.role === task.stage
+      );
+      if (submittedResult) {
+        const current = this.store.getTask(task.id);
+        this.store.updateTask(task.id, current.version, {
+          state: 'RESULT_READY',
+          execution: null,
+          artifacts: [...(current.artifacts ?? []), ...(submittedResult.artifacts ?? [])],
+        });
+        this.resources.release(task.id);
+        continue;
+      }
       if (!execution?.provider || !execution?.externalId) {
         const incident = await this.#incident(task, 'MISSING_EXECUTION_HANDLE');
         incidents.push(incident);
