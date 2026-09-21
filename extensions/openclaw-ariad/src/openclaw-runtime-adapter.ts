@@ -99,14 +99,20 @@ export class OpenClawRuntimeAdapter {
       this.onSessionBound?.({ sessionKey: requestedSessionKey, ...roleBinding });
     }
 
+    const selectedProvider = typeof context.provider === 'string' && context.provider.trim()
+      ? context.provider.trim()
+      : this.provider;
+    const selectedModel = typeof context.model === 'string' && context.model.trim()
+      ? context.model.trim()
+      : this.model;
     const launched = await this.subagent.run({
       sessionKey: requestedSessionKey,
       message: this.renderMessage(input.role, context),
       promptMode: 'minimal',
       deliver: false,
       ...(workspace ? { cwd: workspace } : {}),
-      ...(this.provider ? { provider: this.provider } : {}),
-      ...(this.model ? { model: this.model } : {}),
+      ...(selectedProvider ? { provider: selectedProvider } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
     });
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
