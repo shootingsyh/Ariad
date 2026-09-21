@@ -69,7 +69,9 @@ function roleResultToolCall(request) {
   const taskId = requestTaskId(request);
   const cycle = requestCycle(request);
   const hasPriorToolWork = hasToolResult(request);
-  const canSubmitWithoutWorkTool = ['tech_lead_critic', 'pm'].includes(role);
+  const artifact = plannerArtifactTransport(request);
+  const canSubmitWithoutWorkTool = ['tech_lead', 'tech_lead_critic', 'pm'].includes(role)
+    && !(role === 'tech_lead' && artifact);
   if (!hasPriorToolWork && !canSubmitWithoutWorkTool) return null;
 
   let outcome = 'PASS';
@@ -79,6 +81,7 @@ function roleResultToolCall(request) {
   else if (role === 'reviewer' && taskId === 'T1' && cycle === 1) outcome = 'NOT_PASS';
 
   let result = { source: 'fake-provider', cycle, taskId };
+  if (role === 'tech_lead' && isV2PlanningPrompt(request)) result = fakeV2Plan();
   if (role === 'tech_lead_critic') result = { issues: [], summary: 'No substantive issues.' };
   if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', guidance: '', questions: [] };
 
