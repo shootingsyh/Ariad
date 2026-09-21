@@ -179,6 +179,66 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
   }
 });
 
+
+test('supervisor consumes sealed role-tool result from durable history before polling provider prose', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-role-tool' });
+    store.createTask({
+      id: 'T-role-tool',
+      projectId: 'P-role-tool',
+      stage: 'tester',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'would-return-prose',
+        attemptId: 'P-role-tool:T-role-tool:tester:1',
+        resources: ['gpu'],
+      },
+      history: [{
+        type: 'ROLE_RESULT',
+        role: 'tester',
+        outcome: 'PASS',
+        summary: 'Fresh verification passed.',
+        keyPoints: ['all acceptance checks passed'],
+        artifacts: ['evidence.json'],
+        result: { evidence: 'fresh' },
+        attemptId: 'P-role-tool:T-role-tool:tester:1',
+        source: 'role_result_tool',
+      }],
+    });
+
+    let polls = 0;
+    const provider = {
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() {
+        polls += 1;
+        return { state: 'FAILED', failure: 'INVALID_ROLE_RESULT: prose' };
+      },
+      async cancel() {},
+    };
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const resources = new ResourcePool({ gpu: 1 });
+    resources.recover(store.listTasks('P-role-tool'));
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-role-tool');
+    const task = store.getTask('T-role-tool');
+    assert.equal(polls, 0);
+    assert.equal(task.state, 'RESULT_READY');
+    assert.equal(task.execution, null);
+    assert.deepEqual(task.artifacts, ['evidence.json']);
+    assert.deepEqual(resources.snapshot(), []);
+    assert.equal(store.listIncidents('P-role-tool').length, 0);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('retry count is derived from task history, not a durable counter', () => {
   const { dir, file } = tempDb();
   try {
