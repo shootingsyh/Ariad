@@ -4,6 +4,11 @@ export interface FrontdeskBinding {
   sessionKey?: string | null;
 }
 
+export type AriadRoleModels = Partial<Record<
+  'developer' | 'tester' | 'reviewer' | 'project_debugger' | 'tech_lead' | 'tech_lead_critic' | 'pm',
+  string
+>>;
+
 export interface AriadProjectStatus {
   id: string;
   name: string;
@@ -18,6 +23,7 @@ export interface AriadProjectStatus {
   desiredState: 'RUNNING' | 'STOPPED';
   executionState: 'IDLE' | 'PLANNING' | 'RUNNING' | 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED';
   frontdeskBinding: FrontdeskBinding | null;
+  roleModels: AriadRoleModels;
 }
 
 export interface AriadProjectManagerOptions {
@@ -27,10 +33,11 @@ export interface AriadProjectManagerOptions {
 
 export class AriadProjectManager {
   constructor(options: AriadProjectManagerOptions);
-  create(name: string, options?: { goal?: string | null; mode?: 'NEW' | 'TAKEOVER' | null; sourcePath?: string | null; frontdeskBinding?: FrontdeskBinding | null; projectAgent?: FrontdeskBinding | null }): AriadProjectStatus;
+  create(name: string, options?: { goal?: string | null; mode?: 'NEW' | 'TAKEOVER' | null; sourcePath?: string | null; roleModels?: AriadRoleModels; frontdeskBinding?: FrontdeskBinding | null; projectAgent?: FrontdeskBinding | null }): AriadProjectStatus;
   adopt(name: string, sourcePath?: string | null): AriadProjectStatus;
   list(): AriadProjectStatus[];
   status(name: string): AriadProjectStatus;
+  setRoleModels(name: string, roleModels: AriadRoleModels): AriadProjectStatus;
   setDesiredState(name: string, desiredState: 'RUNNING' | 'STOPPED'): AriadProjectStatus;
   setExecutionState(name: string, executionState: AriadProjectStatus['executionState']): AriadProjectStatus;
   bindFrontdesk(name: string, frontdeskBinding: FrontdeskBinding | null): AriadProjectStatus;
