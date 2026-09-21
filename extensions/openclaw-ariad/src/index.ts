@@ -320,7 +320,7 @@ const plugin = defineFeaturePlugin({
               goal: input.goal ?? null,
               mode: input.mode ?? null,
               sourcePath: input.sourcePath ?? null,
-              roleModels: input.roleModels ?? Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'ariadfake/fake'])),
+              roleModels: input.roleModels ?? Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'ariadfake/role'])),
               projectAgent: null,
             });
             respond(true, { project: v2Service.status(project.id) });
