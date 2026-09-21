@@ -26,34 +26,69 @@ function predecessorResults(store, task) {
   return (task.dependsOn ?? []).map(id => latestRoleResult(byId.get(id))).filter(Boolean);
 }
 
-function resolveArtifactResult(result, artifactRoot) {
+function recordArtifactIncidentOnce(store, task, artifactRef, failure) {
+  const exists = store.listIncidents(task.projectId).some(
+    incident => incident?.type === 'PLANNER_ARTIFACT_INVALID'
+      && incident?.artifactRef === artifactRef
+      && incident?.failure === failure
+  );
+  if (exists) return;
+  store.recordIncident({
+    projectId: task.projectId,
+    taskId: task.id,
+    type: 'PLANNER_ARTIFACT_INVALID',
+    artifactRef,
+    failure,
+  });
+}
+
+function resolveArtifactResult(store, task, result, artifactRoot) {
   if (!result?.artifactRef || !artifactRoot) return result;
   const root = resolve(artifactRoot);
   const file = resolve(root, result.artifactRef);
-  if (file !== root && !file.startsWith(root + sep)) throw new Error('artifactRef escapes Ariad artifact root');
-  return JSON.parse(readFileSync(file, 'utf8'));
+  if (file !== root && !file.startsWith(root + sep)) {
+    const failure = 'artifactRef escapes Ariad artifact root';
+    recordArtifactIncidentOnce(store, task, result.artifactRef, failure);
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    const failure = error?.message ?? String(error);
+    recordArtifactIncidentOnce(store, task, result.artifactRef, failure);
+    return null;
+  }
 }
 
-function latestPlanInFlow(store, task, artifactRoot) {
-  const artifactPlan = loadPlannerArtifactPlan(artifactRoot);
-  if (artifactPlan) {
-    try {
-      return validatePlannerArtifactPlan(artifactPlan).plan;
-    } catch {
-      // A planner may be between bounded artifact writes. Validation is the
-      // authoritative completeness gate; keep looking for a prior candidate
-      // while the split artifact set is incomplete.
-    }
-  }
+function currentArtifactPlan(artifactRoot) {
+  const raw = loadPlannerArtifactPlan(artifactRoot);
+  if (!raw) return null;
+  return validatePlannerArtifactPlan(raw).plan;
+}
 
+function latestLegacyPlanInFlow(store, task, artifactRoot) {
   const tasks = flowTasks(store, task);
   for (let i = tasks.length - 1; i >= 0; i -= 1) {
     const raw = latestRoleResult(tasks[i])?.result;
-    const result = resolveArtifactResult(raw, artifactRoot);
+    const result = resolveArtifactResult(store, task, raw, artifactRoot);
     const candidate = result?.plan ?? result;
-    if ([2, 3].includes(candidate?.version) && Array.isArray(candidate?.tasks)) return candidate;
+    // Version 3 in task history is a compiled/validated view, not a raw
+    // filesystem artifact plan. Never feed it back into the artifact validator.
+    if (candidate?.version === 2 && Array.isArray(candidate?.tasks)) return candidate;
   }
   return null;
+}
+
+function latestPlanInFlow(store, task, artifactRoot) {
+  try {
+    const artifactPlan = currentArtifactPlan(artifactRoot);
+    if (artifactPlan) return artifactPlan;
+  } catch {
+    // During decompose/repair the filesystem may be temporarily incomplete.
+    // Validation tasks handle the authoritative error; prompts may fall back
+    // to the last valid legacy v2 candidate while writing is in progress.
+  }
+  return latestLegacyPlanInFlow(store, task, artifactRoot);
 }
 
 function failureCount(task) {
@@ -350,7 +385,23 @@ export function createDefaultV2Roles({
       prepare: ({ task }) => ({
         provider: codeProviderId,
         execute: async () => {
-          const candidate = latestPlanInFlow(store, task, artifactRoot);
+          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
+          if (rawArtifactPlan) {
+            try {
+              const validated = validatePlannerArtifactPlan(rawArtifactPlan);
+              return {
+                outcome: 'PASS',
+                result: { valid: true, plan: validated.plan, error: null },
+              };
+            } catch (error) {
+              return {
+                outcome: 'NOT_PASS',
+                result: { valid: false, plan: rawArtifactPlan, error: error?.message ?? String(error) },
+              };
+            }
+          }
+
+          const candidate = latestLegacyPlanInFlow(store, task, artifactRoot);
           if (!candidate) {
             return {
               outcome: 'NOT_PASS',
@@ -358,9 +409,7 @@ export function createDefaultV2Roles({
             };
           }
           try {
-            const validated = candidate.version === 3
-              ? validatePlannerArtifactPlan(candidate)
-              : validateTechLeadPlan(candidate);
+            const validated = validateTechLeadPlan(candidate);
             return {
               outcome: 'PASS',
               result: { valid: true, plan: validated.plan, error: null },
@@ -405,10 +454,10 @@ export function createDefaultV2Roles({
       },
       transition: ({ task, result }) => {
         if (result.outcome === 'PLAN_ACCEPTED') {
-          const plan = latestPlanInFlow(store, task, artifactRoot);
-          const validated = plan?.version === 3
-            ? validatePlannerArtifactPlan(plan)
-            : validateTechLeadPlan(plan);
+          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
+          const validated = rawArtifactPlan
+            ? validatePlannerArtifactPlan(rawArtifactPlan)
+            : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
           store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
