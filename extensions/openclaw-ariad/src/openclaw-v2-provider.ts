@@ -31,7 +31,9 @@ export class OpenClawV2Provider {
       ? spec.attemptId
       : ['v2', spec.projectId, spec.taskId].join(':');
 
-    const modelRef = this.resolveModelRef?.(spec.projectId, spec.role) ?? null;
+    const modelRef = (typeof spec.context?.roleModelRef === 'string' && spec.context.roleModelRef.trim()
+      ? spec.context.roleModelRef.trim()
+      : this.resolveModelRef?.(spec.projectId, spec.role)) ?? null;
     if (!modelRef) throw new Error(`No explicit Ariad model configured for role ${spec.role} in project ${spec.projectId}`);
     const slash = modelRef.indexOf('/');
     if (slash <= 0 || slash === modelRef.length - 1) throw new Error(`Invalid Ariad model ref: ${modelRef}`);
