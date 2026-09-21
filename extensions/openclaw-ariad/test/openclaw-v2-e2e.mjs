@@ -30,7 +30,18 @@ const config = {
       },
     },
   },
-  plugins: { load: { paths: [pluginDir] }, entries: { ariad: { enabled: true } } },
+  plugins: {
+    load: { paths: [pluginDir] },
+    entries: {
+      ariad: {
+        enabled: true,
+        subagent: {
+          allowModelOverride: true,
+          allowedModels: ['ariadfake/fake'],
+        },
+      },
+    },
+  },
 };
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
