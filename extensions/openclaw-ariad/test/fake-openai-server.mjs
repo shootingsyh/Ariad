@@ -307,13 +307,20 @@ function streamChunk(res, value) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/v1/models') {
-    json(res, { object: 'list', data: [{ id: 'fake', object: 'model', owned_by: 'ariad-ci' }] });
+    json(res, {
+      object: 'list',
+      data: [
+        { id: 'default', object: 'model', owned_by: 'ariad-ci' },
+        { id: 'role', object: 'model', owned_by: 'ariad-ci' },
+      ],
+    });
     return;
   }
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
     let body = '';
     for await (const chunk of req) body += chunk;
     const request = JSON.parse(body || '{}');
+    console.log(`ARIAD_FAKE_MODEL model=${request.model ?? 'unknown'} role=${requestRole(request) ?? 'unknown'}`);
     const toolCall = toolCallFor(request);
     const id = `chatcmpl-${Date.now()}`;
 
