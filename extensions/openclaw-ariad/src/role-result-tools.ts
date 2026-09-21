@@ -144,6 +144,7 @@ export function roleResultToolMetadata() {
     label: `Ariad ${role} result`,
     description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
     parameters: schemas[role],
+    optional: true,
   }));
 }
 
@@ -156,9 +157,8 @@ export function registerRoleResultTools({
   registry: RoleResultSessionRegistry;
   submit: (binding: RoleResultBinding, payload: RoleResultPayload) => Promise<any> | any;
 }) {
-  const names = Object.values(ROLE_RESULT_TOOL_NAMES);
-  api.registerTool(
-    (_context: any) => Object.entries(ROLE_RESULT_TOOL_NAMES).map(([role, name]) => ({
+  for (const [role, name] of Object.entries(ROLE_RESULT_TOOL_NAMES)) {
+    api.registerTool({
       name,
       label: `Ariad ${role} result`,
       description: `Submit the authoritative structured Ariad result for the current ${role} execution. Call this before ending the role. If arguments are rejected, correct them and retry.`,
@@ -182,7 +182,6 @@ export function registerRoleResultTools({
           details: result,
         };
       },
-    })),
-    { names },
-  );
+    }, { name, optional: true });
+  }
 }
