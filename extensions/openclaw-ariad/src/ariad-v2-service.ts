@@ -62,6 +62,7 @@ class ProjectRuntime {
         sourcePath: project.sourcePath ?? null,
         workspace: project.workspace,
         pmBinding: `pm:${project.id}`,
+        deliveryEnabled: false,
       });
     }
 
@@ -151,7 +152,9 @@ class ProjectRuntime {
   status() {
     const tasks = this.store.listTasks(this.projectId);
     const planning = this.store.listPlanningRequests(this.projectId);
+    const project = this.store.getProject(this.projectId);
     return {
+      deliveryEnabled: project?.deliveryEnabled === true,
       tasks: {
         total: tasks.length,
         working: tasks.filter(task => task.state === 'WORKING').length,

@@ -1169,6 +1169,51 @@ test('default delivery roles are reuse-first but require fresh verification evid
   }
 });
 
+
+test('delivery scheduler remains gated until PM explicitly enables delivery', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-delivery-gate', deliveryEnabled: false });
+    store.createTask({ id: 'D1', projectId: 'P-delivery-gate', stage: 'developer', state: 'READY' });
+
+    const started = [];
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start(input) {
+        started.push(input.taskId);
+        return { id: `run:${input.taskId}` };
+      },
+      async poll() { return { state: 'RUNNING' }; },
+    });
+    const roleRegistry = new RoleRegistry();
+    roleRegistry.register('developer', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => ({ state: 'DONE' }),
+    });
+    const scheduler = new V2Scheduler({
+      store,
+      roles: roleRegistry,
+      providers,
+      resources: new ResourcePool({}),
+    });
+
+    const blocked = await scheduler.tick('P-delivery-gate');
+    assert.deepEqual(blocked.started, []);
+    assert.equal(store.getTask('D1').state, 'READY');
+
+    let project = store.getProject('P-delivery-gate');
+    store.updateProject(project.id, project.version, { deliveryEnabled: true });
+    const opened = await scheduler.tick('P-delivery-gate');
+    assert.deepEqual(opened.started, ['D1']);
+    assert.deepEqual(started, ['D1']);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('accepted takeover plan pauses at human review until a human decision is recorded', () => {
   const { dir, file } = tempDb();
   try {
@@ -1228,10 +1273,11 @@ test('accepted takeover plan pauses at human review until a human decision is re
     let pmTask = store.getTask('PM-take');
     const first = definitions.pm.transition({
       task: pmTask,
-      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.' } },
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },
     });
     assert.equal(first.state, 'NEEDS_HUMAN');
     assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW');
+    assert.equal(store.getProject('P-take-gate').deliveryEnabled, false, 'takeover human gate must override PM start request');
     assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
 
     pmTask = store.appendTaskHistory('PM-take', pmTask.version, {
@@ -1240,9 +1286,10 @@ test('accepted takeover plan pauses at human review until a human decision is re
     });
     const second = definitions.pm.transition({
       task: pmTask,
-      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.' } },
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true } },
     });
     assert.equal(second.state, 'DONE');
+    assert.equal(store.getProject('P-take-gate').deliveryEnabled, true, 'PM must explicitly open delivery after human takeover review');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

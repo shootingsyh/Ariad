@@ -84,7 +84,7 @@ function roleResultToolCall(request) {
   let result = { source: 'fake-provider', cycle, taskId };
   if (role === 'tech_lead' && isV2PlanningPrompt(request)) result = fakeV2Plan();
   if (role === 'tech_lead_critic') result = { issues: [], summary: 'No substantive issues.' };
-  if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', guidance: '', questions: [] };
+  if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', startDelivery: true, guidance: '', questions: [] };
 
   return {
     name,
@@ -272,7 +272,7 @@ function roleReply(request) {
     return { executionStatus: 'COMPLETED', outcome: 'CLEAN', result: { issues: [], summary: 'No substantive issues.' } };
   }
   if (isV2PmPrompt(request)) {
-    return { executionStatus: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'Plan covers the requested outcome.', guidance: '', questions: [] } };
+    return { executionStatus: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'Plan covers the requested outcome.', startDelivery: true, guidance: '', questions: [] } };
   }
 
   if (isDiscovery(request) && (!hasWorkspace(request) || !hasToolResult(request))) {
@@ -290,7 +290,7 @@ function roleReply(request) {
     return {
       executionStatus: 'COMPLETED',
       outcome: isCurrentStateReview(request) ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED',
-      result: { source: 'fake-provider', reason: 'plan covers requested outcome', guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
+      result: { source: 'fake-provider', reason: 'plan covers requested outcome', startDelivery: true, guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
     };
   }
   if (role === 'artist') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId } };

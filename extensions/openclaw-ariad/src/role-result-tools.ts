@@ -135,6 +135,7 @@ const schemas: Record<string, any> = {
     ...commonFields,
     result: Type.Object({
       reason: Type.String({ minLength: 1 }),
+      startDelivery: Type.Boolean({ description: 'Explicit PM decision to open the durable delivery scheduler gate after accepting this plan.' }),
       guidance: Type.Optional(Type.String()),
       questions: Type.Array(Type.String()),
     }, { additionalProperties: false }),

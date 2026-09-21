@@ -485,7 +485,8 @@ export function createDefaultV2Roles({
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
-          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, optional result.guidance, and result.questions. JSON terminal output is fallback only.',
+          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. JSON terminal output is fallback only.',
+          'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For TAKEOVER, delivery must remain gated until the required human review has been recorded; only a later PM review may explicitly start it.',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
@@ -503,7 +504,14 @@ export function createDefaultV2Roles({
           store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
+          const project = store.getProject(task.projectId);
+          const setDeliveryEnabled = (enabled) => {
+            const current = store.getProject(task.projectId);
+            if (current?.deliveryEnabled === enabled) return current;
+            return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
+          };
           if (takeover && !hasHumanDecision) {
+            setDeliveryEnabled(false);
             return {
               state: 'NEEDS_HUMAN',
               transitionHistory: {
@@ -515,7 +523,17 @@ export function createDefaultV2Roles({
               },
             };
           }
-          return { state: 'DONE' };
+          setDeliveryEnabled(result.result?.startDelivery === true);
+          return {
+            state: 'DONE',
+            transitionHistory: {
+              type: 'DELIVERY_GATE',
+              role: 'pm',
+              enabled: result.result?.startDelivery === true,
+              reason: result.result?.reason ?? null,
+              at: new Date().toISOString(),
+            },
+          };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
           enqueuePlanning?.({
