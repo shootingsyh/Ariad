@@ -576,6 +576,143 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
   }
 });
 
+
+test('final validator reloads raw v3 filesystem artifacts instead of revalidating compiled predecessor plan', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-v3-final', mode: 'TAKEOVER' });
+    const artifactRoot = path.join(dir, 'artifacts');
+    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
+
+    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
+      id: 'game',
+      title: 'Game',
+      summary: 'Recovered game',
+      parentId: null,
+    }));
+    fs.writeFileSync(path.join(milestoneDir, 'M0.json'), JSON.stringify({
+      id: 'M0',
+      title: 'Baseline',
+      goal: 'Establish a runnable recovered baseline.',
+      parentId: null,
+      dependsOn: [],
+      logicalRefs: ['game'],
+      acceptanceCriteria: ['Baseline is runnable.'],
+      testStrategy: 'Run baseline integration.',
+      tasks: [{
+        id: 'm0-baseline-integ',
+        title: 'Baseline integration',
+        intent: 'Assemble and run the recovered baseline.',
+        dependsOn: [],
+        logicalRefs: ['game'],
+        acceptanceCriteria: ['Recovered baseline runs.'],
+        testStrategy: 'Run the baseline E2E.',
+      }],
+    }));
+
+    const compiled = validatePlannerArtifactPlan(loadPlannerArtifactPlan(artifactRoot)).plan;
+    assert.equal(compiled.milestones[0].tasks, undefined);
+
+    store.createControlFlow({
+      projectId: 'P-v3-final',
+      flowId: 'planner-flow',
+      tasks: [
+        {
+          id: 'prior-validator',
+          stage: 'plan_validator',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'plan_validator',
+            outcome: 'PASS',
+            result: { valid: true, plan: compiled, error: null },
+          }],
+        },
+        {
+          id: 'final-validator',
+          stage: 'plan_validator',
+          dependsOn: ['prior-validator'],
+          input: { purpose: 'PLANNER_FINAL_VALIDATE' },
+        },
+      ],
+    });
+
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      artifactRoot,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('final-validator');
+    const prepared = definitions.plan_validator.prepare({ task });
+    const result = await prepared.execute();
+    assert.equal(result.outcome, 'PASS');
+    assert.equal(result.result.valid, true);
+    assert.equal(result.result.plan.tasks[0].id, 'm0-baseline-integ');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bad legacy planner artifact is isolated and recorded once instead of crashing plan lookup', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-bad-artifact' });
+    const artifactRoot = path.join(dir, 'artifacts');
+    fs.mkdirSync(path.join(artifactRoot, 'planner'), { recursive: true });
+    fs.writeFileSync(path.join(artifactRoot, 'planner', 'broken.json'), '{"version":2,"tasks":[');
+
+    store.createControlFlow({
+      projectId: 'P-bad-artifact',
+      flowId: 'planner-flow',
+      tasks: [
+        {
+          id: 'legacy-plan',
+          stage: 'tech_lead',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            result: { artifactRef: 'planner/broken.json' },
+          }],
+        },
+        {
+          id: 'validate-bad',
+          stage: 'plan_validator',
+          dependsOn: ['legacy-plan'],
+          input: { purpose: 'PLANNER_FINAL_VALIDATE' },
+        },
+      ],
+    });
+
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      artifactRoot,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('validate-bad');
+    const first = await definitions.plan_validator.prepare({ task }).execute();
+    const second = await definitions.plan_validator.prepare({ task }).execute();
+    assert.equal(first.outcome, 'NOT_PASS');
+    assert.equal(first.result.error, 'NO_CANDIDATE_PLAN');
+    assert.equal(second.outcome, 'NOT_PASS');
+    const incidents = store.listIncidents('P-bad-artifact');
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].type, 'PLANNER_ARTIFACT_INVALID');
+    assert.equal(incidents[0].artifactRef, 'planner/broken.json');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('split planner artifact registry rejects subdirectories and filename/id drift', () => {
   const { dir } = tempDb();
   try {
