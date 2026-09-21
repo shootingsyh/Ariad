@@ -28,6 +28,27 @@
       "profiles": [
         "coding"
       ]
+    },
+    "ariad_developer_result": {
+      "optional": true
+    },
+    "ariad_tester_result": {
+      "optional": true
+    },
+    "ariad_reviewer_result": {
+      "optional": true
+    },
+    "ariad_project_debugger_result": {
+      "optional": true
+    },
+    "ariad_tech_lead_result": {
+      "optional": true
+    },
+    "ariad_tech_lead_critic_result": {
+      "optional": true
+    },
+    "ariad_pm_result": {
+      "optional": true
     }
   }
 }
