@@ -16,10 +16,27 @@ import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
 import { AriadDashboardService } from './dashboard-service.js';
+import {
+  registerRoleResultTools,
+  RoleResultSessionRegistry,
+  roleResultToolName,
+} from './role-result-tools.js';
 
 const promptRenderer = new PromptRenderer();
 
 function renderRoleMessage(role: string, context: Record<string, unknown>) {
+  const toolName = roleResultToolName(role);
+  const resultContract = toolName && typeof context.projectId === 'string' && typeof context.taskId === 'string'
+    ? [
+        '',
+        'ARIAD RESULT CONTRACT',
+        `Before ending this role, you MUST successfully call ${toolName} exactly once.`,
+        'That tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
+        'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
+        'Once the tool accepts the result, it is sealed. Any text you produce afterward is informational only and is ignored by Ariad.',
+      ].join('\n')
+    : '';
+
   if (typeof context.v2Prompt === 'string' && context.v2Prompt.trim()) {
     const { v2Prompt, ...runtimeContext } = context;
     return [
@@ -27,12 +44,16 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
       '',
       'ARIAD RUNTIME CONTEXT',
       JSON.stringify(runtimeContext),
-    ].join('\n');
+      resultContract,
+    ].filter(Boolean).join('\n');
   }
   const rendered = promptRenderer.render(role, context);
-  return rendered.messages
-    .map((message: { role: string; content: string }) => `[${message.role.toUpperCase()}]\n${message.content}`)
-    .join('\n\n');
+  return [
+    rendered.messages
+      .map((message: { role: string; content: string }) => `[${message.role.toUpperCase()}]\n${message.content}`)
+      .join('\n\n'),
+    resultContract,
+  ].filter(Boolean).join('\n\n');
 }
 
 export default defineFeaturePlugin({
@@ -43,6 +64,7 @@ export default defineFeaturePlugin({
     const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
     const pushSourceControl = process.env.ARIAD_SOURCE_CONTROL_PUSH !== '0';
     const manager = new AriadProjectManager({ projectsRoot });
+    const roleResultSessions = new RoleResultSessionRegistry();
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
@@ -51,6 +73,7 @@ export default defineFeaturePlugin({
         const runs = (api.runtime.tasks as any)?.runs;
         if (typeof runs?.cancel === 'function') await runs.cancel(runId);
       },
+      onSessionBound: (binding) => roleResultSessions.bind(binding),
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter);
@@ -89,6 +112,12 @@ export default defineFeaturePlugin({
           );
         }
       },
+    });
+
+    registerRoleResultTools({
+      api,
+      registry: roleResultSessions,
+      submit: (binding, payload) => v2Service.submitRoleResult(binding, payload),
     });
 
     api.registerService({
