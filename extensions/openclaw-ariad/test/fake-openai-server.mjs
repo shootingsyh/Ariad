@@ -83,6 +83,7 @@ function roleResultToolCall(request) {
   return {
     name,
     arguments: {
+      attemptId: requestAttemptId(request),
       outcome,
       summary: `${role} submitted structured result`,
       keyPoints: [],
