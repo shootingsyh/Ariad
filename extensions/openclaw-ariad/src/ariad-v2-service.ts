@@ -212,6 +212,79 @@ class ProjectRuntime {
     }
   }
 
+  submitRoleResult({
+    taskId,
+    role,
+    attemptId,
+    payload,
+  }: {
+    taskId: string;
+    role: string;
+    attemptId: string;
+    payload: {
+      outcome: string;
+      summary: string;
+      keyPoints?: string[];
+      artifacts?: string[];
+      result?: unknown;
+    };
+  }) {
+    let task = this.store.getTask(taskId);
+    if (!task) throw new Error(`unknown task: ${taskId}`);
+    if (task.projectId !== this.projectId) throw new Error(`task ${taskId} does not belong to project ${this.projectId}`);
+    if (task.stage !== role) throw new Error(`role result mismatch: task ${taskId} is at ${task.stage}, not ${role}`);
+    if (task.state !== 'WORKING') {
+      const existing = (task.history ?? []).find(
+        (entry: any) => entry?.type === 'ROLE_RESULT'
+          && entry?.attemptId === attemptId
+          && entry?.role === role
+          && entry?.source === 'role_result_tool'
+      );
+      if (existing) return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+      throw new Error(`task ${taskId} is not WORKING`);
+    }
+    if (task.execution?.attemptId !== attemptId) {
+      throw new Error(`stale role result attempt for ${taskId}: expected ${task.execution?.attemptId ?? 'none'}, got ${attemptId}`);
+    }
+
+    const existing = (task.history ?? []).find(
+      (entry: any) => entry?.type === 'ROLE_RESULT'
+        && entry?.attemptId === attemptId
+        && entry?.role === role
+        && entry?.source === 'role_result_tool'
+    );
+    if (existing) return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+
+    const entry = {
+      type: 'ROLE_RESULT',
+      role,
+      outcome: payload.outcome,
+      summary: payload.summary,
+      keyPoints: structuredClone(payload.keyPoints ?? []),
+      artifacts: structuredClone(payload.artifacts ?? []),
+      result: structuredClone(payload.result ?? null),
+      attemptId,
+      source: 'role_result_tool',
+      completedAt: new Date().toISOString(),
+    };
+
+    try {
+      task = this.store.appendTaskHistory(task.id, task.version, entry);
+    } catch (error) {
+      if (!String((error as Error)?.message ?? error).includes('version conflict')) throw error;
+      task = this.store.getTask(taskId);
+      const raced = (task?.history ?? []).find(
+        (item: any) => item?.type === 'ROLE_RESULT'
+          && item?.attemptId === attemptId
+          && item?.role === role
+          && item?.source === 'role_result_tool'
+      );
+      if (!raced) throw error;
+      return { accepted: true, sealed: true, alreadySubmitted: true, taskId, attemptId };
+    }
+    return { accepted: true, sealed: true, alreadySubmitted: false, taskId, attemptId };
+  }
+
   submitDecision(decision: string) {
     const task = this.store.listTasks(this.projectId).find(item => item.state === 'NEEDS_HUMAN');
     if (!task) throw new Error('project has no pending human decision');
@@ -306,6 +379,39 @@ export class AriadV2Service {
       this.runtimes.delete(name);
     }
     return this.status(name);
+  }
+
+  submitRoleResult(binding: {
+    projectId: string;
+    taskId: string;
+    role: string;
+    attemptId: string;
+  }, payload: {
+    outcome: string;
+    summary: string;
+    keyPoints?: string[];
+    artifacts?: string[];
+    result?: unknown;
+  }) {
+    const project = this.manager.status(binding.projectId);
+    let runtime = this.runtimes.get(project.id);
+    if (!runtime) {
+      if (project.desiredState !== 'RUNNING') throw new Error(`project ${project.id} is not running`);
+      runtime = new ProjectRuntime({
+        manager: this.manager,
+        project,
+        provider: this.provider,
+        pushSourceControl: this.pushSourceControl,
+        logger: this.logger,
+      });
+      this.runtimes.set(project.id, runtime);
+    }
+    return runtime.submitRoleResult({
+      taskId: binding.taskId,
+      role: binding.role,
+      attemptId: binding.attemptId,
+      payload,
+    });
   }
 
   async submitDecision(name: string, decision: string) {
