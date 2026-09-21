@@ -150,6 +150,8 @@ export class AriadProjectManager {
       stateDb: db,
       desiredState: 'STOPPED',
       executionState: 'IDLE',
+      projectVersion: 0,
+      activeVersion: 1,
       roleModels: normalizeRoleModels(roleModels),
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
@@ -239,6 +241,10 @@ export class AriadProjectManager {
       frontdeskBinding,
       roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
       executionState: manifest.executionState ?? 'IDLE',
+      projectVersion: Number.isInteger(manifest.projectVersion) ? manifest.projectVersion : 0,
+      activeVersion: Number.isInteger(manifest.activeVersion)
+        ? manifest.activeVersion
+        : (Number.isInteger(manifest.projectVersion) ? manifest.projectVersion + 1 : 1),
       root: p.root,
     };
   }
@@ -263,6 +269,14 @@ export class AriadProjectManager {
   setDesiredState(name, desiredState) {
     if (!['RUNNING', 'PAUSED', 'STOPPED'].includes(desiredState)) throw new Error(`invalid desired state: ${desiredState}`);
     return this.writeManifest(name, { desiredState });
+  }
+
+  setVersionState(name, { projectVersion, activeVersion }) {
+    const patch = {};
+    if (Number.isInteger(projectVersion) && projectVersion >= 0) patch.projectVersion = projectVersion;
+    if (Number.isInteger(activeVersion) && activeVersion >= 1) patch.activeVersion = activeVersion;
+    if (Object.keys(patch).length === 0) throw new Error('version state requires projectVersion or activeVersion');
+    return this.writeManifest(name, patch);
   }
 
   setExecutionState(name, executionState) {

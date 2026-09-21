@@ -189,6 +189,8 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       mode: project.mode ?? 'NEW',
       sourcePath: project.sourcePath ?? null,
       deliveryPlanSummary: project.deliveryPlanSummary ?? null,
+      projectVersion: project.projectVersion ?? 0,
+      activeVersion: project.activeVersion ?? 1,
     },
     planningRequests: task.input?.requests ?? [],
     currentDeliveryPlan: currentPlan,

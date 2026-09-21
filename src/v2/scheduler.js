@@ -85,9 +85,13 @@ export class V2Scheduler {
 
     const allTasks = this.store.listTasks(projectId);
     const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
+    const deliveryEnabled = project.deliveryEnabled !== false;
     const schedulableTasks = planningBlocked
       ? allTasks.filter(isPlannerTask)
-      : allTasks.filter(task => !isPlannerTask(task));
+      : allTasks.filter(task =>
+          !isPlannerTask(task)
+          && (task.scope !== 'delivery' || deliveryEnabled)
+        );
     const candidates = [];
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {

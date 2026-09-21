@@ -45,6 +45,8 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     assert.ok(existsSync(join(beta.workspace, '.ariad', 'project.json')));
     assert.equal(alpha.desiredState, 'STOPPED');
     assert.equal(beta.desiredState, 'STOPPED');
+    assert.equal(alpha.projectVersion, 0);
+    assert.equal(alpha.activeVersion, 1);
     assert.equal(takeover.mode, 'TAKEOVER');
     assert.equal(takeover.sourcePath, existingRepo);
     assert.equal(takeover.workspace, existingRepo);

@@ -46,6 +46,7 @@ PLANNING RULES
 - Mark a task with art only when it needs pure media resources (image/video/audio/music). Artist does not own UX, CSS, layout, or interaction design.
 - art must specify required, media, deliverables, and placeholderAllowed. Prefer real assets; placeholders are allowed only when explicitly acceptable.
 - Tester/Reviewer must have a concrete evidence strategy for media-bearing work (for example screenshots/keyframes or audio checks/review).
+- For a later project iteration/version, preserve completed task ids as historical DONE work. If new requirements change previously completed behavior, create explicit follow-up tasks and fresh regression/integration tasks rather than silently reopening old DONE tasks.
 - Keep the structure simple enough that a future TL can reconstruct the project's state quickly.
 
 FINAL CHECK

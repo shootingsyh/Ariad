@@ -317,7 +317,7 @@ const plugin = defineFeaturePlugin({
 
       api.registerGatewayMethod('ariad.ci.project', async ({ params, respond }) => {
         try {
-          const input = (params ?? {}) as { action?: string; name?: string; goal?: string; mode?: 'NEW' | 'TAKEOVER'; sourcePath?: string; roleModels?: Record<string, string> };
+          const input = (params ?? {}) as { action?: string; name?: string; goal?: string; request?: string; mode?: 'NEW' | 'TAKEOVER'; sourcePath?: string; roleModels?: Record<string, string> };
           if (!input.action) throw new Error('action is required');
           if (input.action === 'create') {
             if (!input.name) throw new Error('name is required');
@@ -342,6 +342,11 @@ const plugin = defineFeaturePlugin({
           }
           if (input.action === 'pause') {
             respond(true, { project: await v2Service.ensurePaused(input.name) });
+            return;
+          }
+          if (input.action === 'iterate') {
+            if (!input.request?.trim()) throw new Error('request is required for action iterate');
+            respond(true, { result: await v2Service.iterate(input.name, input.request) });
             return;
           }
           if (input.action === 'status') {

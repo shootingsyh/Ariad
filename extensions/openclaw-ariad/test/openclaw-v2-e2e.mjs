@@ -156,11 +156,32 @@ try {
   }, 'production v2 project success');
 
   assert.match(status, /"runtime"\s*:\s*"v2"/);
+  assert.match(status, /"projectVersion"\s*:\s*1/);
   await waitFor(
     () => providerLog.includes('ARIAD_FAKE_MODEL model=role'),
     'explicit Ariad role model override',
     5_000
   );
+
+  const iterate = gatewayCall('ariad.ci.project', {
+    action: 'iterate',
+    name: 'v2-production',
+    request: 'Add a small follow-up improvement and revalidate the completed project.',
+  });
+  assert.match(iterate, /"activeVersion"\s*:\s*2/);
+
+  let iterationStatus = '';
+  await waitFor(() => {
+    iterationStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
+    lastProjectStatus = iterationStatus;
+    if (/"executionState"\s*:\s*"(FAILED|NEEDS_HUMAN)"/.test(iterationStatus)) {
+      const error = new Error(`iteration stopped before success: ${iterationStatus}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+      error.fatal = true;
+      throw error;
+    }
+    return /"executionState"\s*:\s*"SUCCEEDED"/.test(iterationStatus)
+      && /"projectVersion"\s*:\s*2/.test(iterationStatus);
+  }, 'second project version success');
 
   const projectRoot = join(projectsRoot, 'v2-production');
   const workspace = join(projectRoot, 'workspace');

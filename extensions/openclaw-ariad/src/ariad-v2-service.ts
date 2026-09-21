@@ -18,6 +18,7 @@ type ProjectManager = {
   status(name: string): any;
   setDesiredState(name: string, state: string): any;
   setExecutionState(name: string, state: string): any;
+  setVersionState(name: string, value: { projectVersion?: number; activeVersion?: number }): any;
 };
 
 function workspaceIsEmpty(path: string) {
@@ -63,7 +64,30 @@ class ProjectRuntime {
         workspace: project.workspace,
         pmBinding: `pm:${project.id}`,
         deliveryEnabled: false,
+        projectVersion: project.projectVersion ?? 0,
+        activeVersion: project.activeVersion ?? 1,
+        versionHistory: [],
       });
+    } else {
+      const durable = this.store.getProject(project.id);
+      if (!Number.isInteger(durable.projectVersion) || !Number.isInteger(durable.activeVersion)) {
+        const legacyCompleted = project.executionState === 'SUCCEEDED';
+        const completedVersion = Number.isInteger(project.projectVersion)
+          ? project.projectVersion
+          : (legacyCompleted ? 1 : 0);
+        const activeVersion = Number.isInteger(project.activeVersion)
+          ? project.activeVersion
+          : Math.max(1, completedVersion || 1);
+        this.store.updateProject(project.id, durable.version, {
+          projectVersion: completedVersion,
+          activeVersion,
+          versionHistory: durable.versionHistory ?? (
+            completedVersion > 0
+              ? [{ version: completedVersion, completedAt: project.updatedAt ?? project.createdAt ?? null, migrated: true }]
+              : []
+          ),
+        });
+      }
     }
 
     const providers = new ProviderRegistry();
@@ -155,6 +179,9 @@ class ProjectRuntime {
     const project = this.store.getProject(this.projectId);
     return {
       deliveryEnabled: project?.deliveryEnabled === true,
+      projectVersion: project?.projectVersion ?? 0,
+      activeVersion: project?.activeVersion ?? 1,
+      versionHistory: project?.versionHistory ?? [],
       tasks: {
         total: tasks.length,
         working: tasks.filter(task => task.state === 'WORKING').length,
@@ -181,6 +208,34 @@ class ProjectRuntime {
     };
   }
 
+  beginIteration(request: string) {
+    if (!request?.trim()) throw new Error('iteration request is required');
+    let project = this.store.getProject(this.projectId);
+    const completedVersion = Number.isInteger(project.projectVersion) ? project.projectVersion : 0;
+    const activeVersion = completedVersion + 1;
+    project = this.store.updateProject(this.projectId, project.version, {
+      deliveryEnabled: false,
+      activeVersion,
+    });
+    const planningRequest = this.store.enqueuePlanningRequest({
+      id: `${this.projectId}:iterate:v${activeVersion}:${Date.now()}:${++this.requestSequence}`,
+      projectId: this.projectId,
+      request: {
+        purpose: 'UPDATE_DELIVERY_PLAN',
+        iteration: activeVersion,
+        instruction: request.trim(),
+        lifecycleRule: 'Preserve DONE tasks as historical completion. Add new follow-up tasks for changed behavior instead of reopening old DONE task ids. Add fresh integration/regression tasks when the new work can affect completed behavior.',
+      },
+      context: {
+        sourceKind: 'iteration',
+        fromVersion: completedVersion,
+        targetVersion: activeVersion,
+      },
+    });
+    this.manager.setVersionState(this.projectId, { projectVersion: completedVersion, activeVersion });
+    return { planningRequest, project: this.status() };
+  }
+
   async tick({ schedule = true }: { schedule?: boolean } = {}) {
     if (this.ticking) return;
     this.ticking = true;
@@ -200,6 +255,31 @@ class ProjectRuntime {
         state = 'PLANNING';
       } else if (delivery.length > 0 && delivery.every(task => ['DONE', 'OBSOLETE'].includes(task.state))) {
         state = 'SUCCEEDED';
+        let durableProject = this.store.getProject(this.projectId);
+        const completedVersion = Number.isInteger(durableProject.projectVersion) ? durableProject.projectVersion : 0;
+        const activeVersion = Number.isInteger(durableProject.activeVersion)
+          ? durableProject.activeVersion
+          : Math.max(1, completedVersion + 1);
+        if (activeVersion > completedVersion) {
+          const completedAt = new Date().toISOString();
+          durableProject = this.store.updateProject(this.projectId, durableProject.version, {
+            projectVersion: activeVersion,
+            activeVersion,
+            versionHistory: [
+              ...(durableProject.versionHistory ?? []),
+              {
+                version: activeVersion,
+                completedAt,
+                deliveryPlanVersion: durableProject.deliveryPlanVersion ?? null,
+                deliveryRootTaskId: durableProject.deliveryRootTaskId ?? null,
+              },
+            ],
+          });
+          this.manager.setVersionState(this.projectId, {
+            projectVersion: activeVersion,
+            activeVersion,
+          });
+        }
       } else if (tasks.some(task => ['READY', 'WORKING', 'RESULT_READY', 'WAITING_REPLAN'].includes(task.state))) {
         state = 'RUNNING';
       }
@@ -409,6 +489,30 @@ export class AriadV2Service {
       runtime: 'v2',
       ...(runtime ? runtime.status() : {}),
     };
+  }
+
+  async iterate(name: string, request: string) {
+    const current = this.manager.status(name);
+    if (current.executionState !== 'SUCCEEDED') {
+      throw new Error(`project ${current.id} must be SUCCEEDED before starting a new iteration`);
+    }
+    requireCompleteRoleModels(current.roleModels ?? {});
+    this.manager.setDesiredState(name, 'RUNNING');
+    this.manager.setExecutionState(name, 'PLANNING');
+    let runtime = this.runtimes.get(current.id);
+    if (!runtime) {
+      runtime = new ProjectRuntime({
+        manager: this.manager,
+        project: this.manager.status(current.id),
+        provider: this.provider,
+        pushSourceControl: this.pushSourceControl,
+        logger: this.logger,
+      });
+      this.runtimes.set(current.id, runtime);
+    }
+    const result = runtime.beginIteration(request);
+    await this.reconcile();
+    return { ...result, project: this.status(current.id) };
   }
 
   async ensureRunning(name: string) {
