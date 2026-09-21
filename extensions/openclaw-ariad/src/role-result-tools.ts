@@ -150,12 +150,10 @@ export function roleResultToolMetadata() {
 
 export function registerRoleResultTools({
   api,
-  registry,
   submit,
 }: {
   api: any;
-  registry: RoleResultSessionRegistry;
-  submit: (binding: RoleResultBinding, payload: RoleResultPayload) => Promise<any> | any;
+  submit: (attemptId: string, role: string, payload: Omit<RoleResultPayload, 'attemptId'>) => Promise<any> | any;
 }) {
   for (const [role, name] of Object.entries(ROLE_RESULT_TOOL_NAMES)) {
     api.registerTool({
@@ -165,13 +163,9 @@ export function registerRoleResultTools({
       parameters: schemas[role],
       async execute(_toolCallId: string, params: RoleResultPayload) {
         const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
-        const binding = registry.getAttempt(attemptId);
-        if (!binding) throw new Error(`No active Ariad execution matches attemptId ${attemptId || '<missing>'}.`);
-        if (binding.role !== role) {
-          throw new Error(`Ariad attempt ${attemptId} belongs to role ${binding.role}, not ${role}.`);
-        }
+        if (!attemptId) throw new Error('attemptId is required.');
         const { attemptId: _attemptId, ...payload } = params;
-        const result = await submit(binding, payload);
+        const result = await submit(attemptId, role, payload);
         return {
           content: [{
             type: 'text',
