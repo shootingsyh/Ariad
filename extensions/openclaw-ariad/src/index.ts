@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
+import { toolPluginMetadataSymbol } from 'openclaw/plugin-sdk/tool-plugin';
 import { PromptRenderer } from '../../../src/llm/prompt-renderer.js';
 import { SQLiteV2Store } from '../../../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../../../src/v2/role-registry.js';
@@ -19,6 +20,7 @@ import { AriadDashboardService } from './dashboard-service.js';
 import {
   registerRoleResultTools,
   RoleResultSessionRegistry,
+  roleResultToolMetadata,
   roleResultToolName,
 } from './role-result-tools.js';
 
@@ -56,7 +58,7 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
   ].filter(Boolean).join('\n\n');
 }
 
-export default defineFeaturePlugin({
+const plugin = defineFeaturePlugin({
   contract,
   name: 'Ariad',
   description: 'Create and manage isolated Ariad autonomous engineering projects.',
@@ -341,4 +343,12 @@ export default defineFeaturePlugin({
       },
     };
   },
+}
 });
+
+const staticMetadata = (plugin as any)[toolPluginMetadataSymbol];
+if (staticMetadata?.tools) {
+  staticMetadata.tools.push(...roleResultToolMetadata());
+}
+
+export default plugin;
