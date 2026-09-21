@@ -334,7 +334,7 @@ const plugin = defineFeaturePlugin({
           if (!name) throw new Error(`name is required for action ${action}`);
           if (action === 'create') {
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-            const selectedRoleModels = requireCompleteRoleModels((roleModels ?? {}) as Record<string, string>);
+            const selectedRoleModels = requireCompleteRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
             await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
             const project = manager.create(name, {
               goal: goal ?? null,
@@ -350,7 +350,7 @@ const plugin = defineFeaturePlugin({
             details = { action, project: v2Service.status(project.id) };
           } else if (action === 'set_role_models') {
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-            const selectedRoleModels = normalizeRoleModels((roleModels ?? {}) as Record<string, string>);
+            const selectedRoleModels = normalizeRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
             if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
             await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
             details = { action, project: manager.setRoleModels(name, selectedRoleModels) };
