@@ -180,7 +180,7 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
 });
 
 
-test('supervisor consumes sealed role-tool result from durable history before polling provider prose', async () => {
+test('supervisor waits for run termination then consumes sealed role-tool result instead of provider prose', async () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
@@ -227,7 +227,7 @@ test('supervisor consumes sealed role-tool result from durable history before po
 
     await supervisor.audit('P-role-tool');
     const task = store.getTask('T-role-tool');
-    assert.equal(polls, 0);
+    assert.equal(polls, 1);
     assert.equal(task.state, 'RESULT_READY');
     assert.equal(task.execution, null);
     assert.deepEqual(task.artifacts, ['evidence.json']);
