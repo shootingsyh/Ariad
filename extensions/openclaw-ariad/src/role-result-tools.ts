@@ -9,6 +9,7 @@ export type RoleResultBinding = {
 };
 
 export type RoleResultPayload = {
+  attemptId?: string;
   outcome: string;
   summary: string;
   keyPoints?: string[];
@@ -18,6 +19,7 @@ export type RoleResultPayload = {
 
 export class RoleResultSessionRegistry {
   private readonly bindings = new Map<string, RoleResultBinding>();
+  private readonly attempts = new Map<string, RoleResultBinding>();
   private readonly maxEntries: number;
 
   constructor(maxEntries = 2048) {
@@ -27,16 +29,27 @@ export class RoleResultSessionRegistry {
   bind(binding: RoleResultBinding) {
     this.bindings.delete(binding.sessionKey);
     this.bindings.set(binding.sessionKey, binding);
+    this.attempts.delete(binding.attemptId);
+    this.attempts.set(binding.attemptId, binding);
     while (this.bindings.size > this.maxEntries) {
       const oldest = this.bindings.keys().next().value;
       if (!oldest) break;
+      const removed = this.bindings.get(oldest);
       this.bindings.delete(oldest);
+      if (removed && this.attempts.get(removed.attemptId)?.sessionKey === oldest) {
+        this.attempts.delete(removed.attemptId);
+      }
     }
   }
 
   get(sessionKey?: string | null) {
     if (!sessionKey) return null;
     return this.bindings.get(sessionKey) ?? null;
+  }
+
+  getAttempt(attemptId?: string | null) {
+    if (!attemptId) return null;
+    return this.attempts.get(attemptId) ?? null;
   }
 }
 
@@ -51,6 +64,7 @@ export const ROLE_RESULT_TOOL_NAMES: Record<string, string> = {
 };
 
 const commonFields = {
+  attemptId: Type.String({ minLength: 1 }),
   summary: Type.String({ minLength: 1 }),
   keyPoints: Type.Optional(Type.Array(Type.String())),
   artifacts: Type.Optional(Type.Array(Type.String())),
@@ -155,12 +169,14 @@ export function registerRoleResultTools({
               // toolsAlsoAllow controls model visibility. Resolve the durable
               // execution binding at call time so tool construction never races
               // subagent session registration.
-              const binding = registry.get(context.sessionKey);
-              if (!binding) throw new Error('No active Ariad role execution is bound to this session.');
+              const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
+              const binding = registry.getAttempt(attemptId);
+              if (!binding) throw new Error(`No active Ariad execution matches attemptId ${attemptId || '<missing>'}.`);
               if (binding.role !== role) {
-                throw new Error(`This session is bound to Ariad role ${binding.role}, not ${role}.`);
+                throw new Error(`Ariad attempt ${attemptId} belongs to role ${binding.role}, not ${role}.`);
               }
-              const result = await submit(binding, params);
+              const { attemptId: _attemptId, ...payload } = params;
+              const result = await submit(binding, payload);
               return {
                 content: [{
                   type: 'text',
