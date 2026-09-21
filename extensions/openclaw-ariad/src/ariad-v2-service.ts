@@ -11,6 +11,7 @@ import { FunctionProvider } from '../../../src/v2/function-provider.js';
 import { createDefaultV2Roles } from '../../../src/v2/default-roles.js';
 import { bootstrapProject } from '../../../src/v2/project-bootstrap.js';
 import type { OpenClawV2Provider } from './openclaw-v2-provider.js';
+import { requireCompleteRoleModels } from '../runtime/role-models.js';
 
 type ProjectManager = {
   list(): any[];
@@ -363,6 +364,8 @@ export class AriadV2Service {
   }
 
   async ensureRunning(name: string) {
+    const current = this.manager.status(name);
+    requireCompleteRoleModels(current.roleModels ?? {});
     const project = this.manager.setDesiredState(name, 'RUNNING');
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
