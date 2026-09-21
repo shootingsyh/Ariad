@@ -11,6 +11,11 @@ import { ResourcePool } from '../../../src/v2/resource-pool.js';
 import { V2Scheduler } from '../../../src/v2/scheduler.js';
 import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
+import {
+  ARIAD_MODEL_ROLES,
+  normalizeRoleModels,
+  requireCompleteRoleModels,
+} from '../runtime/role-models.js';
 import { contract } from './contract.js';
 import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
@@ -78,7 +83,39 @@ const plugin = defineFeaturePlugin({
       onSessionBound: (binding) => roleResultSessions.bind(binding),
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
-    const v2Provider = new OpenClawV2Provider(runtimeAdapter);
+    const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
+      resolveModelRef: (projectId, role) => manager.status(projectId).roleModels?.[role] ?? null,
+    });
+    const listOpenClawModels = async (agentId?: string | null) => {
+      const result = await api.runtime.gateway.request<any>('models.list', {
+        view: 'configured',
+        includeDetails: true,
+        ...(agentId ? { agentId } : {}),
+      });
+      return (Array.isArray(result?.models) ? result.models : []).map((model: any) => ({
+        ref: `${model.provider}/${model.id}`,
+        provider: model.provider,
+        id: model.id,
+        name: model.name,
+        available: model.available ?? null,
+        local: model.local ?? null,
+        supportsTools: model.supportsTools ?? null,
+        contextTokens: model.contextTokens ?? model.contextWindow ?? null,
+      }));
+    };
+
+    const validateSelectedRoleModels = async (roleModels: Record<string, string>, agentId?: string | null) => {
+      const models = await listOpenClawModels(agentId);
+      const byRef = new Map(models.map((model: any) => [model.ref, model]));
+      for (const [role, ref] of Object.entries(roleModels)) {
+        const model = byRef.get(ref);
+        if (!model) throw new Error(`Ariad model ${ref} for ${role} is not present in OpenClaw models.list configured view`);
+        if (model.available === false) throw new Error(`Ariad model ${ref} for ${role} is currently unavailable`);
+        if (model.supportsTools === false) throw new Error(`Ariad model ${ref} for ${role} does not support tools`);
+      }
+      return models;
+    };
+
     const dashboard = new AriadDashboardService({
       manager,
       host: process.env.ARIAD_DASHBOARD_HOST || '127.0.0.1',
@@ -194,6 +231,7 @@ const plugin = defineFeaturePlugin({
                 context: {
                   acceptanceCriteria: task.input?.acceptanceCriteria ?? [],
                   devCycle: 2,
+                  roleModelRef: 'ariadfake/fake',
                 },
               }),
               transition: ({ result }: any) => result.outcome === 'PASS'
@@ -240,7 +278,7 @@ const plugin = defineFeaturePlugin({
 
       api.registerGatewayMethod('ariad.ci.project', async ({ params, respond }) => {
         try {
-          const input = (params ?? {}) as { action?: string; name?: string; goal?: string; mode?: 'NEW' | 'TAKEOVER'; sourcePath?: string };
+          const input = (params ?? {}) as { action?: string; name?: string; goal?: string; mode?: 'NEW' | 'TAKEOVER'; sourcePath?: string; roleModels?: Record<string, string> };
           if (!input.action) throw new Error('action is required');
           if (input.action === 'create') {
             if (!input.name) throw new Error('name is required');
@@ -248,6 +286,7 @@ const plugin = defineFeaturePlugin({
               goal: input.goal ?? null,
               mode: input.mode ?? null,
               sourcePath: input.sourcePath ?? null,
+              roleModels: input.roleModels ?? Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'ariadfake/fake'])),
               projectAgent: null,
             });
             respond(true, { project: v2Service.status(project.id) });
@@ -276,18 +315,32 @@ const plugin = defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal, mode, sourcePath, decision, agentId, sessionKey } = input;
+        const { action, name, goal, mode, sourcePath, decision, agentId, sessionKey, roleModels } = input;
         let details: unknown;
         if (action === 'list') {
           details = { action, projects: v2Service.list() };
+        } else if (action === 'models') {
+          const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+          const models = await listOpenClawModels(agentId ?? toolContext?.agentId ?? null);
+          const project = name ? manager.status(name) : null;
+          details = {
+            action,
+            requiredRoles: ARIAD_MODEL_ROLES,
+            roleModels: project?.roleModels ?? null,
+            missingRoles: project ? ARIAD_MODEL_ROLES.filter(role => !project.roleModels?.[role]) : null,
+            models,
+          };
         } else {
           if (!name) throw new Error(`name is required for action ${action}`);
           if (action === 'create') {
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+            const selectedRoleModels = requireCompleteRoleModels(roleModels ?? {});
+            await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
             const project = manager.create(name, {
               goal: goal ?? null,
               mode: mode ?? null,
               sourcePath: sourcePath ?? null,
+              roleModels: selectedRoleModels,
               frontdeskBinding: {
                 host: 'openclaw',
                 agentId: toolContext?.agentId ?? null,
@@ -295,6 +348,12 @@ const plugin = defineFeaturePlugin({
               },
             });
             details = { action, project: v2Service.status(project.id) };
+          } else if (action === 'set_role_models') {
+            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+            const selectedRoleModels = normalizeRoleModels(roleModels ?? {});
+            if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
+            await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
+            details = { action, project: manager.setRoleModels(name, selectedRoleModels) };
           } else if (action === 'status') {
             details = { action, project: v2Service.status(name) };
           } else if (action === 'adopt') {
