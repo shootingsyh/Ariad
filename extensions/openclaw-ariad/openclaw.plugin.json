@@ -12,11 +12,57 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["ariad_project"]
+    "tools": [
+      "ariad_project",
+      "ariad_developer_result",
+      "ariad_tester_result",
+      "ariad_reviewer_result",
+      "ariad_project_debugger_result",
+      "ariad_tech_lead_result",
+      "ariad_tech_lead_critic_result",
+      "ariad_pm_result"
+    ]
   },
   "toolMetadata": {
     "ariad_project": {
-      "profiles": ["coding"]
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_developer_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_tester_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_reviewer_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_project_debugger_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_tech_lead_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_tech_lead_critic_result": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_pm_result": {
+      "profiles": [
+        "coding"
+      ]
     }
   }
 }
