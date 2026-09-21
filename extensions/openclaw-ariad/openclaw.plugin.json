@@ -28,41 +28,6 @@
       "profiles": [
         "coding"
       ]
-    },
-    "ariad_developer_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_tester_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_reviewer_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_project_debugger_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_tech_lead_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_tech_lead_critic_result": {
-      "profiles": [
-        "coding"
-      ]
-    },
-    "ariad_pm_result": {
-      "profiles": [
-        "coding"
-      ]
     }
   }
 }
