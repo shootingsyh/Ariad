@@ -11,6 +11,7 @@ import { ResourcePool } from '../../../src/v2/resource-pool.js';
 import { V2Scheduler } from '../../../src/v2/scheduler.js';
 import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { AriadProjectManager, defaultProjectsRoot } from '../runtime/project-manager.js';
+import { submitDurableRoleResult } from '../runtime/role-result-store.js';
 import {
   ARIAD_MODEL_ROLES,
   normalizeRoleModels,
@@ -24,7 +25,6 @@ import { AriadV2Service } from './ariad-v2-service.js';
 import { AriadDashboardService } from './dashboard-service.js';
 import {
   registerRoleResultTools,
-  RoleResultSessionRegistry,
   roleResultToolMetadata,
   roleResultToolName,
 } from './role-result-tools.js';
@@ -72,7 +72,6 @@ const plugin = defineFeaturePlugin({
     const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
     const pushSourceControl = process.env.ARIAD_SOURCE_CONTROL_PUSH !== '0';
     const manager = new AriadProjectManager({ projectsRoot });
-    const roleResultSessions = new RoleResultSessionRegistry();
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
@@ -81,7 +80,6 @@ const plugin = defineFeaturePlugin({
         const runs = (api.runtime.tasks as any)?.runs;
         if (typeof runs?.cancel === 'function') await runs.cancel(runId);
       },
-      onSessionBound: (binding) => roleResultSessions.bind(binding),
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
@@ -187,8 +185,12 @@ const plugin = defineFeaturePlugin({
 
     registerRoleResultTools({
       api,
-      registry: roleResultSessions,
-      submit: (binding, payload) => v2Service.submitRoleResult(binding, payload),
+      submit: (attemptId, role, payload) => submitDurableRoleResult({
+        manager,
+        attemptId,
+        role,
+        payload,
+      }),
     });
 
     api.registerService({
