@@ -56,7 +56,9 @@ function hasCalledTool(request, name) {
 
 function requestAttemptId(request) {
   const text = requestText(request);
-  return text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1] ?? null;
+  return text.match(/Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT:\s*([^\n]+)/i)?.[1]?.trim()
+    ?? text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1]
+    ?? null;
 }
 
 function roleResultToolCall(request) {
