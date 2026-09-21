@@ -86,6 +86,36 @@ const plugin = defineFeaturePlugin({
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
       resolveModelRef: (projectId, role) => (manager.status(projectId).roleModels as Record<string, string | undefined>)?.[role] ?? null,
     });
+    const readModelOverridePolicy = () => {
+      const cfg = (api.runtime as any)?.config?.current?.() ?? {};
+      const subagent = cfg?.plugins?.entries?.ariad?.subagent ?? {};
+      return {
+        allowModelOverride: subagent.allowModelOverride === true,
+        allowedModels: Array.isArray(subagent.allowedModels)
+          ? subagent.allowedModels.filter((value: unknown) => typeof value === 'string' && value.trim()).map((value: string) => value.trim())
+          : [],
+      };
+    };
+
+    const assertModelOverridePolicy = (roleModels?: Record<string, string>) => {
+      const policy = readModelOverridePolicy();
+      if (!policy.allowModelOverride) {
+        throw new Error(
+          'Ariad explicit role models require plugins.entries.ariad.subagent.allowModelOverride=true in OpenClaw config'
+        );
+      }
+      if (roleModels && policy.allowedModels.length > 0 && !policy.allowedModels.includes('*')) {
+        for (const [role, ref] of Object.entries(roleModels)) {
+          if (!policy.allowedModels.includes(ref)) {
+            throw new Error(
+              `Ariad model ${ref} for ${role} is not allowed by plugins.entries.ariad.subagent.allowedModels`
+            );
+          }
+        }
+      }
+      return policy;
+    };
+
     const listOpenClawModels = async (agentId?: string | null) => {
       const result = await api.runtime.gateway.request<any>('models.list', {
         view: 'configured',
@@ -105,6 +135,7 @@ const plugin = defineFeaturePlugin({
     };
 
     const validateSelectedRoleModels = async (roleModels: Record<string, string>, agentId?: string | null) => {
+      assertModelOverridePolicy(roleModels);
       const models = await listOpenClawModels(agentId);
       const byRef = new Map<string, any>(models.map((model: any) => [model.ref, model]));
       for (const [role, ref] of Object.entries(roleModels)) {
@@ -294,6 +325,8 @@ const plugin = defineFeaturePlugin({
           }
           if (!input.name) throw new Error('name is required');
           if (input.action === 'start') {
+            const project = manager.status(input.name);
+            assertModelOverridePolicy(project.roleModels as Record<string, string>);
             respond(true, { project: await v2Service.ensureRunning(input.name) });
             return;
           }
@@ -328,6 +361,7 @@ const plugin = defineFeaturePlugin({
             requiredRoles: ARIAD_MODEL_ROLES,
             roleModels: project?.roleModels ?? null,
             missingRoles: project ? ARIAD_MODEL_ROLES.filter(role => !(project.roleModels as Record<string, string | undefined>)?.[role]) : null,
+            modelOverridePolicy: readModelOverridePolicy(),
             models,
           };
         } else {
@@ -360,6 +394,11 @@ const plugin = defineFeaturePlugin({
             if (!sourcePath) throw new Error('sourcePath is required for action adopt');
             details = { action, project: manager.adopt(name, sourcePath) };
           } else if (action === 'start') {
+            const project = manager.status(name);
+            const configuredRoleModels = requireCompleteRoleModels(
+              (project.roleModels ?? {}) as Record<string, string>
+            ) as Record<string, string>;
+            assertModelOverridePolicy(configuredRoleModels);
             details = { action, project: await v2Service.ensureRunning(name) };
           } else if (action === 'stop') {
             details = { action, project: await v2Service.ensureStopped(name) };
