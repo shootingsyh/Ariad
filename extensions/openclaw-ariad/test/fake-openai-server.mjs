@@ -15,6 +15,9 @@ function requestText(request) {
 function currentTurnStart(request) {
   const messages = request.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (/ARIAD RUNTIME CONTEXT/.test(messageText(messages[i]))) return i;
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]?.role === 'user') return i;
   }
   return 0;
