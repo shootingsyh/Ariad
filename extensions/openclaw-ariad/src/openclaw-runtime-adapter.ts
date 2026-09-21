@@ -81,6 +81,24 @@ export class OpenClawRuntimeAdapter {
       ? `persistent-${context.projectId}-${input.role}`
       : input.runId;
     const requestedSessionKey = sessionKey(this.agentId, stableIdentity);
+    const roleBinding = (
+      typeof context.projectId === 'string'
+      && typeof context.taskId === 'string'
+      && typeof context.attemptId === 'string'
+    ) ? {
+      projectId: context.projectId,
+      taskId: context.taskId,
+      role: input.role,
+      attemptId: context.attemptId,
+    } : null;
+
+    // Tool factories are resolved as the subagent run starts, so bind the
+    // requested session before run() to make the role-specific result tool
+    // visible during this very invocation.
+    if (roleBinding) {
+      this.onSessionBound?.({ sessionKey: requestedSessionKey, ...roleBinding });
+    }
+
     const launched = await this.subagent.run({
       sessionKey: requestedSessionKey,
       message: this.renderMessage(input.role, context),
@@ -93,18 +111,8 @@ export class OpenClawRuntimeAdapter {
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
     this.sessions.set(launched.runId, boundSessionKey);
-    if (
-      typeof context.projectId === 'string'
-      && typeof context.taskId === 'string'
-      && typeof context.attemptId === 'string'
-    ) {
-      this.onSessionBound?.({
-        sessionKey: boundSessionKey,
-        projectId: context.projectId,
-        taskId: context.taskId,
-        role: input.role,
-        attemptId: context.attemptId,
-      });
+    if (roleBinding && boundSessionKey !== requestedSessionKey) {
+      this.onSessionBound?.({ sessionKey: boundSessionKey, ...roleBinding });
     }
     return { runtimeId: this.id, runId: input.runId, externalId: launched.runId, state: 'RUNNING' };
   }
