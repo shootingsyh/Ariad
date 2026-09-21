@@ -18,7 +18,7 @@ mkdirSync(stateDir, { recursive: true });
 
 const config = {
   gateway: { mode: 'local', auth: { mode: 'token', token } },
-  agents: { defaults: { model: { primary: 'ariadfake/fake' }, timeoutSeconds: 30 } },
+  agents: { defaults: { model: { primary: 'ariadfake/default' }, timeoutSeconds: 30 } },
   models: {
     catalogRefresh: { enabled: false },
     providers: {
@@ -26,7 +26,10 @@ const config = {
         baseUrl: `http://127.0.0.1:${providerPort}/v1`,
         apiKey: 'fake-key',
         api: 'openai-completions',
-        models: [{ id: 'fake', name: 'Ariad CI Fake', contextWindow: 32768, maxTokens: 8192, input: ['text'] }],
+        models: [
+          { id: 'default', name: 'Ariad CI Default', contextWindow: 32768, maxTokens: 8192, input: ['text'] },
+          { id: 'role', name: 'Ariad CI Role', contextWindow: 32768, maxTokens: 8192, input: ['text'] },
+        ],
       },
     },
   },
@@ -37,7 +40,7 @@ const config = {
         enabled: true,
         subagent: {
           allowModelOverride: true,
-          allowedModels: ['ariadfake/fake'],
+          allowedModels: ['ariadfake/role'],
         },
       },
     },
@@ -143,6 +146,11 @@ try {
   }, 'production v2 project success');
 
   assert.match(status, /"runtime"\s*:\s*"v2"/);
+  await waitFor(
+    () => providerLog.includes('ARIAD_FAKE_MODEL model=role'),
+    'explicit Ariad role model override',
+    5_000
+  );
 
   const projectRoot = join(projectsRoot, 'v2-production');
   const workspace = join(projectRoot, 'workspace');
