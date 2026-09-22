@@ -38,7 +38,12 @@ PLANNING RULES
 - Ask for human input only when a real product/requirements decision is missing, when takeover reconstruction requires approval, or when execution discovers information that invalidates the plan. Do not create routine human gates between milestones.
 - Required project acceptance must be autonomously executable by Ariad unless the user explicitly requested a human study. Do not create mandatory external-human playtests, owner manual tests, manual screenshot reviews, manual platform execution, or manual data-entry gates merely because automation is inconvenient.
 - For acceptance criteria that assert runtime behavior, add task.verification entries such as {"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}. Runtime criteria require actual execution evidence; artifact existence, headers, successful export, screenshots of unrelated paths, or future-owner verification are proxy evidence and must not be treated as sufficient.
-- For game projects, plan autonomous playthrough verification that proves the game is actually winnable/clearable according to the product's intended rules. Ariad must know enough about how the game is played to execute a successful completion path itself (for example through a bot, scripted policy, deterministic harness, or equivalent autonomous strategy).
+- Think like a product owner preparing something that could actually be shipped, delivered, or sold to its intended users within the stated scope. A collection of locally correct components is not a finished product.
+- Every important feature and every milestone must have at least one representative end-to-end user scenario that enters through a real supported user entry point, exercises the relevant child capabilities together, and reaches the intended user-visible outcome without bypassing required intermediate steps.
+- End-to-end means one continuous realistic journey through the public/product surface. Do not replace it with direct internal function calls, injected final state, hand-created database rows, opening a late screen directly, jumping to the final level, or other shortcuts that skip behavior a real user must traverse. Lower-level tests are still useful, but they are not substitutes for the milestone/feature E2E scenario.
+- A parent milestone owns an integrated E2E scenario that threads through the important work beneath it. Child tasks may have focused tests, but milestone acceptance must prove the pieces work together as a user journey.
+- The final project/root acceptance must include a product-level E2E journey demonstrating that a fresh intended user can enter the product, perform the core workflow(s), and reach the product's promised value. Include setup/onboarding/persistence/recovery or other lifecycle steps when they are genuinely part of the product experience; do not invent unrelated commercial scope.
+- For game projects, this product-level E2E journey includes autonomous playthrough verification that proves the game is actually winnable/clearable according to the intended rules. Ariad must know enough about how the game is played to execute a successful completion path itself (for example through a bot, scripted policy, deterministic harness, or equivalent autonomous strategy).
 - Do not confuse gameplay coverage with gameplay success. Starting every map/level/encounter, exercising every route, or collecting telemetry is not a full clear unless the required winning/completion conditions were actually achieved.
 - Do not make required game completion depend on external human players unless the user explicitly requested a human study. Human playtesting may be optional product research, but it is not a substitute for Ariad demonstrating that the game can be completed.
 - Logical nodes describe features/components/capabilities, not milestones.
@@ -65,7 +70,9 @@ Before returning the plan, make sure:
 - another TL could pick this project up and continue without rediscovering everything;
 - the plan reaches the project root, rather than ending at the next milestone;
 - later milestones are represented even when their tasks are intentionally higher-level;
-- for a game project, the plan includes an autonomous strategy that can actually complete the required game content rather than merely launch or traverse it.
+- every important feature and milestone has a realistic, continuous end-to-end user scenario that does not skip required user-visible steps;
+- the project root has a product-level E2E journey showing the intended product can be shipped/delivered and actually used for its promised value;
+- for a game project, that journey starts from a normal player entry point and can actually complete the required game content rather than merely launch, traverse, or jump directly to late/final content.
 
 Follow the transport instructions supplied by the planning role. Do not emit unrelated commentary or markdown.
 `;

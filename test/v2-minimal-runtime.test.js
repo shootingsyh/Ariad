@@ -814,6 +814,11 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /actually winnable\/clearable/i);
   assert.match(prompt, /Do not confuse gameplay coverage with gameplay success/i);
   assert.match(prompt, /autonomous strategy that can actually complete the required game content/i);
+  assert.match(prompt, /Every important feature and every milestone/i);
+  assert.match(prompt, /real supported user entry point/i);
+  assert.match(prompt, /without bypassing required intermediate steps/i);
+  assert.match(prompt, /one continuous realistic journey/i);
+  assert.match(prompt, /project\/root acceptance must include a product-level E2E journey/i);
 });
 
 test('split planner artifacts use flat dotted ids and milestone hierarchy derives execution prerequisites', () => {
@@ -1487,6 +1492,12 @@ test('accepted takeover plan pauses at human review until a human decision is re
     assert.match(pmPrompt, /maps\/levels were launched, traversed, or exercised/i);
     assert.match(pmPrompt, /actually win\/clear the required content/i);
     assert.match(pmPrompt, /without relying on external human players/i);
+    assert.match(pmPrompt, /good enough to ship, deliver, or sell/i);
+    assert.match(pmPrompt, /Every important feature and every milestone/i);
+    assert.match(pmPrompt, /real supported product entry point/i);
+    assert.match(pmPrompt, /Do not accept fake E2E/i);
+    assert.match(pmPrompt, /project\/root plan must culminate in a product-level end-to-end journey/i);
+    assert.match(pmPrompt, /directly opening the final level/i);
 
     const first = definitions.pm.transition({
       task: pmTask,
