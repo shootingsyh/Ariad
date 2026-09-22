@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { buildExecutionGraph } from './execution-graph.js';
 
@@ -75,7 +75,107 @@ export function ensurePlannerArtifactLayout(artifactRoot) {
   const milestoneDir = join(plannerRoot, 'milestones');
   mkdirSync(logicalDir, { recursive: true });
   mkdirSync(milestoneDir, { recursive: true });
-  return { plannerRoot, logicalDir, milestoneDir };
+  const featureTreeDiffPath = join(plannerRoot, 'feature-tree-diff.json');
+  return { plannerRoot, logicalDir, milestoneDir, featureTreeDiffPath };
+}
+
+
+export function loadFeatureTreeDiff(artifactRoot) {
+  if (!artifactRoot) return null;
+  const { featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
+  if (!existsSync(featureTreeDiffPath)) return null;
+  let value;
+  try {
+    value = JSON.parse(readFileSync(featureTreeDiffPath, 'utf8'));
+  } catch (error) {
+    fail('feature-tree-diff.json', `invalid JSON: ${error?.message ?? String(error)}`);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('feature-tree-diff.json', 'must contain one object');
+  if (value.version !== 1) fail('feature-tree-diff.json.version', 'must equal 1');
+  if (!Number.isInteger(value.targetVersion) || value.targetVersion < 1) fail('feature-tree-diff.json.targetVersion', 'must be a positive integer');
+  if (!Array.isArray(value.operations)) fail('feature-tree-diff.json.operations', 'must be an array');
+
+  const seen = new Set();
+  const operations = value.operations.map((operation, index) => {
+    const path = `feature-tree-diff.json.operations[${index}]`;
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) fail(path, 'must be an object');
+    if (!['add', 'update', 'remove'].includes(operation.op)) fail(`${path}.op`, 'must be add, update, or remove');
+    assertString(operation.reason, `${path}.reason`);
+    const id = operation.op === 'add' ? operation.node?.id : operation.id;
+    assertId(id, `${path}.${operation.op === 'add' ? 'node.id' : 'id'}`);
+    if (seen.has(id)) fail(path, `duplicate operation for ${id}`);
+    seen.add(id);
+
+    if (operation.op === 'add') {
+      const node = operation.node;
+      if (!node || typeof node !== 'object' || Array.isArray(node)) fail(`${path}.node`, 'must be an object');
+      const allowed = new Set(['id', 'title', 'summary', 'parentId']);
+      for (const key of Object.keys(node)) if (!allowed.has(key)) fail(`${path}.node.${key}`, 'unexpected property');
+      assertString(node.title, `${path}.node.title`);
+      assertString(node.summary, `${path}.node.summary`);
+      if (node.parentId !== null) assertId(node.parentId, `${path}.node.parentId`);
+      return { op: 'add', node: structuredClone(node), reason: operation.reason };
+    }
+
+    if (operation.op === 'update') {
+      if (!operation.patch || typeof operation.patch !== 'object' || Array.isArray(operation.patch)) fail(`${path}.patch`, 'must be an object');
+      const allowed = new Set(['title', 'summary', 'parentId']);
+      for (const key of Object.keys(operation.patch)) if (!allowed.has(key)) fail(`${path}.patch.${key}`, 'unexpected property');
+      if (Object.keys(operation.patch).length === 0) fail(`${path}.patch`, 'must change at least one field');
+      if (operation.patch.title != null) assertString(operation.patch.title, `${path}.patch.title`);
+      if (operation.patch.summary != null) assertString(operation.patch.summary, `${path}.patch.summary`);
+      if ('parentId' in operation.patch && operation.patch.parentId !== null) assertId(operation.patch.parentId, `${path}.patch.parentId`);
+      return { op: 'update', id: operation.id, patch: structuredClone(operation.patch), reason: operation.reason };
+    }
+
+    return { op: 'remove', id: operation.id, reason: operation.reason };
+  });
+  return { version: 1, targetVersion: value.targetVersion, operations };
+}
+
+export function applyFeatureTreeDiff(previousNodes, diff) {
+  if (!diff) throw new Error('feature tree diff is required');
+  const current = new Map((previousNodes ?? []).map(node => [node.id, {
+    id: node.id,
+    title: node.title,
+    summary: node.summary,
+    parentId: node.parentId,
+    revision: { version: diff.targetVersion, kind: 'unchanged', reason: 'Unchanged from previous completed version.' },
+  }]));
+
+  for (const operation of diff.operations) {
+    if (operation.op === 'add') {
+      if (current.has(operation.node.id)) fail('feature-tree-diff.json', `cannot add existing node ${operation.node.id}`);
+      current.set(operation.node.id, {
+        ...structuredClone(operation.node),
+        revision: { version: diff.targetVersion, kind: 'added', reason: operation.reason },
+      });
+    } else if (operation.op === 'update') {
+      const before = current.get(operation.id);
+      if (!before) fail('feature-tree-diff.json', `cannot update missing node ${operation.id}`);
+      current.set(operation.id, {
+        ...before,
+        ...structuredClone(operation.patch),
+        revision: { version: diff.targetVersion, kind: 'revised', reason: operation.reason },
+      });
+    } else {
+      if (!current.has(operation.id)) fail('feature-tree-diff.json', `cannot remove missing node ${operation.id}`);
+      current.delete(operation.id);
+    }
+  }
+
+  return normalizeLogicalNodes([...current.values()].sort((a, b) => a.id.localeCompare(b.id))).nodes;
+}
+
+export function materializeLogicalTree(artifactRoot, nodes) {
+  const { logicalDir } = ensurePlannerArtifactLayout(artifactRoot);
+  for (const entry of readdirSync(logicalDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.json')) unlinkSync(join(logicalDir, entry.name));
+  }
+  for (const node of nodes) {
+    writeFileSync(join(logicalDir, `${node.id}.json`), JSON.stringify(node, null, 2) + '\n');
+  }
+  return structuredClone(nodes);
 }
 
 function normalizeLogicalNodes(rawNodes) {
@@ -361,7 +461,9 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Use exactly <id>.json. IDs may contain dots for hierarchy (for example battle.combat or M1.1.2) but filenames/directories do not define parentage.',
     'Do not create subdirectories. parentId is the only durable parent relation. Do not store children arrays; children are derived by scanning parentId.',
     'Logical artifacts describe WHAT the product is and never create execution dependencies.',
-    'Logical artifact shape: {"id":"battle.combat","title":"Combat","summary":"...","parentId":"battle","revision":{"version":2,"kind":"unchanged|revised|added","reason":"..."}}. revision is omitted for an initial version; during an iteration it must be present on every current logical node.',
+    'Initial version logical artifact shape: {"id":"battle.combat","title":"Combat","summary":"...","parentId":"battle"}.',
+    `Iteration feature-tree diff path: ${featureTreeDiffPath}`,
+    'During iteration, DO NOT hand-edit or rewrite the logical tree as the authoritative change description. Write feature-tree-diff.json instead. Shape: {"version":1,"targetVersion":2,"operations":[{"op":"add","node":{"id":"...","title":"...","summary":"...","parentId":"..."},"reason":"..."},{"op":"update","id":"...","patch":{"summary":"..."},"reason":"..."},{"op":"remove","id":"...","reason":"..."}]}. Ariad deterministically applies this diff to the immutable previous-version tree and materializes the new living logical tree.',
     'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
     'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
     'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
@@ -370,7 +472,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
     'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
     'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',
-    'During iteration, treat logical artifacts as the living feature tree. Keep stable ids for retained features, edit revised nodes in place, create new files for added nodes, and remove files only for intentionally removed features. Mark every current logical node revision.kind as unchanged, revised, or added for the target version.',
+    'During iteration, feature-tree-diff.json is authoritative for feature changes. Keep stable ids by using update for retained features, add only genuinely new ids, and remove only intentional deletions. The generated logical tree carries revision provenance automatically; TL should not manually classify every unchanged node.'
     'During iteration, milestone artifacts are a newly planned delivery tree for the target version. Do not preserve obsolete milestone structure merely for history; the immutable previous-version snapshot already preserves it.',
     'For unchanged logical branches with no affected descendants, plan regression-only tasks. For revised/added branches and unchanged ancestors integrating changed descendants, plan implementation/integration work plus fresh regression/E2E.',
     'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',

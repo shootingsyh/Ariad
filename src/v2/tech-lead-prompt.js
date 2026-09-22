@@ -57,7 +57,8 @@ PLANNING RULES
 - art must specify required, media, deliverables, and placeholderAllowed. Prefer real assets; placeholders are allowed only when explicitly acceptable.
 - Tester/Reviewer must have a concrete evidence strategy for media-bearing work (for example screenshots/keyframes or audio checks/review).
 - For a later project iteration/version, the previous completed version is an immutable snapshot. Revise the one living logical/feature tree rather than creating a parallel v2/v3 feature tree. Keep stable ids for retained features, edit revised nodes in place, add new feature nodes, and intentionally remove obsolete nodes.
-- During an iteration, mark every current logical node with revision metadata for the target version: unchanged, revised, or added. An existing node whose title/summary/parent changes cannot be called unchanged; a new id must be added. Missing old ids are treated as removals and must be intentional.
+- During an iteration, do not rewrite the whole feature tree as the authoritative edit. Produce a feature-tree diff against the immutable previous-version snapshot using explicit add/update/remove operations with reasons. Ariad deterministically applies this diff to generate the next living feature tree and validates parentage/cycles/stable ids.
+- Keep stable ids for retained features by using update. Use add only for genuinely new features and remove only for intentional product deletions.
 - Replan the milestone tree for each new version from the revised living feature tree. The old milestone tree is preserved by the immutable version snapshot and should not constrain the new execution plan.
 - Preserve completed task ids as historical DONE work. Do not reopen old DONE task ids just because a new version exists.
 - For an unchanged feature branch with no affected descendants or dependencies, do not schedule gratuitous implementation. Plan fresh regression verification that reuses the existing valid tests/E2E and runs through Tester/Reviewer.
@@ -76,7 +77,7 @@ Before returning the plan, make sure:
 - another TL could pick this project up and continue without rediscovering everything;
 - the plan reaches the project root, rather than ending at the next milestone;
 - later milestones are represented even when their tasks are intentionally higher-level;
-- during iteration, the living feature tree is revised in place with complete revision metadata and the new milestone tree is replanned from it;
+- during iteration, feature changes are expressed as a reviewable feature-tree diff, Ariad materializes the next living tree deterministically, and the new milestone tree is replanned from that result;
 - unchanged unaffected feature branches are regression-only rather than gratuitously reimplemented, while changed branches update implementation and affected tests/E2E;
 - every important feature and milestone has a realistic, continuous end-to-end user scenario that does not skip required user-visible steps;
 - the project root has a product-level E2E journey showing the intended product can be shipped/delivered and actually used for its promised value;

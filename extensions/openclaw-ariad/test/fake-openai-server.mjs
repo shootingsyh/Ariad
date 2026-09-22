@@ -161,9 +161,9 @@ function isIterationPlanning(request) {
 function plannerV3Transport(request) {
   if (!isIterationPlanning(request) || !/PLANNER ARTIFACT TRANSPORT/.test(currentPromptText(request))) return null;
   const text = currentPromptText(request);
-  const logicalDir = text.match(/Write logical artifacts as flat JSON files in:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  const diffPath = text.match(/Iteration feature-tree diff path:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
   const milestoneDir = text.match(/Write milestone artifacts as flat JSON files in:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
-  if (!logicalDir || !milestoneDir) return null;
+  if (!diffPath || !milestoneDir) return null;
   const version = Number(text.match(/"targetVersion"\s*:\s*(\d+)/)?.[1]
     ?? text.match(/"iteration"\s*:\s*(\d+)/)?.[1]
     ?? 2);
@@ -171,13 +171,20 @@ function plannerV3Transport(request) {
     version,
     files: [
       {
-        path: `${logicalDir}/health.json`,
+        path: diffPath,
         content: {
-          id: 'health',
-          title: 'Health Product',
-          summary: 'Tiny health project with a revised follow-up iteration.',
-          parentId: null,
-          revision: { version, kind: 'added', reason: 'Legacy v1 had no durable logical tree; reconstruct as the v2 living feature baseline.' },
+          version: 1,
+          targetVersion: version,
+          operations: [{
+            op: 'add',
+            node: {
+              id: 'health',
+              title: 'Health Product',
+              summary: 'Tiny health project with a revised follow-up iteration.',
+              parentId: null,
+            },
+            reason: 'Legacy v1 had no durable logical tree; reconstruct as the v2 living feature baseline.',
+          }],
         },
       },
       {

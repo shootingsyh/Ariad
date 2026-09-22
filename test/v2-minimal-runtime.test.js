@@ -18,6 +18,7 @@ import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import {
   ensurePlannerArtifactLayout,
+  applyFeatureTreeDiff,
   loadPlannerArtifactPlan,
   validatePlannerArtifactPlan,
 } from '../src/v2/planner-artifacts.js';
@@ -892,6 +893,31 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
 });
 
 
+
+
+test('feature-tree diff deterministically materializes the next living tree', () => {
+  const previous = [
+    { id: 'product', title: 'Product', summary: 'Root product', parentId: null },
+    { id: 'product.a', title: 'A', summary: 'Feature A', parentId: 'product' },
+    { id: 'product.b', title: 'B', summary: 'Feature B', parentId: 'product' },
+  ];
+  const next = applyFeatureTreeDiff(previous, {
+    version: 1,
+    targetVersion: 2,
+    operations: [
+      { op: 'update', id: 'product.a', patch: { summary: 'Feature A revised' }, reason: 'New v2 behavior.' },
+      { op: 'remove', id: 'product.b', reason: 'Feature B is intentionally removed.' },
+      { op: 'add', node: { id: 'product.c', title: 'C', summary: 'Feature C', parentId: 'product' }, reason: 'New v2 feature.' },
+    ],
+  });
+
+  assert.deepEqual(next.map(node => node.id), ['product', 'product.a', 'product.c']);
+  assert.equal(next.find(node => node.id === 'product').revision.kind, 'unchanged');
+  assert.equal(next.find(node => node.id === 'product.a').revision.kind, 'revised');
+  assert.equal(next.find(node => node.id === 'product.a').summary, 'Feature A revised');
+  assert.equal(next.find(node => node.id === 'product.c').revision.kind, 'added');
+  assert.equal(next.every(node => node.revision.version === 2), true);
+});
 
 test('iteration logical revisions derive implementation versus regression task modes', () => {
   const { dir, file } = tempDb();

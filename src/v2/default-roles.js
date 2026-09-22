@@ -7,6 +7,9 @@ import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import {
   ensurePlannerArtifactLayout,
+  loadFeatureTreeDiff,
+  applyFeatureTreeDiff,
+  materializeLogicalTree,
   loadPlannerArtifactPlan,
   plannerArtifactInstructions,
   validatePlannerArtifactPlan,
@@ -450,6 +453,14 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          try {
+            materializeIterationFeatureTree(store, task, artifactRoot);
+          } catch (error) {
+            return {
+              outcome: 'NOT_PASS',
+              result: { valid: false, plan: null, error: error?.message ?? String(error), errorCode: error?.code ?? null },
+            };
+          }
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           if (rawArtifactPlan) {
             try {
@@ -501,12 +512,12 @@ export function createDefaultV2Roles({
             });
             return { state: 'DONE' };
           }
-          if (result.result?.errorCode === 'ITERATION_LOGICAL_REVISION_REQUIRED') {
+          if (['ITERATION_LOGICAL_REVISION_REQUIRED', 'ITERATION_FEATURE_TREE_DIFF_REQUIRED'].includes(result.result?.errorCode)) {
             enqueuePlanning?.({
               request: {
                 purpose: 'ITERATION_REVISION_REPLAN',
                 diagnosis: result.result,
-                instruction: 'Repair the living logical/feature tree revision metadata against the immutable previous-version snapshot/current durable logical tree. Preserve stable ids for retained features and explicitly classify every current node as unchanged, revised, or added for the target version.',
+                instruction: 'Repair feature-tree-diff.json against the immutable previous-version snapshot/current durable logical tree. Use add/update/remove operations with stable ids; Ariad will deterministically materialize the next living feature tree. Do not hand-edit the generated logical tree as the authoritative change description.',
               },
             });
             return { state: 'DONE' };
@@ -522,6 +533,8 @@ export function createDefaultV2Roles({
       prepare: ({ project, task }) => {
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
+        const iteration = iterationRequest(store, task);
+        const featureTreeDiff = iteration ? loadFeatureTreeDiff(artifactRoot) : null;
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
@@ -539,6 +552,7 @@ export function createDefaultV2Roles({
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
+            featureTreeDiff,
             plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
           }, null, 2),
         ].filter(Boolean).join('\n\n');

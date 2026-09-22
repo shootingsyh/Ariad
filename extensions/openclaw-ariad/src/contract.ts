@@ -38,7 +38,7 @@ export const contract = defineFeatureContract({
         ]),
         name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
         goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
-        request: Type.Optional(Type.String({ description: 'New work request for iterate. The tool first snapshots the completed version immutably, then creates the next version by revising the living feature tree and replanning milestones without reopening completed tasks by default.' })),
+        request: Type.Optional(Type.String({ description: 'New work request for iterate. The tool first snapshots the completed version immutably, then TL emits a reviewable feature-tree diff that Ariad applies deterministically to materialize the next living feature tree before replanning milestones. Completed tasks remain historical by default.' })),
         mode: Type.Optional(Type.Union([
           Type.Literal('NEW'),
           Type.Literal('TAKEOVER'),

@@ -282,7 +282,7 @@ class ProjectRuntime {
         instruction: request.trim(),
         lifecycleRule: [
           'The previous completed version has been snapshotted immutably before this iteration.',
-          'Revise the living logical/feature tree in place: preserve stable ids for retained features, mark every current logical node revision metadata as unchanged|revised|added for this target version, and intentionally remove obsolete feature artifacts only when the new product no longer contains them.',
+          'Produce feature-tree-diff.json as the authoritative feature change set against the immutable previous-version snapshot. Use stable-id add/update/remove operations; Ariad will deterministically apply the diff and materialize the next living feature tree.',
           'Replan the milestone tree for the target version; do not copy the old milestone execution plan merely to preserve history because the previous version snapshot is authoritative history.',
           'Preserve all previously DONE task history. Do not reopen DONE task ids merely because a new version exists.',
           'For unchanged feature branches, perform impact analysis. If they are not affected by revised dependencies/descendants, do not modify product code: create regression verification tasks and reuse existing valid tests/E2E flows.',
