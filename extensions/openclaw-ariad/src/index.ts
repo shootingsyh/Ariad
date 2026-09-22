@@ -439,7 +439,7 @@ const plugin = defineFeaturePlugin({
           }
           if (input.action === 'adopt') {
             if (!input.sourcePath) throw new Error('sourcePath is required for adopt');
-            respond(true, { project: manager.adopt(input.name, input.sourcePath, { roleModels: input.roleModels ?? null }) });
+            respond(true, { project: (manager as any).adopt(input.name, input.sourcePath, { roleModels: input.roleModels ?? null }) });
             return;
           }
           throw new Error(`unsupported CI project action: ${input.action}`);
@@ -501,8 +501,8 @@ const plugin = defineFeaturePlugin({
             const adoptRoleModels = roleModels == null
               ? null
               : requireCompleteRoleModels(roleModels as Record<string, string>);
-            if (adoptRoleModels) validateSelectedRoleModels(adoptRoleModels, { refresh: true });
-            details = { action, project: manager.adopt(name, sourcePath, { roleModels: adoptRoleModels }) };
+            if (adoptRoleModels) validateSelectedRoleModels(adoptRoleModels as Record<string, string>, { refresh: true });
+            details = { action, project: (manager as any).adopt(name, sourcePath, { roleModels: adoptRoleModels }) };
           } else if (action === 'start' || action === 'resume') {
             const project = manager.status(name);
             const configuredRoleModels = requireCompleteRoleModels(
