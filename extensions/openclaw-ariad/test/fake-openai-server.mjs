@@ -269,6 +269,7 @@ function isProjectExecutionRole(request) {
 function frontdeskProjectToolCall(request) {
   const text = requestText(request);
   if (!text.includes('ARIAD_E2E_START_PROJECT v2-production')) return null;
+  if (hasToolResult(request)) return null;
   if (!requestToolNames(request).has('ariad_project') || hasCalledTool(request, 'ariad_project')) return null;
   console.log('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=start project=v2-production');
   return { name: 'ariad_project', arguments: { action: 'start', name: 'v2-production' } };
