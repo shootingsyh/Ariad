@@ -18,7 +18,7 @@ const token = 'ariad-ci-token';
 mkdirSync(stateDir, { recursive: true });
 
 const config = {
-  gateway: { mode: 'local', auth: { mode: 'token', token } },
+  gateway: { mode: 'local', port: gatewayPort, auth: { mode: 'token', token } },
   agents: { defaults: { model: { primary: 'fakea/default' }, timeoutSeconds: 30 } },
   models: {
     catalogRefresh: { enabled: false },
