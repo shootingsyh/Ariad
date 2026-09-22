@@ -21,6 +21,7 @@ import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
+import { detectExecutionCapabilities } from '../runtime/execution-capabilities.js';
 import { AriadDashboardService } from './dashboard-service.js';
 import {
   registerRoleResultTools,
@@ -152,11 +153,13 @@ const plugin = defineFeaturePlugin({
       logger: api.logger,
     });
 
+    const executionCapabilities = detectExecutionCapabilities();
     const v2Service = new AriadV2Service({
       manager,
       provider: v2Provider,
       pushSourceControl,
       logger: api.logger,
+      executionCapabilities,
       onProjectEvent: async (project, type) => {
         if (!project.frontdeskBinding) return;
         try {

@@ -157,6 +157,7 @@ try {
 
   assert.match(status, /"runtime"\s*:\s*"v2"/);
   assert.match(status, /"projectVersion"\s*:\s*1/);
+  assert.match(status, /"executionCapabilities"\s*:\s*\[[^\]]*"linux\.native"/);
   await waitFor(
     () => providerLog.includes('ARIAD_FAKE_MODEL model=role'),
     'explicit Ariad role model override',

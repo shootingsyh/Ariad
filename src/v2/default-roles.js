@@ -259,14 +259,17 @@ export function createDefaultV2Roles({
   sourceControl = null,
   enqueuePlanning = null,
   artifactRoot = null,
+  executionCapabilities = [],
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
 
   const prepareLlm = (task, v2Prompt, extra = {}) => ({
     provider: providerId,
     completionProtocol: 'role_result_tool',
+    executionCapabilities: [...executionCapabilities],
     workspace,
     context: {
+      executionCapabilities: [...executionCapabilities],
       ...extra,
       v2Prompt,
       task: {

@@ -3,12 +3,36 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { detectExecutionCapabilities } from '../extensions/openclaw-ariad/runtime/execution-capabilities.js';
 import { AriadProjectManager, slugify } from '../extensions/openclaw-ariad/runtime/project-manager.js';
 import {
   ARIAD_MODEL_ROLES,
   requireCompleteRoleModels,
 } from '../extensions/openclaw-ariad/runtime/role-models.js';
 import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
+
+
+test('execution capability discovery detects Windows host interop under WSL', () => {
+  const existing = new Set([
+    '/mnt/c/Windows/System32/cmd.exe',
+    '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+    '/dev/dxg',
+  ]);
+  const capabilities = detectExecutionCapabilities({
+    platform: 'linux',
+    env: { WSL_DISTRO_NAME: 'Ubuntu' },
+    exists: path => existing.has(path),
+    read: () => 'Linux version Microsoft WSL2',
+  });
+  assert.deepEqual(capabilities, [
+    'cmd',
+    'gpu',
+    'linux.native',
+    'powershell',
+    'windows.host-via-wsl',
+    'wsl',
+  ]);
+});
 
 test('OpenClaw Ariad project manager isolates project folders and durable desired state', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-openclaw-'));

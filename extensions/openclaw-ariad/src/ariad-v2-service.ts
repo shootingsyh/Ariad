@@ -35,6 +35,7 @@ class ProjectRuntime {
   private readonly resources: ResourcePool;
   private readonly sourceControl: GitSourceControlFinalizer;
   private readonly logger: any;
+  private readonly executionCapabilities: string[];
   private ticking = false;
   private requestSequence = 0;
 
@@ -44,15 +45,18 @@ class ProjectRuntime {
     provider,
     pushSourceControl,
     logger,
+    executionCapabilities = [],
   }: {
     manager: ProjectManager;
     project: any;
     provider: OpenClawV2Provider;
     pushSourceControl: boolean;
     logger?: any;
+    executionCapabilities?: string[];
   }) {
     this.manager = manager;
     this.logger = logger;
+    this.executionCapabilities = [...executionCapabilities];
     this.projectId = project.id;
     this.store = new SQLiteV2Store(project.stateDb);
 
@@ -109,6 +113,7 @@ class ProjectRuntime {
       workspace: project.workspace,
       sourceControl: this.sourceControl,
       artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
+      executionCapabilities: this.executionCapabilities,
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
         this.store.enqueuePlanningRequest({
@@ -183,6 +188,7 @@ class ProjectRuntime {
       projectVersion: project?.projectVersion ?? 0,
       activeVersion: project?.activeVersion ?? 1,
       versionHistory: project?.versionHistory ?? [],
+      executionCapabilities: [...this.executionCapabilities],
       tasks: {
         total: tasks.length,
         working: tasks.filter(task => task.state === 'WORKING').length,
@@ -443,6 +449,7 @@ export class AriadV2Service {
   private readonly provider: OpenClawV2Provider;
   private readonly pushSourceControl: boolean;
   private readonly logger: any;
+  private readonly executionCapabilities: string[];
   private readonly onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private timer: NodeJS.Timeout | null = null;
@@ -453,18 +460,21 @@ export class AriadV2Service {
     provider,
     pushSourceControl,
     logger,
+    executionCapabilities = [],
     onProjectEvent,
   }: {
     manager: ProjectManager;
     provider: OpenClawV2Provider;
     pushSourceControl: boolean;
     logger?: any;
+    executionCapabilities?: string[];
     onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   }) {
     this.manager = manager;
     this.provider = provider;
     this.pushSourceControl = pushSourceControl;
     this.logger = logger;
+    this.executionCapabilities = [...executionCapabilities];
     this.onProjectEvent = onProjectEvent;
   }
 
@@ -512,6 +522,7 @@ export class AriadV2Service {
         provider: this.provider,
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
+        executionCapabilities: this.executionCapabilities,
       });
       this.runtimes.set(current.id, runtime);
     }
@@ -581,6 +592,7 @@ export class AriadV2Service {
           provider: this.provider,
           pushSourceControl: this.pushSourceControl,
           logger: this.logger,
+          executionCapabilities: this.executionCapabilities,
         });
         this.runtimes.set(project.id, runtime);
       }
@@ -612,6 +624,7 @@ export class AriadV2Service {
         provider: this.provider,
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
+        executionCapabilities: this.executionCapabilities,
       });
       this.runtimes.set(project.id, runtime);
     }
@@ -633,6 +646,7 @@ export class AriadV2Service {
         provider: this.provider,
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
+        executionCapabilities: this.executionCapabilities,
       });
       this.runtimes.set(project.id, runtime);
     }
@@ -664,6 +678,7 @@ export class AriadV2Service {
             provider: this.provider,
             pushSourceControl: this.pushSourceControl,
             logger: this.logger,
+            executionCapabilities: this.executionCapabilities,
           });
           this.runtimes.set(project.id, runtime);
         }
