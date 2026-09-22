@@ -206,13 +206,29 @@ try {
     5_000
   );
 
-  const iterate = gatewayCall('ariad.ci.project', {
-    action: 'iterate',
-    name: 'v2-production',
-    request: 'Add a small follow-up improvement and revalidate the completed project.',
+  const frontdeskIterate = spawnSync(openclaw, [
+    'agent',
+    '--agent', 'main',
+    '--message', 'ARIAD_E2E_ITERATE_PROJECT v2-production',
+    '--json',
+    '--timeout', '30',
+  ], {
+    cwd: pluginDir,
+    env,
+    encoding: 'utf8',
+    timeout: 45_000,
   });
-  assert.match(iterate, /"activeVersion"\s*:\s*2/);
-  assert.match(iterate, /"snapshot"/);
+  assert.equal(
+    frontdeskIterate.status,
+    0,
+    `frontdesk agent iterate failed\nstdout:\n${frontdeskIterate.stdout}\nstderr:\n${frontdeskIterate.stderr}\ngateway:\n${gatewayLog}`
+  );
+  await waitFor(
+    () => providerALog.includes('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=iterate project=v2-production'),
+    'frontdesk ariad_project iterate tool call'
+  );
+  const iteratingStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
+  assert.match(iteratingStatus, /"activeVersion"\s*:\s*2/);
 
   const snapshotPath = join(projectsRoot, 'v2-production', 'workspace', '.ariad', 'versions', 'v1', 'snapshot.json');
   assert.equal(existsSync(snapshotPath), true, 'iterate must create an immutable snapshot of the completed version');
