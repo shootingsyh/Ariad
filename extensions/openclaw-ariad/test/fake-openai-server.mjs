@@ -105,8 +105,10 @@ function roleResultToolCall(request) {
   const cycle = requestCycle(request);
   const hasPriorToolWork = hasToolResult(request);
   const artifact = plannerArtifactTransport(request);
+  const v3Transport = plannerV3Transport(request);
   const canSubmitWithoutWorkTool = ['tech_lead', 'tech_lead_critic', 'pm'].includes(role)
-    && !(role === 'tech_lead' && artifact);
+    && !(role === 'tech_lead' && (artifact || v3Transport));
+  if (role === 'tech_lead' && v3Transport && !plannerV3Ready(request)) return null;
   if (!hasPriorToolWork && !canSubmitWithoutWorkTool) return null;
 
   let outcome = 'PASS';
@@ -123,7 +125,6 @@ function roleResultToolCall(request) {
       criteria: requestCriterionIds(request).map(criterionId => ({
         criterionId,
         status: 'SATISFIED',
-        evidenceType: 'runtime',
         evidenceType: 'runtime',
         evidence: ['fake-provider verification'],
         reason: 'Fake provider verified this criterion for E2E.',
@@ -152,6 +153,98 @@ function plannerArtifactTransport(request) {
   return path && ref ? { path, ref } : null;
 }
 
+function isIterationPlanning(request) {
+  return /"purpose"\s*:\s*"UPDATE_DELIVERY_PLAN"/.test(currentPromptText(request))
+    || /"sourceKind"\s*:\s*"iteration"/.test(currentPromptText(request));
+}
+
+function plannerV3Transport(request) {
+  if (!isIterationPlanning(request) || !/PLANNER ARTIFACT TRANSPORT/.test(currentPromptText(request))) return null;
+  const text = currentPromptText(request);
+  const logicalDir = text.match(/Write logical artifacts as flat JSON files in:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  const milestoneDir = text.match(/Write milestone artifacts as flat JSON files in:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  if (!logicalDir || !milestoneDir) return null;
+  const version = Number(text.match(/"targetVersion"\s*:\s*(\d+)/)?.[1]
+    ?? text.match(/"iteration"\s*:\s*(\d+)/)?.[1]
+    ?? 2);
+  return {
+    version,
+    files: [
+      {
+        path: `${logicalDir}/health.json`,
+        content: {
+          id: 'health',
+          title: 'Health Product',
+          summary: 'Tiny health project with a revised follow-up iteration.',
+          parentId: null,
+          revision: { version, kind: 'added', reason: 'Legacy v1 had no durable logical tree; reconstruct as the v2 living feature baseline.' },
+        },
+      },
+      {
+        path: `${milestoneDir}/M2.json`,
+        content: {
+          id: 'M2',
+          title: 'Health follow-up',
+          goal: 'Revalidate the revised health product end to end.',
+          parentId: null,
+          dependsOn: [],
+          logicalRefs: ['health'],
+          acceptanceCriteria: ['The revised health flow works end to end.'],
+          testStrategy: 'Run the health flow from the normal workspace entry point.',
+          tasks: [
+            {
+              id: 'T2',
+              title: 'Health follow-up implementation',
+              intent: 'Apply the requested follow-up improvement.',
+              dependsOn: [],
+              logicalRefs: ['health'],
+              acceptanceCriteria: ['health.txt remains healthy after the follow-up.'],
+              testStrategy: 'Read health.txt through the normal runtime flow.',
+            },
+            {
+              id: 'ROOT-V2',
+              title: 'Health v2 integrated regression',
+              intent: 'Run product-level regression for the revised health feature.',
+              dependsOn: ['T2'],
+              logicalRefs: ['health'],
+              acceptanceCriteria: ['The health product completes its end-to-end flow.'],
+              testStrategy: 'Execute the complete health E2E without bypassing steps.',
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function calledWritePaths(request) {
+  const paths = new Set();
+  for (const message of currentTurnMessages(request)) {
+    for (const call of message?.tool_calls ?? []) {
+      if (call?.function?.name !== 'write') continue;
+      try {
+        const args = JSON.parse(call.function.arguments ?? '{}');
+        if (typeof args.path === 'string') paths.add(args.path);
+      } catch {}
+    }
+  }
+  return paths;
+}
+
+function nextPlannerV3Write(request) {
+  const transport = plannerV3Transport(request);
+  if (!transport) return null;
+  const written = calledWritePaths(request);
+  return transport.files.find(file => !written.has(file.path)) ?? null;
+}
+
+function plannerV3Ready(request) {
+  const transport = plannerV3Transport(request);
+  if (!transport) return false;
+  const written = calledWritePaths(request);
+  return transport.files.every(file => written.has(file.path));
+}
+
 function isDiscovery(request) {
   return requestRole(request) === 'tech_lead' && /"planningPhase":"EXISTING_PROJECT_DISCOVERY"/.test(requestText(request));
 }
@@ -169,6 +262,16 @@ function toolCallFor(request) {
   const roleResult = roleResultToolCall(request);
   if (roleResult) return roleResult;
   if (hasToolResult(request)) return null;
+  const v3Write = nextPlannerV3Write(request);
+  if (v3Write) {
+    return {
+      name: 'write',
+      arguments: {
+        path: v3Write.path,
+        content: JSON.stringify(v3Write.content, null, 2),
+      },
+    };
+  }
   const artifact = plannerArtifactTransport(request);
   if (artifact) {
     return {
@@ -353,6 +456,7 @@ function roleReply(request) {
       criteria: requestCriterionIds(request).map(criterionId => ({
         criterionId,
         status: 'SATISFIED',
+        evidenceType: 'runtime',
         evidence: ['fake-provider verification'],
         reason: 'Fake provider verified this criterion for E2E.',
       })),

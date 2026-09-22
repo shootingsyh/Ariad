@@ -253,6 +253,12 @@ export class SQLiteV2Store {
       const current = this.listTasks(projectId, { scope: 'delivery' });
       for (const task of current) {
         if (incoming.has(task.id)) continue;
+        if (task.state === 'DONE') {
+          // Completed work is immutable historical truth across project versions.
+          // A later milestone plan may stop referencing it, but must not rewrite
+          // prior completion as OBSOLETE.
+          continue;
+        }
         if (task.state === 'WORKING') {
           throw new Error(`cannot obsolete WORKING delivery task: ${task.id}`);
         }

@@ -501,6 +501,16 @@ export function createDefaultV2Roles({
             });
             return { state: 'DONE' };
           }
+          if (result.result?.errorCode === 'ITERATION_LOGICAL_REVISION_REQUIRED') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'ITERATION_REVISION_REPLAN',
+                diagnosis: result.result,
+                instruction: 'Repair the living logical/feature tree revision metadata against the immutable previous-version snapshot/current durable logical tree. Preserve stable ids for retained features and explicitly classify every current node as unchanged, revised, or added for the target version.',
+              },
+            });
+            return { state: 'DONE' };
+          }
           return { state: 'NEEDS_HUMAN' };
         }
         return { state: 'DONE' };

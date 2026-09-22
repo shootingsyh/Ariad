@@ -170,6 +170,13 @@ try {
     request: 'Add a small follow-up improvement and revalidate the completed project.',
   });
   assert.match(iterate, /"activeVersion"\s*:\s*2/);
+  assert.match(iterate, /"snapshot"/);
+
+  const snapshotPath = join(projectsRoot, 'v2-production', 'workspace', '.ariad', 'versions', 'v1', 'snapshot.json');
+  assert.equal(existsSync(snapshotPath), true, 'iterate must create an immutable snapshot of the completed version');
+  const versionOneSnapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+  assert.equal(versionOneSnapshot.projectVersion, 1);
+  assert.equal(versionOneSnapshot.deliveryTasks.some(task => task.id === 'T1' && task.state === 'DONE'), true);
 
   let iterationStatus = '';
   await waitFor(() => {
@@ -202,6 +209,8 @@ try {
   const t1 = tasks.find(task => task.id === 'T1');
   assert.equal(t1?.state, 'DONE');
   assert.equal(tasks.find(task => task.id === 'ROOT')?.state, 'DONE');
+  assert.equal(tasks.find(task => task.id === 'T2')?.state, 'DONE');
+  assert.equal(tasks.find(task => task.id === 'ROOT-V2')?.state, 'DONE');
   const structuredRoleResults = (t1?.history ?? []).filter(entry => entry?.source === 'role_result_tool');
   assert.equal(structuredRoleResults.some(entry => entry.role === 'developer'), true);
   assert.equal(structuredRoleResults.some(entry => entry.role === 'tester'), true);

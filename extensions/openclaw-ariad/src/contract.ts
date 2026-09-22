@@ -38,7 +38,7 @@ export const contract = defineFeatureContract({
         ]),
         name: Type.Optional(Type.String({ description: 'Project name. Required except for list.' })),
         goal: Type.Optional(Type.String({ description: 'Initial project goal when creating a project.' })),
-        request: Type.Optional(Type.String({ description: 'New work request for iterate. Creates the next project version and replans without reopening completed tasks by default.' })),
+        request: Type.Optional(Type.String({ description: 'New work request for iterate. The tool first snapshots the completed version immutably, then creates the next version by revising the living feature tree and replanning milestones without reopening completed tasks by default.' })),
         mode: Type.Optional(Type.Union([
           Type.Literal('NEW'),
           Type.Literal('TAKEOVER'),

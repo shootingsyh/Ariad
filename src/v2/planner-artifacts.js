@@ -83,14 +83,28 @@ function normalizeLogicalNodes(rawNodes) {
   const byId = new Map();
   const nodes = rawNodes.map((item, index) => {
     const path = `logical:${item.id ?? index}`;
-    const allowed = new Set(['id', 'title', 'summary', 'parentId']);
+    const allowed = new Set(['id', 'title', 'summary', 'parentId', 'revision']);
     for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
     assertId(item.id, `${path}.id`);
     assertString(item.title, `${path}.title`);
     assertString(item.summary, `${path}.summary`);
     if (item.parentId !== null) assertId(item.parentId, `${path}.parentId`);
+    let revision = null;
+    if (item.revision != null) {
+      if (!item.revision || typeof item.revision !== 'object' || Array.isArray(item.revision)) fail(`${path}.revision`, 'must be an object');
+      const allowedRevision = new Set(['version', 'kind', 'reason']);
+      for (const key of Object.keys(item.revision)) if (!allowedRevision.has(key)) fail(`${path}.revision.${key}`, 'unexpected property');
+      if (!Number.isInteger(item.revision.version) || item.revision.version < 1) fail(`${path}.revision.version`, 'must be a positive integer');
+      if (!['unchanged', 'revised', 'added'].includes(item.revision.kind)) fail(`${path}.revision.kind`, 'must be unchanged, revised, or added');
+      if (item.revision.reason != null) assertString(item.revision.reason, `${path}.revision.reason`);
+      revision = {
+        version: item.revision.version,
+        kind: item.revision.kind,
+        ...(item.revision.reason != null ? { reason: item.revision.reason } : {}),
+      };
+    }
     if (byId.has(item.id)) fail(`${path}.id`, `duplicate logical id ${item.id}`);
-    const node = { id: item.id, title: item.title, summary: item.summary, parentId: item.parentId };
+    const node = { id: item.id, title: item.title, summary: item.summary, parentId: item.parentId, ...(revision ? { revision } : {}) };
     byId.set(node.id, node);
     return node;
   });
@@ -103,6 +117,14 @@ function normalizeLogicalNodes(rawNodes) {
   assertAcyclic(nodes.map(node => node.id), id => byId.get(id)?.parentId ? [byId.get(id).parentId] : [], 'logical', 'logical tree');
   const roots = nodes.filter(node => node.parentId === null);
   if (roots.length !== 1) fail('logical', `must contain exactly one root; found ${roots.length}`);
+  const revisionNodes = nodes.filter(node => node.revision != null);
+  if (revisionNodes.length > 0 && revisionNodes.length !== nodes.length) {
+    fail('logical', 'iteration revision metadata must be present on every current logical node when used');
+  }
+  if (revisionNodes.length > 0) {
+    const versions = new Set(revisionNodes.map(node => node.revision.version));
+    if (versions.size !== 1) fail('logical', 'all logical revision metadata must target the same version');
+  }
   return { nodes, byId, root: roots[0] };
 }
 
@@ -247,6 +269,25 @@ export function validatePlannerArtifactPlan(plan) {
   const tasks = milestoneState.milestones.flatMap(m => m.tasks.map(task => structuredClone(task)));
   const taskById = new Map(tasks.map(task => [task.id, task]));
 
+  const revisionAware = logical.nodes.length > 0 && logical.nodes.every(node => node.revision != null);
+  const affectedLogicalIds = new Set();
+  if (revisionAware) {
+    for (const node of logical.nodes) {
+      if (['revised', 'added'].includes(node.revision.kind)) {
+        let current = node;
+        while (current) {
+          affectedLogicalIds.add(current.id);
+          current = current.parentId ? logical.byId.get(current.parentId) : null;
+        }
+      }
+    }
+  }
+  for (const task of tasks) {
+    task.revisionMode = revisionAware
+      ? (task.logicalRefs.some(ref => affectedLogicalIds.has(ref)) ? 'implementation' : 'regression')
+      : 'implementation';
+  }
+
   for (const task of tasks) {
     for (const depId of task.dependsOn) {
       const dep = taskById.get(depId);
@@ -320,7 +361,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Use exactly <id>.json. IDs may contain dots for hierarchy (for example battle.combat or M1.1.2) but filenames/directories do not define parentage.',
     'Do not create subdirectories. parentId is the only durable parent relation. Do not store children arrays; children are derived by scanning parentId.',
     'Logical artifacts describe WHAT the product is and never create execution dependencies.',
-    'Logical artifact shape: {"id":"battle.combat","title":"Combat","summary":"...","parentId":"battle"}',
+    'Logical artifact shape: {"id":"battle.combat","title":"Combat","summary":"...","parentId":"battle","revision":{"version":2,"kind":"unchanged|revised|added","reason":"..."}}. revision is omitted for an initial version; during an iteration it must be present on every current logical node.',
     'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
     'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
     'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
@@ -329,7 +370,10 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
     'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
     'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',
-    'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',
+    'During iteration, treat logical artifacts as the living feature tree. Keep stable ids for retained features, edit revised nodes in place, create new files for added nodes, and remove files only for intentionally removed features. Mark every current logical node revision.kind as unchanged, revised, or added for the target version.',
+    'During iteration, milestone artifacts are a newly planned delivery tree for the target version. Do not preserve obsolete milestone structure merely for history; the immutable previous-version snapshot already preserves it.',
+    'For unchanged logical branches with no affected descendants, plan regression-only tasks. For revised/added branches and unchanged ancestors integrating changed descendants, plan implementation/integration work plus fresh regression/E2E.',
+    'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.'
     'After all required files are successfully written, return only a small JSON result; never echo the full artifacts in the final reply.',
   ].join('\n');
 }

@@ -892,6 +892,92 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
 });
 
 
+
+test('iteration logical revisions derive implementation versus regression task modes', () => {
+  const { dir, file } = tempDb();
+  try {
+    const artifactRoot = path.join(dir, 'artifacts');
+    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
+
+    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
+      id: 'game',
+      title: 'Game',
+      summary: 'Complete game',
+      parentId: null,
+      revision: { version: 2, kind: 'unchanged', reason: 'Top-level product definition is unchanged.' },
+    }));
+    fs.writeFileSync(path.join(logicalDir, 'game.battle.json'), JSON.stringify({
+      id: 'game.battle',
+      title: 'Battle',
+      summary: 'Revised battle capability',
+      parentId: 'game',
+      revision: { version: 2, kind: 'revised', reason: 'Battle behavior changes in v2.' },
+    }));
+    fs.writeFileSync(path.join(logicalDir, 'game.menu.json'), JSON.stringify({
+      id: 'game.menu',
+      title: 'Menu',
+      summary: 'Main menu capability',
+      parentId: 'game',
+      revision: { version: 2, kind: 'unchanged', reason: 'Menu behavior is unchanged.' },
+    }));
+
+    fs.writeFileSync(path.join(milestoneDir, 'M2.json'), JSON.stringify({
+      id: 'M2',
+      title: 'Version 2',
+      goal: 'Deliver and regress version 2.',
+      parentId: null,
+      dependsOn: [],
+      logicalRefs: ['game'],
+      acceptanceCriteria: ['Version 2 works end to end.'],
+      testStrategy: 'Run version 2 E2E.',
+      tasks: [
+        {
+          id: 'T-BATTLE-V2',
+          title: 'Revise battle',
+          intent: 'Implement revised battle behavior.',
+          dependsOn: [],
+          logicalRefs: ['game.battle'],
+          acceptanceCriteria: ['Battle v2 works.'],
+          testStrategy: 'Run battle tests.',
+        },
+        {
+          id: 'T-MENU-REGRESSION',
+          title: 'Regress menu',
+          intent: 'Verify unchanged menu behavior.',
+          dependsOn: [],
+          logicalRefs: ['game.menu'],
+          acceptanceCriteria: ['Menu still works.'],
+          testStrategy: 'Reuse and rerun menu E2E.',
+        },
+        {
+          id: 'T-V2-INTEGRATION',
+          title: 'Integrate v2',
+          intent: 'Verify changed battle with the unchanged product shell.',
+          dependsOn: ['T-BATTLE-V2', 'T-MENU-REGRESSION'],
+          logicalRefs: ['game'],
+          acceptanceCriteria: ['Whole game integrates.'],
+          testStrategy: 'Run product E2E.',
+        },
+      ],
+    }));
+
+    const plan = validatePlannerArtifactPlan(loadPlannerArtifactPlan(artifactRoot)).plan;
+    assert.equal(plan.tasks.find(task => task.id === 'T-BATTLE-V2').revisionMode, 'implementation');
+    assert.equal(plan.tasks.find(task => task.id === 'T-MENU-REGRESSION').revisionMode, 'regression');
+    assert.equal(plan.tasks.find(task => task.id === 'T-V2-INTEGRATION').revisionMode, 'implementation');
+
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-revision-modes' });
+    store.applyDeliveryPlan('P-revision-modes', plan);
+    assert.equal(store.getTask('T-BATTLE-V2').stage, 'developer');
+    assert.equal(store.getTask('T-MENU-REGRESSION').stage, 'tester');
+    assert.equal(store.getTask('T-V2-INTEGRATION').stage, 'developer');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('final validator reloads raw v3 filesystem artifacts instead of revalidating compiled predecessor plan', async () => {
   const { dir, file } = tempDb();
   try {
@@ -1175,6 +1261,7 @@ test('applyDeliveryPlan atomically preserves completed work and obsoletes remove
     store.createProject({ id: 'P13' });
     store.createTask({ id: 'KEEP', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
     store.createTask({ id: 'REMOVE', projectId: 'P13', state: 'READY', stage: 'developer' });
+    store.createTask({ id: 'OLD-DONE', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
 
     store.applyDeliveryPlan('P13', {
       version: 2,
@@ -1189,6 +1276,7 @@ test('applyDeliveryPlan atomically preserves completed work and obsoletes remove
     assert.equal(store.getTask('KEEP').state, 'DONE');
     assert.equal(store.getTask('KEEP').history.length, 1);
     assert.equal(store.getTask('REMOVE').state, 'OBSOLETE');
+    assert.equal(store.getTask('OLD-DONE').state, 'DONE', 'completed work remains immutable history even when absent from the new plan');
     assert.equal(store.getTask('ROOT').state, 'READY');
     assert.equal(store.getProject('P13').deliveryPlanVersion, 1);
     store.close();

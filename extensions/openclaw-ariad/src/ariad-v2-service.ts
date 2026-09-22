@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GitSourceControlFinalizer } from '../../../src/git-source-control-finalizer.js';
 import { SQLiteV2Store } from '../../../src/v2/sqlite-store.js';
@@ -37,6 +37,8 @@ class ProjectRuntime {
   private readonly logger: any;
   private readonly executionCapabilities: string[];
   private readonly executionProvenance: Record<string, unknown>;
+  private readonly workspace: string;
+  private readonly artifactRoot: string;
   private ticking = false;
   private requestSequence = 0;
 
@@ -62,6 +64,8 @@ class ProjectRuntime {
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
     this.projectId = project.id;
+    this.workspace = project.workspace;
+    this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
     this.store = new SQLiteV2Store(project.stateDb);
 
     if (!this.store.getProject(project.id)) {
@@ -116,7 +120,7 @@ class ProjectRuntime {
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
       sourceControl: this.sourceControl,
-      artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
+      artifactRoot: this.artifactRoot,
       executionCapabilities: this.executionCapabilities,
       executionProvenance: this.executionProvenance,
       resolveRoleExecutionMetadata: (role: string) => ({
@@ -224,14 +228,50 @@ class ProjectRuntime {
     };
   }
 
+  snapshotCompletedVersion(version: number) {
+    if (!Number.isInteger(version) || version < 1) throw new Error('completed project version is required for iteration snapshot');
+    const snapshotRoot = join(this.workspace, '.ariad', 'versions', `v${version}`);
+    const manifestPath = join(snapshotRoot, 'snapshot.json');
+    if (existsSync(manifestPath)) {
+      return { version, snapshotRoot, manifestPath, reused: true };
+    }
+
+    mkdirSync(snapshotRoot, { recursive: true });
+    const plannerRoot = join(this.artifactRoot, 'planner');
+    const logicalDir = join(plannerRoot, 'logical');
+    const milestoneDir = join(plannerRoot, 'milestones');
+    if (existsSync(logicalDir)) cpSync(logicalDir, join(snapshotRoot, 'logical'), { recursive: true });
+    if (existsSync(milestoneDir)) cpSync(milestoneDir, join(snapshotRoot, 'milestones'), { recursive: true });
+
+    const project = this.store.getProject(this.projectId);
+    const deliveryTasks = this.store.listTasks(this.projectId, { scope: 'delivery' });
+    const snapshot = {
+      snapshotVersion: 1,
+      projectId: this.projectId,
+      projectVersion: version,
+      capturedAt: new Date().toISOString(),
+      logicalRootId: project.logicalRootId ?? null,
+      logicalNodes: structuredClone(project.logicalNodes ?? []),
+      milestones: structuredClone(project.milestones ?? []),
+      deliveryPlanVersion: project.deliveryPlanVersion ?? null,
+      deliveryPlanSummary: project.deliveryPlanSummary ?? null,
+      deliveryRootTaskId: project.deliveryRootTaskId ?? null,
+      deliveryTasks: structuredClone(deliveryTasks),
+    };
+    writeFileSync(manifestPath, JSON.stringify(snapshot, null, 2) + '\n', { flag: 'wx' });
+    return { version, snapshotRoot, manifestPath, reused: false };
+  }
+
   beginIteration(request: string) {
     if (!request?.trim()) throw new Error('iteration request is required');
     let project = this.store.getProject(this.projectId);
     const completedVersion = Number.isInteger(project.projectVersion) ? project.projectVersion : 0;
     const activeVersion = completedVersion + 1;
+    const snapshot = this.snapshotCompletedVersion(completedVersion);
     project = this.store.updateProject(this.projectId, project.version, {
       deliveryEnabled: false,
       activeVersion,
+      iterationBaseSnapshot: snapshot.manifestPath,
     });
     const planningRequest = this.store.enqueuePlanningRequest({
       id: `${this.projectId}:iterate:v${activeVersion}:${Date.now()}:${++this.requestSequence}`,
@@ -240,16 +280,26 @@ class ProjectRuntime {
         purpose: 'UPDATE_DELIVERY_PLAN',
         iteration: activeVersion,
         instruction: request.trim(),
-        lifecycleRule: 'Preserve DONE tasks as historical completion. Add new follow-up tasks for changed behavior instead of reopening old DONE task ids. Add fresh integration/regression tasks when the new work can affect completed behavior.',
+        lifecycleRule: [
+          'The previous completed version has been snapshotted immutably before this iteration.',
+          'Revise the living logical/feature tree in place: preserve stable ids for retained features, mark every current logical node revision metadata as unchanged|revised|added for this target version, and intentionally remove obsolete feature artifacts only when the new product no longer contains them.',
+          'Replan the milestone tree for the target version; do not copy the old milestone execution plan merely to preserve history because the previous version snapshot is authoritative history.',
+          'Preserve all previously DONE task history. Do not reopen DONE task ids merely because a new version exists.',
+          'For unchanged feature branches, perform impact analysis. If they are not affected by revised dependencies/descendants, do not modify product code: create regression verification tasks and reuse existing valid tests/E2E flows.',
+          'For revised or added feature branches, create implementation work and update/add the affected tests and E2E scenarios. Reuse still-valid old tests instead of rewriting them gratuitously.',
+          'Parent/integration nodes whose descendants changed require fresh integrated regression/E2E verification even when the parent feature definition itself is unchanged.',
+          'Every important feature, milestone, and the project root still require fresh realistic end-to-end verification for this version.',
+        ].join(' '),
       },
       context: {
         sourceKind: 'iteration',
         fromVersion: completedVersion,
         targetVersion: activeVersion,
+        baseSnapshot: snapshot.manifestPath,
       } as any,
     });
     this.manager.setVersionState?.(this.projectId, { projectVersion: completedVersion, activeVersion });
-    return { planningRequest, project: this.status() };
+    return { planningRequest, snapshot, project: this.status() };
   }
 
   async tick({ schedule = true }: { schedule?: boolean } = {}) {

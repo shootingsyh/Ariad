@@ -56,7 +56,13 @@ PLANNING RULES
 - Mark a task with art only when it needs pure media resources (image/video/audio/music). Artist does not own UX, CSS, layout, or interaction design.
 - art must specify required, media, deliverables, and placeholderAllowed. Prefer real assets; placeholders are allowed only when explicitly acceptable.
 - Tester/Reviewer must have a concrete evidence strategy for media-bearing work (for example screenshots/keyframes or audio checks/review).
-- For a later project iteration/version, preserve completed task ids as historical DONE work. If new requirements change previously completed behavior, create explicit follow-up tasks and fresh regression/integration tasks rather than silently reopening old DONE tasks.
+- For a later project iteration/version, the previous completed version is an immutable snapshot. Revise the one living logical/feature tree rather than creating a parallel v2/v3 feature tree. Keep stable ids for retained features, edit revised nodes in place, add new feature nodes, and intentionally remove obsolete nodes.
+- During an iteration, mark every current logical node with revision metadata for the target version: unchanged, revised, or added. An existing node whose title/summary/parent changes cannot be called unchanged; a new id must be added. Missing old ids are treated as removals and must be intentional.
+- Replan the milestone tree for each new version from the revised living feature tree. The old milestone tree is preserved by the immutable version snapshot and should not constrain the new execution plan.
+- Preserve completed task ids as historical DONE work. Do not reopen old DONE task ids just because a new version exists.
+- For an unchanged feature branch with no affected descendants or dependencies, do not schedule gratuitous implementation. Plan fresh regression verification that reuses the existing valid tests/E2E and runs through Tester/Reviewer.
+- For revised or added features, plan implementation changes plus updated/additional tests and E2E where behavior changed. Reuse old tests that remain valid.
+- If a parent/integration feature is itself unchanged but contains revised/added descendants, it is still affected at integration level: plan fresh integrated regression/E2E across the changed subtree.
 - Keep the structure simple enough that a future TL can reconstruct the project's state quickly.
 
 FINAL CHECK
@@ -70,6 +76,8 @@ Before returning the plan, make sure:
 - another TL could pick this project up and continue without rediscovering everything;
 - the plan reaches the project root, rather than ending at the next milestone;
 - later milestones are represented even when their tasks are intentionally higher-level;
+- during iteration, the living feature tree is revised in place with complete revision metadata and the new milestone tree is replanned from it;
+- unchanged unaffected feature branches are regression-only rather than gratuitously reimplemented, while changed branches update implementation and affected tests/E2E;
 - every important feature and milestone has a realistic, continuous end-to-end user scenario that does not skip required user-visible steps;
 - the project root has a product-level E2E journey showing the intended product can be shipped/delivered and actually used for its promised value;
 - for a game project, that journey starts from a normal player entry point and can actually complete the required game content rather than merely launch, traverse, or jump directly to late/final content.
