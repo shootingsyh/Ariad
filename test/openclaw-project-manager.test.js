@@ -274,6 +274,7 @@ test('OpenClaw plugin manifest declares project and role-result tools and starts
     'ariad_tech_lead_result',
     'ariad_tech_lead_critic_result',
     'ariad_pm_result',
+    'ariad_codex_role_result',
   ]);
   assert.equal(manifest.activation.onStartup, true);
 });
