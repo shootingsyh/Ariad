@@ -2,6 +2,7 @@ import http from 'node:http';
 
 const port = Number(process.env.ARIAD_FAKE_PROVIDER_PORT || 18081);
 const providerLabel = process.env.ARIAD_FAKE_PROVIDER_LABEL || 'default';
+let frontdeskStartIssued = false;
 
 function messageText(message) {
   if (typeof message?.content === 'string') return message.content;
@@ -269,8 +270,9 @@ function isProjectExecutionRole(request) {
 function frontdeskProjectToolCall(request) {
   const text = requestText(request);
   if (!text.includes('ARIAD_E2E_START_PROJECT v2-production')) return null;
-  if (hasToolResult(request)) return null;
-  if (!requestToolNames(request).has('ariad_project') || hasCalledTool(request, 'ariad_project')) return null;
+  if (frontdeskStartIssued) return null;
+  if (!requestToolNames(request).has('ariad_project')) return null;
+  frontdeskStartIssued = true;
   console.log('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=start project=v2-production');
   return { name: 'ariad_project', arguments: { action: 'start', name: 'v2-production' } };
 }
