@@ -146,6 +146,32 @@ function isTakeoverPlanningTask(store, task) {
   return planningBatchRequests(store, task).some(item => item.request?.purpose === 'RESTORE_PROJECT_STATE');
 }
 
+function iterationRequest(store, task) {
+  return planningBatchRequests(store, task).find(item => item.request?.purpose === 'UPDATE_DELIVERY_PLAN') ?? null;
+}
+
+function materializeIterationFeatureTree(store, task, artifactRoot) {
+  const request = iterationRequest(store, task);
+  if (!request) return null;
+  const diff = loadFeatureTreeDiff(artifactRoot);
+  if (!diff) {
+    const error = new Error('ITERATION_FEATURE_TREE_DIFF_REQUIRED: iteration planning requires feature-tree-diff.json');
+    error.code = 'ITERATION_FEATURE_TREE_DIFF_REQUIRED';
+    throw error;
+  }
+  const targetVersion = request.context?.targetVersion ?? request.request?.iteration;
+  if (diff.targetVersion !== targetVersion) {
+    const error = new Error(`ITERATION_FEATURE_TREE_DIFF_REQUIRED: diff targets version ${diff.targetVersion}, expected ${targetVersion}`);
+    error.code = 'ITERATION_FEATURE_TREE_DIFF_REQUIRED';
+    throw error;
+  }
+  const project = store.getProject(task.projectId);
+  const nextNodes = applyFeatureTreeDiff(project?.logicalNodes ?? [], diff);
+  materializeLogicalTree(artifactRoot, nextNodes);
+  return { diff, nextNodes };
+}
+
+
 const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
   'Create or source only media assets: images, video, music, audio, sprites, textures, backgrounds, illustrations, and similar pure resources.',
