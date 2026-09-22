@@ -94,6 +94,13 @@ const schemas: Record<string, any> = {
           Type.Literal('UNVERIFIED'),
           Type.Literal('BLOCKED'),
         ]),
+        evidenceType: Type.Union([
+          Type.Literal('runtime'),
+          Type.Literal('static'),
+          Type.Literal('behavioral'),
+          Type.Literal('proxy'),
+          Type.Literal('manual'),
+        ]),
         evidence: Type.Array(Type.Any()),
         reason: Type.String({ minLength: 1 }),
       }, { additionalProperties: false })),

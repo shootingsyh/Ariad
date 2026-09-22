@@ -36,6 +36,8 @@ PLANNING RULES
 - The returned plan must cover the complete currently-known route to project completion. Near-term work should be concrete; later milestones may be coarser and can be refined by future replans.
 - Milestone boundaries control execution and validation, not the scope of the planning pass. Completing one milestone should normally allow Ariad to continue into the next already-planned milestone without another human planning round.
 - Ask for human input only when a real product/requirements decision is missing, when takeover reconstruction requires approval, or when execution discovers information that invalidates the plan. Do not create routine human gates between milestones.
+- Required project acceptance must be autonomously executable by Ariad unless the user explicitly requested a human study. Do not create mandatory external-human playtests, owner manual tests, manual screenshot reviews, manual platform execution, or manual data-entry gates merely because automation is inconvenient.
+- For acceptance criteria that assert runtime behavior, add task.verification entries such as {"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}. Runtime criteria require actual execution evidence; artifact existence, headers, successful export, screenshots of unrelated paths, or future-owner verification are proxy evidence and must not be treated as sufficient.
 - Logical nodes describe features/components/capabilities, not milestones.
 - Use milestones only when they help staged delivery, integration, validation, or future pickup.
 - If milestone-specific integration/reconciliation/migration/testing work is needed, create ordinary tasks and assign milestoneId. Do not invent special task kinds just for ceremony.

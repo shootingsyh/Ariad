@@ -15,6 +15,7 @@ import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
+import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import {
   ensurePlannerArtifactLayout,
   loadPlannerArtifactPlan,
@@ -181,6 +182,113 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
 });
 
 
+
+
+test('planning autonomy validator rejects required external human labor unless user explicitly requested it', () => {
+  const plan = validateTechLeadPlan({
+    version: 2,
+    projectSummary: 'Autonomous game',
+    rootTaskId: 'ROOT',
+    tasks: [{
+      id: 'ROOT',
+      title: 'Complete game',
+      intent: 'Ship the game.',
+      parentId: null,
+      dependsOn: [],
+      acceptanceCriteria: ['10 external human players must play CH1 and 8/10 must pass.'],
+      testStrategy: 'Recruit external human players and collect manual results.',
+    }],
+  }).plan;
+
+  assert.throws(
+    () => validatePlanAutonomy(plan, [{ request: { purpose: 'INITIAL_PLAN', instruction: 'Build and verify the game autonomously.' } }]),
+    error => error?.code === 'INVALID_AUTONOMY_REQUIREMENT',
+  );
+
+  assert.doesNotThrow(() => validatePlanAutonomy(plan, [{
+    request: {
+      purpose: 'INITIAL_PLAN',
+      instruction: 'Run a human playtest study with external testers before release.',
+    },
+  }]));
+});
+
+test('runtime acceptance cannot be satisfied by static or proxy evidence', () => {
+  const task = {
+    acceptanceCriteria: ['Windows build starts and reaches the title screen.'],
+    verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' }],
+  };
+
+  const staticOnly = aggregateTesterSubmission(task, {
+    outcome: 'PASS',
+    summary: 'PE exists',
+    result: {
+      criteria: [{
+        criterionId: 'AC1',
+        status: 'SATISFIED',
+        evidenceType: 'static',
+        evidence: ['game.exe exists', 'PE header valid'],
+        reason: 'export succeeded',
+      }],
+    },
+  });
+  assert.equal(staticOnly.outcome, 'NOT_PASS');
+  assert.equal(staticOnly.result.criteria[0].status, 'UNVERIFIED');
+  assert.match(staticOnly.result.criteria[0].reason, /Runtime verification required/i);
+
+  const proxyOnly = aggregateTesterSubmission(task, {
+    outcome: 'PASS',
+    summary: 'proxy says likely okay',
+    result: {
+      criteria: [{
+        criterionId: 'AC1',
+        status: 'SATISFIED',
+        evidenceType: 'proxy',
+        evidence: ['Linux build ran'],
+        reason: 'same source tree',
+      }],
+    },
+  });
+  assert.equal(proxyOnly.outcome, 'NOT_PASS');
+  assert.equal(proxyOnly.result.aggregate.unverified, 1);
+
+  const executed = aggregateTesterSubmission(task, {
+    outcome: 'PASS',
+    summary: 'Windows build executed',
+    result: {
+      criteria: [{
+        criterionId: 'AC1',
+        status: 'SATISFIED',
+        evidenceType: 'runtime',
+        evidence: ['windows-smoke.log'],
+        reason: 'process launched and title screen probe passed',
+      }],
+    },
+  });
+  assert.equal(executed.outcome, 'PASS');
+  assert.equal(executed.result.criteria[0].status, 'SATISFIED');
+});
+
+test('verification metadata survives plan validation', () => {
+  const plan = validateTechLeadPlan({
+    version: 2,
+    projectSummary: 'Runtime evidence project',
+    rootTaskId: 'ROOT',
+    tasks: [{
+      id: 'ROOT',
+      title: 'Runtime root',
+      intent: 'Verify runtime behavior.',
+      parentId: null,
+      dependsOn: [],
+      acceptanceCriteria: ['Windows runtime starts.'],
+      testStrategy: 'Launch Windows build through WSL host interop.',
+      verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' }],
+    }],
+  }).plan;
+  assert.deepEqual(plan.tasks[0].verification, [
+    { criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' },
+  ]);
+});
 
 test('tester aggregate verdict is computed from required criterion statuses', () => {
   const task = {

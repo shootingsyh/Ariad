@@ -109,7 +109,7 @@ function normalizeLogicalNodes(rawNodes) {
 function normalizeTask(item, milestoneId, logicalById, taskIds) {
   const path = `milestone:${milestoneId}.task:${item?.id ?? '?'}`;
   if (!item || typeof item !== 'object' || Array.isArray(item)) fail(path, 'must be an object');
-  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'art', 'history']);
+  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'verification', 'art', 'history']);
   for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
   assertId(item.id, `${path}.id`);
   if (taskIds.has(item.id)) fail(`${path}.id`, `duplicate task id ${item.id}`);
@@ -121,6 +121,24 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
   for (const ref of item.logicalRefs) if (!logicalById.has(ref)) fail(`${path}.logicalRefs`, `unknown logical ref ${ref}`);
   assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
   assertString(item.testStrategy, `${path}.testStrategy`);
+  if (item.verification != null) {
+    if (!Array.isArray(item.verification)) fail(`${path}.verification`, 'must be an array');
+    const seenVerification = new Set();
+    for (let index = 0; index < item.verification.length; index += 1) {
+      const entry = item.verification[index];
+      const vPath = `${path}.verification[${index}]`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(vPath, 'must be an object');
+      const allowedVerification = new Set(['criterionId', 'mode', 'target']);
+      for (const key of Object.keys(entry)) if (!allowedVerification.has(key)) fail(`${vPath}.${key}`, 'unexpected property');
+      if (!/^AC[1-9][0-9]*$/.test(entry.criterionId ?? '')) fail(`${vPath}.criterionId`, 'must reference AC1, AC2, ...');
+      const criterionIndex = Number(entry.criterionId.slice(2)) - 1;
+      if (criterionIndex < 0 || criterionIndex >= item.acceptanceCriteria.length) fail(`${vPath}.criterionId`, 'references missing acceptance criterion');
+      if (!['runtime', 'static', 'behavioral'].includes(entry.mode)) fail(`${vPath}.mode`, 'unsupported verification mode');
+      if (entry.target != null) assertString(entry.target, `${vPath}.target`);
+      if (seenVerification.has(entry.criterionId)) fail(`${path}.verification`, `duplicate verification entry for ${entry.criterionId}`);
+      seenVerification.add(entry.criterionId);
+    }
+  }
   if (item.art != null) {
     if (!item.art || typeof item.art !== 'object' || Array.isArray(item.art)) fail(`${path}.art`, 'must be an object when present');
     const allowedArt = new Set(['required', 'media', 'deliverables', 'placeholderAllowed']);
@@ -141,6 +159,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     milestoneId,
     acceptanceCriteria: [...item.acceptanceCriteria],
     testStrategy: item.testStrategy,
+    verification: structuredClone(item.verification ?? []),
     art: item.art == null ? null : structuredClone(item.art),
     history: structuredClone(item.history ?? []),
   };
@@ -305,7 +324,8 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
     'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
     'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
-    'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","art":null,"history":[]}',
+    'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","verification":[{"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}],"art":null,"history":[]}',
+    'Use verification only when evidence semantics matter. mode=runtime means the target behavior must actually execute; static/proxy/manual evidence cannot satisfy it. mode=static is artifact inspection; mode=behavioral is non-platform behavioral verification.',
     'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
     'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
     'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',

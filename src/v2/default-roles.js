@@ -4,6 +4,7 @@ import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { acceptanceCriterionIds } from './acceptance.js';
+import { validatePlanAutonomy } from './autonomy.js';
 import {
   ensurePlannerArtifactLayout,
   loadPlannerArtifactPlan,
@@ -274,6 +275,7 @@ export function createDefaultV2Roles({
         intent: task.intent ?? task.input?.intent ?? null,
         acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
         acceptanceCriterionIds: acceptanceCriterionIds(task),
+        verification: task.verification ?? task.input?.verification ?? [],
         testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
         art: task.art ?? task.input?.art ?? null,
         history: task.history ?? [],
@@ -438,14 +440,15 @@ export function createDefaultV2Roles({
           if (rawArtifactPlan) {
             try {
               const validated = validatePlannerArtifactPlan(rawArtifactPlan);
+              validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
-                result: { valid: true, plan: validated.plan, error: null },
+                result: { valid: true, plan: validated.plan, error: null, errorCode: null },
               };
             } catch (error) {
               return {
                 outcome: 'NOT_PASS',
-                result: { valid: false, plan: rawArtifactPlan, error: error?.message ?? String(error) },
+                result: { valid: false, plan: rawArtifactPlan, error: error?.message ?? String(error), errorCode: error?.code ?? null },
               };
             }
           }
@@ -459,20 +462,31 @@ export function createDefaultV2Roles({
           }
           try {
             const validated = validateTechLeadPlan(candidate);
+            validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
             return {
               outcome: 'PASS',
-              result: { valid: true, plan: validated.plan, error: null },
+              result: { valid: true, plan: validated.plan, error: null, errorCode: null },
             };
           } catch (error) {
             return {
               outcome: 'NOT_PASS',
-              result: { valid: false, plan: candidate, error: error?.message ?? String(error) },
+              result: { valid: false, plan: candidate, error: error?.message ?? String(error), errorCode: error?.code ?? null },
             };
           }
         },
       }),
       transition: ({ task, result }) => {
         if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
+          if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'AUTONOMY_REPLAN',
+                diagnosis: result.result,
+                instruction: 'Replace required external/manual human work with an autonomous verification strategy. Do not weaken the acceptance requirement.',
+              },
+            });
+            return { state: 'DONE' };
+          }
           return { state: 'NEEDS_HUMAN' };
         }
         return { state: 'DONE' };

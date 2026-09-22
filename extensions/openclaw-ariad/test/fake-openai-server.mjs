@@ -123,6 +123,8 @@ function roleResultToolCall(request) {
       criteria: requestCriterionIds(request).map(criterionId => ({
         criterionId,
         status: 'SATISFIED',
+        evidenceType: 'runtime',
+        evidenceType: 'runtime',
         evidence: ['fake-provider verification'],
         reason: 'Fake provider verified this criterion for E2E.',
       })),

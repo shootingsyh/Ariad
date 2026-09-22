@@ -272,6 +272,7 @@ export class SQLiteV2Store {
           intent: spec.intent,
           acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
           testStrategy: spec.testStrategy,
+          verification: structuredClone(spec.verification ?? []),
           art: spec.art == null ? null : structuredClone(spec.art),
           milestoneId: spec.milestoneId ?? null,
           input: {
@@ -279,6 +280,7 @@ export class SQLiteV2Store {
             intent: spec.intent,
             acceptanceCriteria: [...(spec.acceptanceCriteria ?? [])],
             testStrategy: spec.testStrategy,
+            verification: structuredClone(spec.verification ?? []),
             art: spec.art == null ? null : structuredClone(spec.art),
             milestoneId: spec.milestoneId ?? null,
             logicalRefs: [...(spec.logicalRefs ?? [])],
