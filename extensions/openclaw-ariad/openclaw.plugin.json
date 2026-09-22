@@ -55,6 +55,8 @@
     "ariad_artist_result": {
       "optional": true
     },
-    "ariad_codex_role_result": {}
+    "ariad_codex_role_result": {
+      "optional": false
+    }
   }
 }
