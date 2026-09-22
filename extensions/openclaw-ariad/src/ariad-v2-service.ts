@@ -594,7 +594,10 @@ export class AriadV2Service {
       this.runtimes.set(current.id, runtime);
     }
     const result = runtime.beginIteration(request);
-    await this.reconcile();
+    // Do not dispatch role work synchronously from an operator/tool request.
+    // OpenClaw request-scoped subagent runs inherit the caller's model-override
+    // authority; Ariad role routing is plugin-owned background policy instead.
+    // The service reconcile loop will pick this durable planning intent up.
     return { ...result, project: this.status(current.id) };
   }
 
@@ -605,7 +608,9 @@ export class AriadV2Service {
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
     }
-    await this.reconcile();
+    // Scheduling is intentionally deferred to the service reconcile loop so
+    // role runs are admitted under Ariad's plugin subagent policy, not under
+    // the transient caller scope of ariad_project.
     return this.status(name);
   }
 
@@ -623,7 +628,7 @@ export class AriadV2Service {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
     this.manager.setDesiredState(name, 'RUNNING');
-    await this.reconcile();
+    // See ensureRunning: resume records durable intent; the service loop starts work.
     return this.status(name);
   }
 
