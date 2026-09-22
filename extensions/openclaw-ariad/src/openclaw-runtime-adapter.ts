@@ -103,7 +103,12 @@ export class OpenClawRuntimeAdapter {
   private readonly onSessionBound?: RuntimeAdapterOptions['onSessionBound'];
   private readonly sessions = new Map<string, string>();
   private readonly attempts = new Map<string, string>();
-  private readonly bindings = new Map<string, { attemptId: string; role: string }>();
+  private readonly bindings = new Map<string, {
+    projectId: string;
+    taskId: string;
+    attemptId: string;
+    role: string;
+  }>();
   private readonly runtimes = new Map<string, { harness?: string; provider?: string; model?: string }>();
 
   constructor(options: RuntimeAdapterOptions) {
@@ -175,7 +180,7 @@ export class OpenClawRuntimeAdapter {
     if (launched.runtime) this.runtimes.set(launched.runId, { ...launched.runtime });
     if (roleBinding) {
       this.attempts.set(roleBinding.attemptId, launched.runId);
-      this.bindings.set(launched.runId, { attemptId: roleBinding.attemptId, role: roleBinding.role });
+      this.bindings.set(launched.runId, { ...roleBinding });
     }
     if (roleBinding && boundSessionKey !== requestedSessionKey) {
       this.onSessionBound?.({ sessionKey: boundSessionKey, ...roleBinding });
@@ -259,6 +264,21 @@ export class OpenClawRuntimeAdapter {
     } catch (error) {
       return { state: 'FAILED', failure: `INVALID_ROLE_RESULT:${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  getAttemptRuntimeBinding(attemptId: string) {
+    const externalId = this.attempts.get(attemptId);
+    if (!externalId) return null;
+    const binding = this.bindings.get(externalId);
+    if (!binding) return null;
+    const runtime = this.runtimes.get(externalId);
+    return {
+      ...binding,
+      externalId,
+      harness: runtime?.harness,
+      provider: runtime?.provider,
+      model: runtime?.model,
+    };
   }
 
   async terminateAttempt(attemptId: string) {
