@@ -398,7 +398,7 @@ const plugin = defineFeaturePlugin({
               goal: input.goal ?? null,
               mode: input.mode ?? null,
               sourcePath: input.sourcePath ?? null,
-              roleModels: input.roleModels ?? Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'ariadfake/role'])),
+              roleModels: requireCompleteRoleModels(input.roleModels ?? {}),
               projectAgent: null,
             });
             respond(true, { project: v2Service.status(project.id) });
@@ -439,7 +439,7 @@ const plugin = defineFeaturePlugin({
           }
           if (input.action === 'adopt') {
             if (!input.sourcePath) throw new Error('sourcePath is required for adopt');
-            respond(true, { project: manager.adopt(input.name, input.sourcePath) });
+            respond(true, { project: manager.adopt(input.name, input.sourcePath, { roleModels: input.roleModels ?? null }) });
             return;
           }
           throw new Error(`unsupported CI project action: ${input.action}`);
@@ -498,7 +498,11 @@ const plugin = defineFeaturePlugin({
             details = { action, project: v2Service.status(name) };
           } else if (action === 'adopt') {
             if (!sourcePath) throw new Error('sourcePath is required for action adopt');
-            details = { action, project: manager.adopt(name, sourcePath) };
+            const adoptRoleModels = roleModels == null
+              ? null
+              : requireCompleteRoleModels(roleModels as Record<string, string>);
+            if (adoptRoleModels) validateSelectedRoleModels(adoptRoleModels, { refresh: true });
+            details = { action, project: manager.adopt(name, sourcePath, { roleModels: adoptRoleModels }) };
           } else if (action === 'start' || action === 'resume') {
             const project = manager.status(name);
             const configuredRoleModels = requireCompleteRoleModels(

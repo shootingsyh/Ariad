@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync, cpSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { normalizeRoleModels } from './role-models.js';
+import { normalizeRoleModels, requireCompleteRoleModels } from './role-models.js';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -104,9 +104,10 @@ export class AriadProjectManager {
     return { ...base, adopted: false };
   }
 
-  create(name, { goal = null, mode = null, sourcePath = null, roleModels = {}, frontdeskBinding = null, projectAgent = undefined } = {}) {
+  create(name, { goal = null, mode = null, sourcePath = null, roleModels = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
     const effectiveMode = mode ?? (sourcePath ? 'TAKEOVER' : 'NEW');
     if (!['NEW', 'TAKEOVER'].includes(effectiveMode)) throw new Error(`invalid project mode: ${effectiveMode}`);
+    const completeRoleModels = requireCompleteRoleModels(roleModels ?? {});
     const base = this.paths(name);
     if (existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef)) {
       throw new Error(`Ariad project already exists: ${base.id}`);
@@ -152,7 +153,7 @@ export class AriadProjectManager {
       executionState: 'IDLE',
       projectVersion: 0,
       activeVersion: 1,
-      roleModels: normalizeRoleModels(roleModels),
+      roleModels: completeRoleModels,
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {
@@ -161,7 +162,7 @@ export class AriadProjectManager {
     return this.status(base.id);
   }
 
-  adopt(name, sourcePath) {
+  adopt(name, sourcePath, { roleModels = null } = {}) {
     const base = this.paths(name);
     const exists = existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef);
     if (!exists) {
@@ -169,11 +170,17 @@ export class AriadProjectManager {
       return this.create(name, {
         mode: 'TAKEOVER',
         sourcePath,
+        roleModels: requireCompleteRoleModels(roleModels ?? {}),
       });
     }
 
     const current = this.status(base.id);
-    if (current.adopted) return current;
+    const effectiveRoleModels = roleModels == null
+      ? requireCompleteRoleModels(current.roleModels ?? {})
+      : requireCompleteRoleModels(roleModels);
+    if (current.adopted) {
+      return roleModels == null ? current : this.writeManifest(base.id, { roleModels: effectiveRoleModels });
+    }
     if (current.desiredState !== 'STOPPED') throw new Error('project must be STOPPED before adoption');
     const targetWorkspace = resolve(sourcePath ?? current.sourcePath ?? '');
     if (!targetWorkspace) throw new Error('sourcePath is required for adoption');
@@ -203,6 +210,7 @@ export class AriadProjectManager {
       adopted: true,
       workspace: targetWorkspace,
       stateDb: join(targetAriad, 'state.db'),
+      roleModels: effectiveRoleModels,
     };
     writeJson(targetManifest, next);
     mkdirSync(base.root, { recursive: true });

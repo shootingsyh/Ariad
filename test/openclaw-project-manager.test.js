@@ -11,6 +11,10 @@ import {
 } from '../extensions/openclaw-ariad/runtime/role-models.js';
 import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
 
+const testRoleModels = () => Object.fromEntries(
+  ARIAD_MODEL_ROLES.map(role => [role, 'llamacpp/qwen3.8-27b'])
+);
+
 
 test('execution capability discovery detects Windows host interop under WSL', () => {
   const existing = new Set([
@@ -44,9 +48,10 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
   try {
     const alpha = manager.create('Alpha Project', {
       goal: 'build alpha',
+      roleModels: testRoleModels(),
       frontdeskBinding: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha' },
     });
-    const beta = manager.create('Beta Project', { goal: 'build beta' });
+    const beta = manager.create('Beta Project', { goal: 'build beta', roleModels: testRoleModels() });
     const existingRepo = join(dir, 'existing-repo');
     mkdirSync(join(existingRepo, '.git'), { recursive: true });
     writeFileSync(join(existingRepo, 'README.md'), '# existing\n');
@@ -54,6 +59,7 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
       goal: 'assess existing repo',
       mode: 'TAKEOVER',
       sourcePath: existingRepo,
+      roleModels: testRoleModels(),
     });
 
     assert.equal(alpha.id, 'alpha-project');
@@ -94,7 +100,8 @@ test('OpenClaw Ariad project manager isolates project folders and durable desire
     const listed = manager.list();
     assert.deepEqual(listed.map((p) => p.id).sort(), ['alpha-project', 'beta-project', 'takeover-project']);
     assert.match(readFileSync(join(beta.workspace, '.ariad', 'project.json'), 'utf8'), /build beta/);
-    assert.throws(() => manager.create('Bad Mode', { mode: 'RESTORE' }), /invalid project mode/);
+    assert.throws(() => manager.create('Missing Models', { goal: 'must fail' }), /missing:/);
+    assert.throws(() => manager.create('Bad Mode', { mode: 'RESTORE', roleModels: testRoleModels() }), /invalid project mode/);
 
     assert.deepEqual(manager.status('alpha-project').frontdeskBinding, {
       host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:alpha',
@@ -210,6 +217,7 @@ test('legacy projectAgent binding is read as Frontdesk without migration', () =>
   try {
     manager.create('Legacy Binding', {
       goal: 'compatibility',
+      roleModels: testRoleModels(),
       projectAgent: { host: 'openclaw', agentId: 'main', sessionKey: 'agent:main:legacy' },
     });
     assert.deepEqual(manager.status('legacy-binding').frontdeskBinding, {
@@ -224,7 +232,7 @@ test('legacy projectAgent binding is read as Frontdesk without migration', () =>
 test('Ariad dashboard starts and serves project JSON without owning project state', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-dashboard-'));
   const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
-  manager.create('Dashboard Project', { goal: 'observe me' });
+  manager.create('Dashboard Project', { goal: 'observe me', roleModels: testRoleModels() });
   const dashboard = new AriadDashboardService({ manager, host: '127.0.0.1', port: 0 });
 
   try {
@@ -254,6 +262,7 @@ test('existing isolated takeover can adopt a real repo and move Ariad durable st
     const project = manager.create('SRPG Takeover', {
       goal: 'reconstruct existing SRPG',
       mode: 'TAKEOVER',
+      roleModels: testRoleModels(),
     });
     const oldWorkspace = project.workspace;
     mkdirSync(join(oldWorkspace, '.ariad', 'docs'), { recursive: true });
@@ -287,7 +296,7 @@ test('adopt refuses to hide product files created in the isolated workspace', ()
   const dir = mkdtempSync(join(tmpdir(), 'ariad-adopt-conflict-'));
   const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
   try {
-    const project = manager.create('Conflict Takeover', { mode: 'TAKEOVER' });
+    const project = manager.create('Conflict Takeover', { mode: 'TAKEOVER', roleModels: testRoleModels() });
     writeFileSync(join(project.workspace, 'unexpected-code.txt'), 'do not lose me');
 
     const target = join(dir, 'real-repo');
@@ -314,7 +323,8 @@ test('adopt can register an untracked existing repository as a TAKEOVER project'
     writeFileSync(join(target, 'README.md'), '# existing\n');
 
     assert.deepEqual(manager.list(), []);
-    const adopted = manager.adopt('srpg', target);
+    assert.throws(() => manager.adopt('srpg-missing-models', target), /missing:/);
+    const adopted = manager.adopt('srpg', target, { roleModels: testRoleModels() });
     assert.equal(adopted.id, 'srpg');
     assert.equal(adopted.mode, 'TAKEOVER');
     assert.equal(adopted.adopted, true);

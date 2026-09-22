@@ -46,6 +46,7 @@ Configure the Ariad plugin once in OpenClaw with the models it may dispatch:
 ```
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping.
+Every newly created Ariad project must start with a complete mapping for all Ariad roles. This applies to NEW projects, TAKEOVER creation, and direct adoption of an untracked repository. Existing projects may later change individual role mappings with `set_role_models`.
 The OpenClaw plugin policy above is separate: it is the host-level allowlist authorizing Ariad to use those model refs.
 ## Isolation model
 
