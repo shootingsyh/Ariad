@@ -26,6 +26,9 @@ import { detectExecutionCapabilities } from '../runtime/execution-capabilities.j
 import { detectExecutionProvenance } from '../runtime/provenance.js';
 import { AriadDashboardService } from './dashboard-service.js';
 import {
+  CODEX_ROLE_RESULT_TOOL_NAME,
+  codexRoleResultToolMetadata,
+  registerCodexRoleResultTool,
   registerRoleResultTools,
   roleResultToolMetadata,
   roleResultToolName,
@@ -40,8 +43,9 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
         '',
         'ARIAD RESULT CONTRACT',
         `Before ending this role, you MUST successfully call ${toolName} exactly once.`,
+        `If ${toolName} is unavailable and ${CODEX_ROLE_RESULT_TOOL_NAME} is available, you are running through the Codex compatibility path: call ${CODEX_ROLE_RESULT_TOOL_NAME} exactly once instead, with the same result payload. Never use the Codex compatibility tool when the role-specific tool is available.`,
         `Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT: ${String(context.attemptId ?? '')}`,
-        'That tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
+        'The accepted result tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
         'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
         'This tool call MUST be your final action. Finish all work first, then call it.',
         'Once accepted, Ariad seals the result and terminates this execution. Do not expect another model turn and do not plan to emit prose afterward.',
@@ -255,20 +259,29 @@ const plugin = defineFeaturePlugin({
       },
     });
 
+    const terminateAcceptedAttempt = (attemptId: string) => {
+      // Return the accepted tool result before aborting the exact run.
+      // sessions.abort may wait for settlement, so never await it here.
+      setTimeout(() => {
+        void runtimeAdapter.terminateAttempt(attemptId).catch((error) => {
+          api.logger?.warn?.(
+            `Ariad failed to terminate accepted role attempt ${attemptId}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
+      }, 0);
+    };
+
     registerRoleResultTools({
       api,
       submit: (attemptId, role, payload) => v2Service.submitRoleResultByAttempt(attemptId, role, payload),
-      terminate: (attemptId) => {
-        // Return the accepted tool result before aborting the exact run.
-        // sessions.abort may wait for settlement, so never await it here.
-        setTimeout(() => {
-          void runtimeAdapter.terminateAttempt(attemptId).catch((error) => {
-            api.logger?.warn?.(
-              `Ariad failed to terminate accepted role attempt ${attemptId}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          });
-        }, 0);
-      },
+      terminate: terminateAcceptedAttempt,
+    });
+
+    registerCodexRoleResultTool({
+      api,
+      resolveAttempt: (attemptId) => runtimeAdapter.getAttemptRuntimeBinding(attemptId),
+      submit: (attemptId, role, payload) => v2Service.submitRoleResultByAttempt(attemptId, role, payload),
+      terminate: terminateAcceptedAttempt,
     });
 
     api.registerService({
@@ -566,7 +579,7 @@ const plugin = defineFeaturePlugin({
 
 const staticMetadata = (plugin as any)[toolPluginMetadataSymbol];
 if (staticMetadata?.tools) {
-  staticMetadata.tools.push(...roleResultToolMetadata());
+  staticMetadata.tools.push(...roleResultToolMetadata(), codexRoleResultToolMetadata());
 }
 
 export default plugin;
