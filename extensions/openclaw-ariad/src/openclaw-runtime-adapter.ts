@@ -1,5 +1,5 @@
 type SubagentRuntime = {
-  run(input: Record<string, unknown>): Promise<{ runId: string; sessionKey?: string }>;
+  run(input: Record<string, unknown>): Promise<{ runId: string; sessionKey?: string; runtime?: { harness?: string; provider?: string; model?: string } }>;
   waitForRun(input: { runId: string; timeoutMs?: number }): Promise<Record<string, unknown>>;
   getSessionMessages?(input: { sessionKey: string; limit?: number }): Promise<{ messages?: unknown[] }>;
 };
@@ -42,6 +42,55 @@ function sessionKey(agentId: string, runId: string): string {
   return `agent:${agentId}:subagent:ariad-${safe}`;
 }
 
+const ROLE_OUTCOMES: Record<string, Set<string>> = {
+  artist: new Set(['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY']),
+  developer: new Set(['PASS', 'NOT_PASS']),
+  tester: new Set(['PASS', 'NOT_PASS']),
+  reviewer: new Set(['PASS', 'NOT_PASS']),
+  project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'NEEDS_HUMAN']),
+  tech_lead: new Set(['PLANNED', 'REPLANNED']),
+  tech_lead_critic: new Set(['CLEAN', 'MINOR_ONLY', 'ISSUES']),
+  pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN']),
+};
+
+function parseUnavailableResultToolFallback(
+  text: string,
+  binding: { attemptId: string; role: string } | undefined,
+  runtime: { harness?: string; provider?: string; model?: string } | undefined,
+) {
+  if (!binding) return null;
+  let parsed: any;
+  try {
+    parsed = parseJsonText(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.resultTool !== 'unavailable') return null;
+  if (parsed.attemptId !== binding.attemptId) return null;
+  const outcome = typeof parsed.outcome === 'string' ? parsed.outcome : '';
+  if (!ROLE_OUTCOMES[binding.role]?.has(outcome)) return null;
+  const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
+    ? parsed.summary.trim()
+    : `${binding.role} completed with the Ariad result tool unavailable in the selected harness.`;
+  return {
+    source: 'terminal_json_result_tool_unavailable',
+    attemptId: binding.attemptId,
+    role: binding.role,
+    outcome,
+    summary,
+    keyPoints: Array.isArray(parsed.keyPoints)
+      ? parsed.keyPoints.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    artifacts: Array.isArray(parsed.artifacts)
+      ? parsed.artifacts.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    result: parsed.result ?? null,
+    runtime: runtime ? { ...runtime } : null,
+    raw: parsed,
+  };
+}
+
 export class OpenClawRuntimeAdapter {
   readonly id = 'openclaw-subagent';
   private readonly subagent: SubagentRuntime;
@@ -54,6 +103,8 @@ export class OpenClawRuntimeAdapter {
   private readonly onSessionBound?: RuntimeAdapterOptions['onSessionBound'];
   private readonly sessions = new Map<string, string>();
   private readonly attempts = new Map<string, string>();
+  private readonly bindings = new Map<string, { attemptId: string; role: string }>();
+  private readonly runtimes = new Map<string, { harness?: string; provider?: string; model?: string }>();
 
   constructor(options: RuntimeAdapterOptions) {
     if (!options?.subagent?.run || !options?.subagent?.waitForRun) throw new Error('OpenClaw subagent runtime is required');
@@ -121,7 +172,11 @@ export class OpenClawRuntimeAdapter {
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
     this.sessions.set(launched.runId, boundSessionKey);
-    if (roleBinding) this.attempts.set(roleBinding.attemptId, launched.runId);
+    if (launched.runtime) this.runtimes.set(launched.runId, { ...launched.runtime });
+    if (roleBinding) {
+      this.attempts.set(roleBinding.attemptId, launched.runId);
+      this.bindings.set(launched.runId, { attemptId: roleBinding.attemptId, role: roleBinding.role });
+    }
     if (roleBinding && boundSessionKey !== requestedSessionKey) {
       this.onSessionBound?.({ sessionKey: boundSessionKey, ...roleBinding });
     }
@@ -151,6 +206,19 @@ export class OpenClawRuntimeAdapter {
 
     const terminalText = extractText(observed?.terminalReply);
     if (terminalText) {
+      const fallback = parseUnavailableResultToolFallback(
+        terminalText,
+        this.bindings.get(handle.externalId),
+        this.runtimes.get(handle.externalId),
+      );
+      if (fallback) {
+        return {
+          state: 'COMPLETED',
+          outcome: fallback.outcome,
+          result: fallback.result,
+          roleResultFallback: fallback,
+        };
+      }
       try {
         return parseResult(terminalText);
       } catch {
@@ -164,6 +232,19 @@ export class OpenClawRuntimeAdapter {
       const session = await this.subagent.getSessionMessages({ sessionKey: key, limit: 10 });
       const sessionText = extractText(session?.messages ?? null);
       if (sessionText) {
+        const fallback = parseUnavailableResultToolFallback(
+          sessionText,
+          this.bindings.get(handle.externalId),
+          this.runtimes.get(handle.externalId),
+        );
+        if (fallback) {
+          return {
+            state: 'COMPLETED',
+            outcome: fallback.outcome,
+            result: fallback.result,
+            roleResultFallback: fallback,
+          };
+        }
         try {
           return parseResult(sessionText);
         } catch (error) {

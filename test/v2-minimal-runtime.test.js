@@ -323,6 +323,66 @@ test('tester aggregate verdict is computed from required criterion statuses', ()
   assert.equal(unverified.result.aggregate.unverified, 1);
 });
 
+test('supervisor accepts only explicit result-tool-unavailable compatibility results', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-compat' });
+    store.createTask({
+      id: 'T-compat',
+      projectId: 'P-compat',
+      stage: 'tech_lead',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'codex-compat',
+        attemptId: 'P-compat:T-compat:tech_lead:1',
+        completionProtocol: 'role_result_tool',
+        protocolVersion: 'role-result-v2',
+        projectVersion: 2,
+        resources: [],
+      },
+    });
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() {
+        return {
+          state: 'COMPLETED',
+          roleResultFallback: {
+            source: 'terminal_json_result_tool_unavailable',
+            attemptId: 'P-compat:T-compat:tech_lead:1',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            summary: 'planner finished',
+            keyPoints: [],
+            artifacts: [],
+            result: null,
+            runtime: { harness: 'codex', provider: 'openai', model: 'gpt-5.6-terra' },
+            raw: { resultTool: 'unavailable' },
+          },
+        };
+      },
+      async cancel() {},
+    });
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+    await supervisor.audit('P-compat');
+    const task = store.getTask('T-compat');
+    assert.equal(task.state, 'RESULT_READY');
+    assert.equal(task.execution, null);
+    assert.equal(task.history.at(-1)?.type, 'ROLE_RESULT');
+    assert.equal(task.history.at(-1)?.source, 'terminal_json_compatibility');
+    assert.equal(task.history.at(-1)?.outcome, 'PLANNED');
+    assert.equal(task.history.at(-1)?.compatibility?.reason, 'RESULT_TOOL_UNAVAILABLE');
+    assert.equal(store.listIncidents('P-compat').length, 0);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('role-result-tool attempts cannot succeed from provider terminal completion alone', async () => {
   const { dir, file } = tempDb();
   try {

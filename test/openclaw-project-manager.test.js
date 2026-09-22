@@ -10,11 +10,80 @@ import {
   requireCompleteRoleModels,
 } from '../extensions/openclaw-ariad/runtime/role-models.js';
 import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
+import { OpenClawRuntimeAdapter } from '../extensions/openclaw-ariad/src/openclaw-runtime-adapter.ts';
 
 const testRoleModels = () => Object.fromEntries(
   ARIAD_MODEL_ROLES.map(role => [role, 'llamacpp/qwen3.8-27b'])
 );
 
+
+test('Codex result-tool-unavailable terminal JSON becomes a narrow compatibility fallback', async () => {
+  const attemptId = 'P:planner:decompose:tech_lead:6';
+  const adapter = new OpenClawRuntimeAdapter({
+    subagent: {
+      async run(input) {
+        return {
+          runId: 'codex-run-1',
+          sessionKey: input.sessionKey,
+          runtime: { harness: 'codex', provider: 'openai', model: 'gpt-5.6-terra' },
+        };
+      },
+      async waitForRun() {
+        return {
+          status: 'ok',
+          terminalReply: {
+            text: JSON.stringify({
+              outcome: 'PLANNED',
+              attemptId,
+              artifacts: 'validated',
+              resultTool: 'unavailable',
+            }),
+          },
+        };
+      },
+    },
+  });
+  const handle = await adapter.start({
+    runId: attemptId,
+    role: 'tech_lead',
+    context: {
+      projectId: 'P',
+      taskId: 'planner:decompose',
+      attemptId,
+      resultToolName: 'ariad_tech_lead_result',
+    },
+  });
+  const result = await adapter.poll(handle);
+  assert.equal(result.state, 'COMPLETED');
+  assert.equal(result.outcome, 'PLANNED');
+  assert.equal(result.roleResultFallback.source, 'terminal_json_result_tool_unavailable');
+  assert.equal(result.roleResultFallback.attemptId, attemptId);
+  assert.equal(result.roleResultFallback.role, 'tech_lead');
+  assert.equal(result.roleResultFallback.runtime.harness, 'codex');
+});
+
+test('terminal JSON is not salvaged unless it explicitly reports unavailable result tool with exact attempt', async () => {
+  const attemptId = 'P:T:tech_lead:1';
+  for (const payload of [
+    { outcome: 'PLANNED', attemptId },
+    { outcome: 'PLANNED', attemptId: 'wrong', resultTool: 'unavailable' },
+    { outcome: 'PASS', attemptId, resultTool: 'unavailable' },
+  ]) {
+    const adapter = new OpenClawRuntimeAdapter({
+      subagent: {
+        async run(input) { return { runId: JSON.stringify(payload), sessionKey: input.sessionKey }; },
+        async waitForRun() { return { status: 'ok', terminalReply: { text: JSON.stringify(payload) } }; },
+      },
+    });
+    const handle = await adapter.start({
+      runId: attemptId,
+      role: 'tech_lead',
+      context: { projectId: 'P', taskId: 'T', attemptId, resultToolName: 'ariad_tech_lead_result' },
+    });
+    const result = await adapter.poll(handle);
+    assert.equal(Object.hasOwn(result, 'roleResultFallback'), false);
+  }
+});
 
 test('execution capability discovery detects Windows host interop under WSL', () => {
   const existing = new Set([
