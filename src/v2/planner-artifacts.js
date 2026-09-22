@@ -451,7 +451,7 @@ export function loadPlannerArtifactPlan(artifactRoot) {
 }
 
 export function plannerArtifactInstructions(artifactRoot) {
-  const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
+  const { logicalDir, milestoneDir, featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
   return [
     'PLANNER ARTIFACT TRANSPORT',
     'Do NOT return or write one monolithic project-plan JSON.',
