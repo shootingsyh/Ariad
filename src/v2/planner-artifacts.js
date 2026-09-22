@@ -373,7 +373,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'During iteration, treat logical artifacts as the living feature tree. Keep stable ids for retained features, edit revised nodes in place, create new files for added nodes, and remove files only for intentionally removed features. Mark every current logical node revision.kind as unchanged, revised, or added for the target version.',
     'During iteration, milestone artifacts are a newly planned delivery tree for the target version. Do not preserve obsolete milestone structure merely for history; the immutable previous-version snapshot already preserves it.',
     'For unchanged logical branches with no affected descendants, plan regression-only tasks. For revised/added branches and unchanged ancestors integrating changed descendants, plan implementation/integration work plus fresh regression/E2E.',
-    'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.'
+    'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',
     'After all required files are successfully written, return only a small JSON result; never echo the full artifacts in the final reply.',
   ].join('\n');
 }
