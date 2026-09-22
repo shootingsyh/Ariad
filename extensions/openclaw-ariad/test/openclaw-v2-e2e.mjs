@@ -131,6 +131,13 @@ try {
     name: 'v2-production',
     goal: 'Create a tiny deterministic health endpoint and verify it.',
   });
+  const configuredModels = gatewayCall('ariad.ci.project', {
+    action: 'set_role_models',
+    name: 'v2-production',
+    roleModels: { developer: 'ariadfake/role' },
+  });
+  assert.match(configuredModels, /"developer"\s*:\s*"ariadfake\/role"/);
+  assert.match(configuredModels, /"catalogSource"\s*:\s*"openclaw-cli:/);
   gatewayCall('ariad.ci.project', { action: 'start', name: 'v2-production' });
   const paused = gatewayCall('ariad.ci.project', { action: 'pause', name: 'v2-production' });
   assert.match(paused, /"desiredState"\s*:\s*"PAUSED"/);

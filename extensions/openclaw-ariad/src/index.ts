@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { defineFeaturePlugin } from 'openclaw/plugin-sdk/feature-plugin';
 import { toolPluginMetadataSymbol } from 'openclaw/plugin-sdk/tool-plugin';
@@ -74,6 +75,13 @@ const plugin = defineFeaturePlugin({
     const projectsRoot = process.env.ARIAD_PROJECTS_ROOT || defaultProjectsRoot(homedir());
     const pushSourceControl = process.env.ARIAD_SOURCE_CONTROL_PUSH !== '0';
     const manager = new AriadProjectManager({ projectsRoot });
+    const modelCatalogPath = join(projectsRoot, '.runtime', 'model-catalog.json');
+    let modelCatalog: {
+      refreshedAt: string | null;
+      source: string;
+      models: any[];
+      error: string | null;
+    } = { refreshedAt: null, source: 'none', models: [], error: null };
     const runtimeAdapter = new OpenClawRuntimeAdapter({
       subagent: api.runtime.subagent,
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
@@ -116,35 +124,94 @@ const plugin = defineFeaturePlugin({
       return policy;
     };
 
-    const listOpenClawModels = async (agentId?: string | null) => {
-      const result = await api.runtime.gateway.request<any>('models.list', {
-        view: 'configured',
-        includeDetails: true,
-        ...(agentId ? { agentId } : {}),
-      });
-      return (Array.isArray(result?.models) ? result.models : []).map((model: any) => ({
-        ref: `${model.provider}/${model.id}`,
-        provider: model.provider,
-        id: model.id,
-        name: model.name,
-        available: model.available ?? null,
-        local: model.local ?? null,
-        supportsTools: model.supportsTools ?? null,
-        contextTokens: model.contextTokens ?? model.contextWindow ?? null,
-      }));
+    const normalizeDiscoveredModels = (payload: any) => {
+      const raw = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.models)
+          ? payload.models
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : [];
+      return raw.map((model: any) => {
+        const provider = model.provider ?? model.providerId ?? model.vendor ?? null;
+        const id = model.id ?? model.model ?? model.modelId ?? null;
+        const ref = model.ref ?? model.modelRef ?? (provider && id ? `${provider}/${id}` : null);
+        return {
+          ref,
+          provider,
+          id,
+          name: model.name ?? model.displayName ?? null,
+          available: model.available ?? null,
+          local: model.local ?? null,
+          supportsTools: model.supportsTools ?? model.capabilities?.tools ?? null,
+          contextTokens: model.contextTokens ?? model.contextWindow ?? null,
+        };
+      }).filter((model: any) => typeof model.ref === 'string' && model.ref.includes('/'));
     };
 
-    const validateSelectedRoleModels = async (roleModels: Record<string, string>, agentId?: string | null) => {
+    const refreshOpenClawModelCatalog = (reason = 'manual') => {
+      try {
+        const cliEntry = process.argv[1];
+        if (!cliEntry) throw new Error('OpenClaw CLI entrypoint is unavailable');
+        const child = spawnSync(process.execPath, [cliEntry, 'models', 'list', '--all', '--json'], {
+          env: process.env,
+          encoding: 'utf8',
+          timeout: 15000,
+          maxBuffer: 8 * 1024 * 1024,
+        });
+        if (child.error) throw child.error;
+        if (child.status !== 0) {
+          throw new Error((child.stderr || child.stdout || `openclaw models list exited ${child.status}`).trim());
+        }
+        const payload = JSON.parse(child.stdout || '{}');
+        modelCatalog = {
+          refreshedAt: new Date().toISOString(),
+          source: `openclaw-cli:${reason}`,
+          models: normalizeDiscoveredModels(payload),
+          error: null,
+        };
+      } catch (error) {
+        modelCatalog = {
+          ...modelCatalog,
+          refreshedAt: new Date().toISOString(),
+          source: `openclaw-cli:${reason}`,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        api.logger?.warn?.(
+          `Ariad model catalog refresh failed; configured role model refs remain allowed and will be validated at runtime: ${modelCatalog.error}`
+        );
+      }
+      try {
+        mkdirSync(join(projectsRoot, '.runtime'), { recursive: true });
+        writeFileSync(modelCatalogPath, JSON.stringify(modelCatalog, null, 2) + '\n');
+      } catch (error) {
+        api.logger?.warn?.(
+          `Ariad could not persist model catalog cache: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      return modelCatalog;
+    };
+
+    const listOpenClawModels = () => refreshOpenClawModelCatalog('models-action').models;
+
+    const validateSelectedRoleModels = (roleModels: Record<string, string>, { refresh = false } = {}) => {
       assertModelOverridePolicy(roleModels);
-      const models = await listOpenClawModels(agentId);
-      const byRef = new Map<string, any>(models.map((model: any) => [model.ref, model]));
+      const catalog = refresh || modelCatalog.refreshedAt == null
+        ? refreshOpenClawModelCatalog('role-model-validation')
+        : modelCatalog;
+      const byRef = new Map<string, any>(catalog.models.map((model: any) => [model.ref, model]));
+      const warnings: string[] = [];
       for (const [role, ref] of Object.entries(roleModels)) {
         const model = byRef.get(ref);
-        if (!model) throw new Error(`Ariad model ${ref} for ${role} is not present in OpenClaw models.list configured view`);
-        if (model.available === false) throw new Error(`Ariad model ${ref} for ${role} is currently unavailable`);
-        if (model.supportsTools === false) throw new Error(`Ariad model ${ref} for ${role} does not support tools`);
+        if (!model) {
+          warnings.push(`${role}: ${ref} is not in the cached OpenClaw CLI model catalog; validation is deferred to runtime`);
+          continue;
+        }
+        if (model.available === false) warnings.push(`${role}: ${ref} is currently reported unavailable; runtime may fail`);
+        if (model.supportsTools === false) warnings.push(`${role}: ${ref} is reported without tool support; Ariad role execution may fail`);
       }
-      return models;
+      for (const warning of warnings) api.logger?.warn?.(`Ariad role model warning: ${warning}`);
+      return { catalog, warnings };
     };
 
     const dashboard = new AriadDashboardService({
@@ -206,7 +273,10 @@ const plugin = defineFeaturePlugin({
 
     api.registerService({
       id: 'ariad-v2-service',
-      async start() { await v2Service.start(); },
+      async start() {
+        refreshOpenClawModelCatalog('service-start');
+        await v2Service.start();
+      },
       async stop() { await v2Service.stop(); },
     });
 
@@ -338,9 +408,20 @@ const plugin = defineFeaturePlugin({
             return;
           }
           if (!input.name) throw new Error('name is required');
+          if (input.action === 'set_role_models') {
+            const selectedRoleModels = normalizeRoleModels((input.roleModels ?? {}) as Record<string, string>) as Record<string, string>;
+            if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
+            const validation = validateSelectedRoleModels(selectedRoleModels, { refresh: true });
+            respond(true, {
+              project: manager.setRoleModels(input.name, selectedRoleModels),
+              modelWarnings: validation.warnings,
+              catalogSource: validation.catalog.source,
+            });
+            return;
+          }
           if (input.action === 'start' || input.action === 'resume') {
             const project = manager.status(input.name);
-            assertModelOverridePolicy(project.roleModels as Record<string, string>);
+            validateSelectedRoleModels(project.roleModels as Record<string, string>, { refresh: true });
             respond(true, { project: input.action === 'start'
               ? await v2Service.ensureRunning(input.name)
               : await v2Service.ensureResumed(input.name) });
@@ -378,8 +459,7 @@ const plugin = defineFeaturePlugin({
         if (action === 'list') {
           details = { action, projects: v2Service.list() };
         } else if (action === 'models') {
-          const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-          const models = await listOpenClawModels(agentId ?? toolContext?.agentId ?? null);
+          const models = listOpenClawModels();
           const project = name ? manager.status(name) : null;
           details = {
             action,
@@ -394,7 +474,7 @@ const plugin = defineFeaturePlugin({
           if (action === 'create') {
             const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             const selectedRoleModels = requireCompleteRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
-            await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
+            const modelValidation = validateSelectedRoleModels(selectedRoleModels, { refresh: true });
             const project = manager.create(name, {
               goal: goal ?? null,
               mode: mode ?? null,
@@ -406,13 +486,17 @@ const plugin = defineFeaturePlugin({
                 sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
               },
             });
-            details = { action, project: v2Service.status(project.id) };
+            details = { action, project: v2Service.status(project.id), modelWarnings: modelValidation.warnings };
           } else if (action === 'set_role_models') {
-            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
             const selectedRoleModels = normalizeRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
             if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
-            await validateSelectedRoleModels(selectedRoleModels, agentId ?? toolContext?.agentId ?? null);
-            details = { action, project: manager.setRoleModels(name, selectedRoleModels) };
+            const modelValidation = validateSelectedRoleModels(selectedRoleModels, { refresh: true });
+            details = {
+              action,
+              project: manager.setRoleModels(name, selectedRoleModels),
+              modelWarnings: modelValidation.warnings,
+              catalogSource: modelValidation.catalog.source,
+            };
           } else if (action === 'status') {
             details = { action, project: v2Service.status(name) };
           } else if (action === 'adopt') {
@@ -423,12 +507,13 @@ const plugin = defineFeaturePlugin({
             const configuredRoleModels = requireCompleteRoleModels(
               (project.roleModels ?? {}) as Record<string, string>
             ) as Record<string, string>;
-            assertModelOverridePolicy(configuredRoleModels);
+            const modelValidation = validateSelectedRoleModels(configuredRoleModels, { refresh: true });
             details = {
               action,
               project: action === 'start'
                 ? await v2Service.ensureRunning(name)
                 : await v2Service.ensureResumed(name),
+              modelWarnings: modelValidation.warnings,
             };
           } else if (action === 'pause') {
             details = { action, project: await v2Service.ensurePaused(name) };
