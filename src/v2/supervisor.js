@@ -13,7 +13,7 @@ function systemFailureCount(task) {
   const history = task.history ?? [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i];
-    if (entry?.type === 'ROLE_RESULT') break;
+    if (entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_RECOVERY') break;
     if (entry?.type === 'SYSTEM_INTERRUPTION') count += 1;
   }
   return count;

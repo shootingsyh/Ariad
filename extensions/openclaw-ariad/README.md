@@ -20,6 +20,33 @@ After OpenClaw reloads the plugin, the model can call `ariad_project` with one o
 - `start` — launch that project's daemon process
 - `stop` — stop that project's daemon process
 
+## Per-role model overrides
+
+Installing or linking the plugin does **not** grant model-override authority automatically.
+Configure the Ariad plugin once in OpenClaw with the models it may dispatch:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "ariad": {
+        "enabled": true,
+        "subagent": {
+          "allowModelOverride": true,
+          "allowedModels": [
+            "llamacpp/qwen3.8-27b",
+            "openai/gpt-5.6-terra",
+            "muse/muse-code"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+`ariad_project set_role_models` stores the project-specific role-to-model mapping.
+The OpenClaw plugin policy above is separate: it is the host-level allowlist authorizing Ariad to use those model refs.
 ## Isolation model
 
 The default root is `~/.openclaw/ariad/projects`. Each project owns a separate folder:

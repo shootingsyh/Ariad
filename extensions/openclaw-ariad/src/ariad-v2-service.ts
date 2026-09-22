@@ -371,6 +371,29 @@ class ProjectRuntime {
     }
   }
 
+  resumeSystemBlocked(reason = 'MANUAL_RESUME') {
+    const recovered: string[] = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'SYSTEM_BLOCKED') continue;
+      const lastFailure = [...(task.history ?? [])]
+        .reverse()
+        .find((entry: any) => entry?.type === 'SYSTEM_INTERRUPTION');
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'SYSTEM_RECOVERY',
+        role: task.stage,
+        reason,
+        previousFailure: lastFailure?.failure ?? null,
+        at: new Date().toISOString(),
+      }, {
+        state: 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+      recovered.push(task.id);
+    }
+    return recovered;
+  }
+
   findAttempt(attemptId: string, role?: string) {
     const task = this.store.listTasks(this.projectId).find((item: any) =>
       item?.execution?.attemptId === attemptId
@@ -628,8 +651,29 @@ export class AriadV2Service {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
     this.manager.setDesiredState(name, 'RUNNING');
-    // See ensureRunning: resume records durable intent; the service loop starts work.
-    return this.status(name);
+
+    let recoveredTasks: string[] = [];
+    if (current.executionState === 'FAILED') {
+      let runtime = this.runtimes.get(current.id);
+      if (!runtime) {
+        runtime = new ProjectRuntime({
+          manager: this.manager,
+          project: this.manager.status(current.id),
+          provider: this.provider,
+          pushSourceControl: this.pushSourceControl,
+          logger: this.logger,
+          executionCapabilities: this.executionCapabilities,
+          executionProvenance: this.executionProvenance,
+        });
+        this.runtimes.set(current.id, runtime);
+      }
+      recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
+      this.manager.setExecutionState(name, 'IDLE');
+    }
+
+    // Resume records durable intent and recovery only. The service reconcile
+    // loop dispatches retries outside the request-scoped ariad_project caller.
+    return { ...this.status(name), recoveredTasks };
   }
 
   async ensureStopped(name: string) {

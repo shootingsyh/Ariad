@@ -368,6 +368,50 @@ test('role-result-tool attempts cannot succeed from provider terminal completion
   }
 });
 
+test('manual system recovery resets the consecutive system-failure window', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-recovery-window' });
+    store.createTask({
+      id: 'T-recovery-window',
+      projectId: 'P-recovery-window',
+      stage: 'tester',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'terminal-pass',
+        attemptId: 'P-recovery-window:T-recovery-window:tester:3',
+        completionProtocol: 'role_result_tool',
+        protocolVersion: 'role-result-v2',
+        resources: [],
+      },
+      history: [
+        { type: 'SYSTEM_INTERRUPTION', role: 'tester', failure: 'OLD_FAILURE_1' },
+        { type: 'SYSTEM_INTERRUPTION', role: 'tester', failure: 'OLD_FAILURE_2' },
+        { type: 'SYSTEM_RECOVERY', role: 'tester', reason: 'MANUAL_RESUME_AFTER_FAILED_PROJECT' },
+      ],
+    });
+
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() { return { state: 'COMPLETED' }; },
+      async cancel() {},
+    });
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-recovery-window');
+    const task = store.getTask('T-recovery-window');
+    assert.equal(task.state, 'READY');
+    assert.equal(task.history.at(-1)?.failure, 'MISSING_ROLE_RESULT_TOOL');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('supervisor recovers an orphaned WORKING task that already has a sealed role-tool result', async () => {
   const { dir, file } = tempDb();
   try {
