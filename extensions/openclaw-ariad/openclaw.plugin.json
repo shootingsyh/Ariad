@@ -21,7 +21,8 @@
       "ariad_project_debugger_result",
       "ariad_tech_lead_result",
       "ariad_tech_lead_critic_result",
-      "ariad_pm_result"
+      "ariad_pm_result",
+      "ariad_codex_role_result"
     ]
   },
   "toolMetadata": {
@@ -29,6 +30,9 @@
       "profiles": [
         "coding"
       ]
+    },
+    "ariad_artist_result": {
+      "optional": true
     },
     "ariad_developer_result": {
       "optional": true
@@ -49,9 +53,6 @@
       "optional": true
     },
     "ariad_pm_result": {
-      "optional": true
-    },
-    "ariad_artist_result": {
       "optional": true
     }
   }

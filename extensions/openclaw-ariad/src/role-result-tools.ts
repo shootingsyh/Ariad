@@ -53,6 +53,19 @@ export class RoleResultSessionRegistry {
   }
 }
 
+export const CODEX_ROLE_RESULT_TOOL_NAME = 'ariad_codex_role_result';
+
+export const ROLE_RESULT_OUTCOMES: Record<string, ReadonlySet<string>> = {
+  artist: new Set(['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY']),
+  developer: new Set(['PASS', 'NOT_PASS']),
+  tester: new Set(['PASS', 'NOT_PASS']),
+  reviewer: new Set(['PASS', 'NOT_PASS']),
+  project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'NEEDS_HUMAN']),
+  tech_lead: new Set(['PLANNED', 'REPLANNED']),
+  tech_lead_critic: new Set(['CLEAN', 'MINOR_ONLY', 'ISSUES']),
+  pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN']),
+};
+
 export const ROLE_RESULT_TOOL_NAMES: Record<string, string> = {
   artist: 'ariad_artist_result',
   developer: 'ariad_developer_result',
@@ -70,6 +83,15 @@ const commonFields = {
   keyPoints: Type.Optional(Type.Array(Type.String())),
   artifacts: Type.Optional(Type.Array(Type.String())),
 };
+
+const codexRoleResultSchema = Type.Object({
+  attemptId: Type.String({ minLength: 1 }),
+  outcome: Type.String({ minLength: 1 }),
+  summary: Type.String({ minLength: 1 }),
+  keyPoints: Type.Optional(Type.Array(Type.String())),
+  artifacts: Type.Optional(Type.Array(Type.String())),
+  result: Type.Optional(Type.Any()),
+}, { additionalProperties: false });
 
 const schemas: Record<string, any> = {
   artist: Type.Object({
@@ -166,6 +188,16 @@ export function roleResultToolName(role: string) {
   return ROLE_RESULT_TOOL_NAMES[role] ?? null;
 }
 
+export function codexRoleResultToolMetadata() {
+  return {
+    name: CODEX_ROLE_RESULT_TOOL_NAME,
+    label: 'Ariad Codex role result',
+    description: 'Codex-harness compatibility tool for submitting the authoritative structured Ariad result for the current role execution. Calls are accepted only for an active Ariad attempt whose actual OpenClaw harness is codex.',
+    parameters: codexRoleResultSchema,
+    optional: false,
+  };
+}
+
 export function roleResultToolMetadata() {
   return Object.entries(ROLE_RESULT_TOOL_NAMES).map(([role, name]) => ({
     name,
@@ -209,4 +241,61 @@ export function registerRoleResultTools({
       },
     }, { name, optional: true });
   }
+}
+
+
+export function registerCodexRoleResultTool({
+  api,
+  resolveAttempt,
+  submit,
+  terminate,
+}: {
+  api: any;
+  resolveAttempt: (attemptId: string) => ({
+    attemptId: string;
+    role: string;
+    harness?: string;
+    provider?: string;
+    model?: string;
+  } | null);
+  submit: (attemptId: string, role: string, payload: Omit<RoleResultPayload, 'attemptId'>) => Promise<any> | any;
+  terminate?: (attemptId: string) => void;
+}) {
+  const metadata = codexRoleResultToolMetadata();
+  api.registerTool({
+    name: metadata.name,
+    label: metadata.label,
+    description: metadata.description,
+    parameters: metadata.parameters,
+    async execute(_toolCallId: string, params: RoleResultPayload) {
+      const attemptId = typeof params.attemptId === 'string' ? params.attemptId.trim() : '';
+      if (!attemptId) throw new Error('attemptId is required.');
+
+      const binding = resolveAttempt(attemptId);
+      if (!binding) {
+        throw new Error('ariad_codex_role_result is only valid for an active Ariad role attempt.');
+      }
+      if (binding.harness?.trim().toLowerCase() !== 'codex') {
+        throw new Error('ariad_codex_role_result is only valid for Ariad role attempts running on the Codex harness.');
+      }
+
+      const allowedOutcomes = ROLE_RESULT_OUTCOMES[binding.role];
+      if (!allowedOutcomes?.has(params.outcome)) {
+        throw new Error(`invalid ${binding.role} outcome for Codex role result: ${params.outcome}`);
+      }
+
+      const { attemptId: _attemptId, ...payload } = params;
+      const result = await submit(attemptId, binding.role, payload);
+      if (result?.accepted) terminate?.(attemptId);
+      return {
+        content: [{
+          type: 'text',
+          text: result.alreadySubmitted
+            ? 'Ariad Codex result is already sealed; this execution is terminating.'
+            : 'Ariad Codex result accepted and sealed; this execution is terminating.',
+        }],
+        details: result,
+      };
+    },
+  }, { name: metadata.name });
 }
