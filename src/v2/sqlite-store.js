@@ -280,6 +280,7 @@ export class SQLiteV2Store {
           testStrategy: spec.testStrategy,
           verification: structuredClone(spec.verification ?? []),
           art: spec.art == null ? null : structuredClone(spec.art),
+          revisionMode: spec.revisionMode ?? 'implementation',
           milestoneId: spec.milestoneId ?? null,
           input: {
             ...(existing?.input ?? {}),
@@ -288,6 +289,7 @@ export class SQLiteV2Store {
             testStrategy: spec.testStrategy,
             verification: structuredClone(spec.verification ?? []),
             art: spec.art == null ? null : structuredClone(spec.art),
+            revisionMode: spec.revisionMode ?? 'implementation',
             milestoneId: spec.milestoneId ?? null,
             logicalRefs: [...(spec.logicalRefs ?? [])],
           },
@@ -298,7 +300,9 @@ export class SQLiteV2Store {
             id: spec.id,
             projectId,
             scope: 'delivery',
-            stage: spec.art?.required ? 'artist' : 'developer',
+            stage: spec.revisionMode === 'regression'
+              ? 'tester'
+              : (spec.art?.required ? 'artist' : 'developer'),
             state: 'READY',
             history: structuredClone(spec.history ?? []),
             artifacts: [],
@@ -321,11 +325,15 @@ export class SQLiteV2Store {
           && existing.stage === 'developer'
           && spec.art?.required
           && !existing.art?.required;
+        const plannedStartStage = spec.revisionMode === 'regression'
+          ? 'tester'
+          : (spec.art?.required ? 'artist' : 'developer');
         this.updateTask(existing.id, existing.version, {
           ...patch,
           history: [...existingHistory, ...structuredClone(appendedHistory)],
           // Preserve execution progress for stable task ids across replans.
-          stage: (resetForPlan || newlyRequiresArt) ? (spec.art?.required ? 'artist' : 'developer') : existing.stage,
+          // Re-activated iteration tasks follow the derived revision mode.
+          stage: (resetForPlan || newlyRequiresArt) ? plannedStartStage : existing.stage,
           state: resetForPlan ? 'READY' : existing.state,
         });
       }
