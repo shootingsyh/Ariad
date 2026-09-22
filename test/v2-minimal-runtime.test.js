@@ -813,7 +813,8 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /plan reaches the project root/i);
   assert.match(prompt, /actually winnable\/clearable/i);
   assert.match(prompt, /Do not confuse gameplay coverage with gameplay success/i);
-  assert.match(prompt, /autonomous strategy that can actually complete the required game content/i);
+  assert.match(prompt, /normal player entry point/i);
+  assert.match(prompt, /actually complete the required game content/i);
   assert.match(prompt, /Every important feature and every milestone/i);
   assert.match(prompt, /real supported user entry point/i);
   assert.match(prompt, /without bypassing required intermediate steps/i);
@@ -1490,7 +1491,7 @@ test('accepted takeover plan pauses at human review until a human decision is re
       task: pmTask,
     }).context.v2Prompt;
     assert.match(pmPrompt, /maps\/levels were launched, traversed, or exercised/i);
-    assert.match(pmPrompt, /actually win\/clear the required content/i);
+    assert.match(pmPrompt, /play through the required progression to an actual win\/clear/i);
     assert.match(pmPrompt, /without relying on external human players/i);
     assert.match(pmPrompt, /good enough to ship, deliver, or sell/i);
     assert.match(pmPrompt, /Every important feature and every milestone/i);
