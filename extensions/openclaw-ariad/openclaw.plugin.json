@@ -31,6 +31,9 @@
         "coding"
       ]
     },
+    "ariad_artist_result": {
+      "optional": true
+    },
     "ariad_developer_result": {
       "optional": true
     },
@@ -51,12 +54,6 @@
     },
     "ariad_pm_result": {
       "optional": true
-    },
-    "ariad_artist_result": {
-      "optional": true
-    },
-    "ariad_codex_role_result": {
-      "optional": false
     }
   }
 }
