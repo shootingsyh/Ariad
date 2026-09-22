@@ -273,10 +273,7 @@ const plugin = defineFeaturePlugin({
 
     api.registerService({
       id: 'ariad-v2-service',
-      async start() {
-        refreshOpenClawModelCatalog('service-start');
-        await v2Service.start();
-      },
+      async start() { await v2Service.start(); },
       async stop() { await v2Service.stop(); },
     });
 
@@ -421,7 +418,7 @@ const plugin = defineFeaturePlugin({
           }
           if (input.action === 'start' || input.action === 'resume') {
             const project = manager.status(input.name);
-            validateSelectedRoleModels(project.roleModels as Record<string, string>, { refresh: true });
+            validateSelectedRoleModels(project.roleModels as Record<string, string>);
             respond(true, { project: input.action === 'start'
               ? await v2Service.ensureRunning(input.name)
               : await v2Service.ensureResumed(input.name) });
@@ -507,7 +504,7 @@ const plugin = defineFeaturePlugin({
             const configuredRoleModels = requireCompleteRoleModels(
               (project.roleModels ?? {}) as Record<string, string>
             ) as Record<string, string>;
-            const modelValidation = validateSelectedRoleModels(configuredRoleModels, { refresh: true });
+            const modelValidation = validateSelectedRoleModels(configuredRoleModels);
             details = {
               action,
               project: action === 'start'
