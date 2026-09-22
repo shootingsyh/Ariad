@@ -57,7 +57,13 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
               additionalProperties: false,
               required: ['criterionId', 'mode'],
               properties: {
-                criterionId: { type: 'string', pattern: '^AC[1-9][0-9]*
+                criterionId: { type: 'string', pattern: '^AC[1-9][0-9]*$' },
+                mode: { enum: ['runtime', 'static', 'behavioral'] },
+                target: { type: ['string', 'null'] },
+              },
+            },
+          },
+          art: {
             type: ['object', 'null'],
             additionalProperties: false,
             required: ['required', 'media', 'deliverables', 'placeholderAllowed'],
