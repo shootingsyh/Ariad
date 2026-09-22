@@ -1,6 +1,7 @@
 import http from 'node:http';
 
 const port = Number(process.env.ARIAD_FAKE_PROVIDER_PORT || 18081);
+const providerLabel = process.env.ARIAD_FAKE_PROVIDER_LABEL || 'default';
 
 function messageText(message) {
   if (typeof message?.content === 'string') return message.content;
@@ -265,7 +266,17 @@ function isProjectExecutionRole(request) {
   return requestTaskId(request) === 'T1' && ['developer', 'tester', 'reviewer'].includes(role);
 }
 
+function frontdeskProjectToolCall(request) {
+  const text = requestText(request);
+  if (!text.includes('ARIAD_E2E_START_PROJECT v2-production')) return null;
+  if (!requestToolNames(request).has('ariad_project') || hasCalledTool(request, 'ariad_project')) return null;
+  console.log('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=start project=v2-production');
+  return { name: 'ariad_project', arguments: { action: 'start', name: 'v2-production' } };
+}
+
 function toolCallFor(request) {
+  const frontdesk = frontdeskProjectToolCall(request);
+  if (frontdesk) return frontdesk;
   const roleResult = roleResultToolCall(request);
   if (roleResult) return roleResult;
   const v3Write = nextPlannerV3Write(request);
@@ -502,13 +513,13 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     const request = JSON.parse(body || '{}');
-    console.log(`ARIAD_FAKE_MODEL model=${request.model ?? 'unknown'} role=${requestRole(request) ?? 'unknown'}`);
+    console.log(`ARIAD_FAKE_MODEL provider=${providerLabel} model=${request.model ?? 'unknown'} role=${requestRole(request) ?? 'unknown'}`);
     const toolCall = toolCallFor(request);
     const id = `chatcmpl-${Date.now()}`;
 
     if (toolCall) {
       const callId = `call-${requestRole(request)}-${requestCycle(request)}-${Date.now()}`;
-      console.log(`ARIAD_FAKE_TOOL_CALL role=${requestRole(request)} cycle=${requestCycle(request)} tool=${toolCall.name}`);
+      console.log(`ARIAD_FAKE_TOOL_CALL provider=${providerLabel} role=${requestRole(request)} cycle=${requestCycle(request)} tool=${toolCall.name}`);
       const call = { index: 0, id: callId, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } };
       if (request.stream) {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -542,5 +553,5 @@ const server = http.createServer(async (req, res) => {
   res.end('not found');
 });
 
-server.listen(port, '127.0.0.1', () => console.log(`ARIAD_FAKE_PROVIDER_READY ${port}`));
+server.listen(port, '127.0.0.1', () => console.log(`ARIAD_FAKE_PROVIDER_READY ${providerLabel} ${port}`));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));

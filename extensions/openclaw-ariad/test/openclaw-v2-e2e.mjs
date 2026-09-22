@@ -11,23 +11,31 @@ const configPath = join(stateDir, 'openclaw.json');
 const projectsRoot = join(root, 'projects');
 const pluginDir = resolve(process.cwd());
 const openclaw = resolve('node_modules/.bin/openclaw');
-const providerPort = 18081;
+const providerAPort = 18081;
+const providerBPort = 18082;
 const gatewayPort = 18999;
 const token = 'ariad-ci-token';
 mkdirSync(stateDir, { recursive: true });
 
 const config = {
   gateway: { mode: 'local', auth: { mode: 'token', token } },
-  agents: { defaults: { model: { primary: 'ariadfake/default' }, timeoutSeconds: 30 } },
+  agents: { defaults: { model: { primary: 'fakea/default' }, timeoutSeconds: 30 } },
   models: {
     catalogRefresh: { enabled: false },
     providers: {
-      ariadfake: {
-        baseUrl: `http://127.0.0.1:${providerPort}/v1`,
-        apiKey: 'fake-key',
+      fakea: {
+        baseUrl: `http://127.0.0.1:${providerAPort}/v1`,
+        apiKey: 'fake-a-key',
         api: 'openai-completions',
         models: [
-          { id: 'default', name: 'Ariad CI Default', contextWindow: 32768, maxTokens: 8192, input: ['text'] },
+          { id: 'default', name: 'Ariad CI Frontdesk', contextWindow: 32768, maxTokens: 8192, input: ['text'] },
+        ],
+      },
+      fakeb: {
+        baseUrl: `http://127.0.0.1:${providerBPort}/v1`,
+        apiKey: 'fake-b-key',
+        api: 'openai-completions',
+        models: [
           { id: 'role', name: 'Ariad CI Role', contextWindow: 32768, maxTokens: 8192, input: ['text'] },
         ],
       },
@@ -40,7 +48,7 @@ const config = {
         enabled: true,
         subagent: {
           allowModelOverride: true,
-          allowedModels: ['ariadfake/role'],
+          allowedModels: ['fakeb/role'],
         },
       },
     },
@@ -59,9 +67,14 @@ const env = {
   NO_COLOR: '1',
 };
 
-const provider = spawn(process.execPath, ['test/fake-openai-server.mjs'], {
+const providerA = spawn(process.execPath, ['test/fake-openai-server.mjs'], {
   cwd: pluginDir,
-  env: { ...env, ARIAD_FAKE_PROVIDER_PORT: String(providerPort) },
+  env: { ...env, ARIAD_FAKE_PROVIDER_PORT: String(providerAPort), ARIAD_FAKE_PROVIDER_LABEL: 'A' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+const providerB = spawn(process.execPath, ['test/fake-openai-server.mjs'], {
+  cwd: pluginDir,
+  env: { ...env, ARIAD_FAKE_PROVIDER_PORT: String(providerBPort), ARIAD_FAKE_PROVIDER_LABEL: 'B' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 const gateway = spawn(openclaw, [
@@ -72,10 +85,13 @@ const gateway = spawn(openclaw, [
   '--token', token,
 ], { cwd: pluginDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
 
-let providerLog = '';
+let providerALog = '';
+let providerBLog = '';
 let gatewayLog = '';
-provider.stdout.on('data', chunk => { providerLog += chunk; });
-provider.stderr.on('data', chunk => { providerLog += chunk; });
+providerA.stdout.on('data', chunk => { providerALog += chunk; });
+providerA.stderr.on('data', chunk => { providerALog += chunk; });
+providerB.stdout.on('data', chunk => { providerBLog += chunk; });
+providerB.stderr.on('data', chunk => { providerBLog += chunk; });
 gateway.stdout.on('data', chunk => { gatewayLog += chunk; });
 gateway.stderr.on('data', chunk => { gatewayLog += chunk; });
 
@@ -91,7 +107,7 @@ async function waitFor(check, label, timeoutMs = 60_000) {
     }
     await new Promise(resolveWait => setTimeout(resolveWait, 200));
   }
-  throw new Error(`timed out waiting for ${label}\nstatus:\n${lastProjectStatus}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+  throw new Error(`timed out waiting for ${label}\nstatus:\n${lastProjectStatus}\nproviderA:\n${providerALog}\nproviderB:\n${providerBLog}\ngateway:\n${gatewayLog}`);
 }
 
 function gatewayCall(method, params = {}) {
@@ -123,22 +139,41 @@ function git(cwd, args) {
 }
 
 try {
-  await waitFor(() => providerLog.includes('ARIAD_FAKE_PROVIDER_READY'), 'fake provider');
+  await waitFor(() => providerALog.includes('ARIAD_FAKE_PROVIDER_READY A'), 'fake provider A');
+  await waitFor(() => providerBLog.includes('ARIAD_FAKE_PROVIDER_READY B'), 'fake provider B');
   await waitFor(async () => (await fetch(`http://127.0.0.1:${gatewayPort}/readyz`)).ok, 'OpenClaw Gateway');
 
+  const allRoleModels = Object.fromEntries(
+    ['artist', 'developer', 'tester', 'reviewer', 'project_debugger', 'tech_lead', 'tech_lead_critic', 'pm']
+      .map(role => [role, 'fakeb/role'])
+  );
   gatewayCall('ariad.ci.project', {
     action: 'create',
     name: 'v2-production',
     goal: 'Create a tiny deterministic health endpoint and verify it.',
+    roleModels: allRoleModels,
   });
-  const configuredModels = gatewayCall('ariad.ci.project', {
-    action: 'set_role_models',
-    name: 'v2-production',
-    roleModels: { developer: 'ariadfake/role' },
+  const frontdeskStart = spawnSync(openclaw, [
+    'agent',
+    '--agent', 'main',
+    '--message', 'ARIAD_E2E_START_PROJECT v2-production',
+    '--json',
+    '--timeout', '30',
+  ], {
+    cwd: pluginDir,
+    env,
+    encoding: 'utf8',
+    timeout: 45_000,
   });
-  assert.match(configuredModels, /"developer"\s*:\s*"ariadfake\/role"/);
-  assert.match(configuredModels, /"catalogSource"\s*:\s*"openclaw-cli:/);
-  gatewayCall('ariad.ci.project', { action: 'start', name: 'v2-production' });
+  assert.equal(
+    frontdeskStart.status,
+    0,
+    `frontdesk agent start failed\nstdout:\n${frontdeskStart.stdout}\nstderr:\n${frontdeskStart.stderr}\ngateway:\n${gatewayLog}`
+  );
+  await waitFor(
+    () => providerALog.includes('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=start project=v2-production'),
+    'frontdesk ariad_project start tool call'
+  );
   const paused = gatewayCall('ariad.ci.project', { action: 'pause', name: 'v2-production' });
   assert.match(paused, /"desiredState"\s*:\s*"PAUSED"/);
 
@@ -155,7 +190,7 @@ try {
     status = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
     lastProjectStatus = status;
     if (/"executionState"\s*:\s*"(FAILED|NEEDS_HUMAN)"/.test(status)) {
-      const error = new Error(`v2 project stopped before success: ${status}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+      const error = new Error(`v2 project stopped before success: ${status}\nproviderA:\n${providerALog}\nproviderB:\n${providerBLog}\ngateway:\n${gatewayLog}`);
       error.fatal = true;
       throw error;
     }
@@ -166,7 +201,7 @@ try {
   assert.match(status, /"projectVersion"\s*:\s*1/);
   assert.match(status, /"executionCapabilities"\s*:\s*\[[^\]]*"linux\.native"/);
   await waitFor(
-    () => providerLog.includes('ARIAD_FAKE_MODEL model=role'),
+    () => providerBLog.includes('ARIAD_FAKE_MODEL provider=B model=role'),
     'explicit Ariad role model override',
     5_000
   );
@@ -190,7 +225,7 @@ try {
     iterationStatus = gatewayCall('ariad.ci.project', { action: 'status', name: 'v2-production' });
     lastProjectStatus = iterationStatus;
     if (/"executionState"\s*:\s*"(FAILED|NEEDS_HUMAN)"/.test(iterationStatus)) {
-      const error = new Error(`iteration stopped before success: ${iterationStatus}\nprovider:\n${providerLog}\ngateway:\n${gatewayLog}`);
+      const error = new Error(`iteration stopped before success: ${iterationStatus}\nproviderA:\n${providerALog}\nproviderB:\n${providerBLog}\ngateway:\n${gatewayLog}`);
       error.fatal = true;
       throw error;
     }
@@ -227,7 +262,7 @@ try {
   assert.equal(tasks.some(task => task.input?.round === 2 && task.state === 'SKIPPED'), true, 'clean critic should skip later rounds');
 
   await waitFor(
-    () => providerLog.includes('ARIAD_FAKE_TOOL_CALL role=reviewer cycle=2 tool=ariad_reviewer_result'),
+    () => providerBLog.includes('ARIAD_FAKE_TOOL_CALL provider=B role=reviewer cycle=2 tool=ariad_reviewer_result'),
     'v2 reviewer structured result tool call',
     5_000
   );
@@ -238,7 +273,8 @@ try {
   console.log('ARIAD_OPENCLAW_V2_PRODUCTION_E2E_OK');
 } finally {
   gateway.kill('SIGTERM');
-  provider.kill('SIGTERM');
+  providerA.kill('SIGTERM');
+  providerB.kill('SIGTERM');
   await new Promise(resolveWait => setTimeout(resolveWait, 250));
   rmSync(root, { recursive: true, force: true });
 }
