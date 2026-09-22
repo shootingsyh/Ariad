@@ -181,7 +181,12 @@ function toolCallFor(request) {
   const role = requestRole(request);
   const cycle = requestCycle(request);
   if (isDiscovery(request)) return { name: 'read', arguments: { path: 'README.md' } };
-  if (requestTaskId(request) !== 'T1') return null;
+  if (requestTaskId(request) !== 'T1') {
+    if (['developer', 'tester', 'reviewer'].includes(role)) {
+      return { name: 'read', arguments: { path: 'health.txt' } };
+    }
+    return null;
+  }
   if (role === 'developer') {
     return {
       name: 'write',
