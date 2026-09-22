@@ -38,6 +38,9 @@ PLANNING RULES
 - Ask for human input only when a real product/requirements decision is missing, when takeover reconstruction requires approval, or when execution discovers information that invalidates the plan. Do not create routine human gates between milestones.
 - Required project acceptance must be autonomously executable by Ariad unless the user explicitly requested a human study. Do not create mandatory external-human playtests, owner manual tests, manual screenshot reviews, manual platform execution, or manual data-entry gates merely because automation is inconvenient.
 - For acceptance criteria that assert runtime behavior, add task.verification entries such as {"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}. Runtime criteria require actual execution evidence; artifact existence, headers, successful export, screenshots of unrelated paths, or future-owner verification are proxy evidence and must not be treated as sufficient.
+- For game projects, plan autonomous playthrough verification that proves the game is actually winnable/clearable according to the product's intended rules. Ariad must know enough about how the game is played to execute a successful completion path itself (for example through a bot, scripted policy, deterministic harness, or equivalent autonomous strategy).
+- Do not confuse gameplay coverage with gameplay success. Starting every map/level/encounter, exercising every route, or collecting telemetry is not a full clear unless the required winning/completion conditions were actually achieved.
+- Do not make required game completion depend on external human players unless the user explicitly requested a human study. Human playtesting may be optional product research, but it is not a substitute for Ariad demonstrating that the game can be completed.
 - Logical nodes describe features/components/capabilities, not milestones.
 - Use milestones only when they help staged delivery, integration, validation, or future pickup.
 - If milestone-specific integration/reconciliation/migration/testing work is needed, create ordinary tasks and assign milestoneId. Do not invent special task kinds just for ceremony.
@@ -61,7 +64,8 @@ Before returning the plan, make sure:
 - existing-project work is reuse-first, with fresh verification deferred to normal execution;
 - another TL could pick this project up and continue without rediscovering everything;
 - the plan reaches the project root, rather than ending at the next milestone;
-- later milestones are represented even when their tasks are intentionally higher-level.
+- later milestones are represented even when their tasks are intentionally higher-level;
+- for a game project, the plan includes an autonomous strategy that can actually complete the required game content rather than merely launch or traverse it.
 
 Follow the transport instructions supplied by the planning role. Do not emit unrelated commentary or markdown.
 `;

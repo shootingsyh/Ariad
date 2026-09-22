@@ -811,6 +811,9 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   assert.match(prompt, /should normally allow Ariad to continue into the next already-planned milestone/i);
   assert.match(prompt, /Do not create routine human gates between milestones/i);
   assert.match(prompt, /plan reaches the project root/i);
+  assert.match(prompt, /actually winnable\/clearable/i);
+  assert.match(prompt, /Do not confuse gameplay coverage with gameplay success/i);
+  assert.match(prompt, /autonomous strategy that can actually complete the required game content/i);
 });
 
 test('split planner artifacts use flat dotted ids and milestone hierarchy derives execution prerequisites', () => {
@@ -1477,6 +1480,14 @@ test('accepted takeover plan pauses at human review until a human decision is re
       codeProviderId: 'ariad-code',
     });
     let pmTask = store.getTask('PM-take');
+    const pmPrompt = definitions.pm.prepare({
+      project: store.getProject('P-take-gate'),
+      task: pmTask,
+    }).context.v2Prompt;
+    assert.match(pmPrompt, /maps\/levels were launched, traversed, or exercised/i);
+    assert.match(pmPrompt, /actually win\/clear the required content/i);
+    assert.match(pmPrompt, /without relying on external human players/i);
+
     const first = definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },

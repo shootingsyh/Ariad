@@ -516,6 +516,7 @@ export function createDefaultV2Roles({
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
           'For takeover, compare the known authoritative roadmap/docs and the logical tree against the milestone list. Do not accept if known later major scope is missing from milestones, or if the milestone list contains placeholder/unused/TBD entries instead of real checkpoints.',
+          'If this is a game project, do not accept a plan whose completion evidence only shows that maps/levels were launched, traversed, or exercised. The plan must include an autonomous playthrough strategy that can actually win/clear the required content under the intended game rules, and Ariad must know how to execute that successful path without relying on external human players unless the user explicitly requested a human study.',
           takeover
             ? 'This is an existing-project takeover. Verify that the reconstruction is coherent, reuse-first, explains uncertainty, and is ready to show the human. Do not treat historical tests/reviews as current evidence. If the human has already supplied a HUMAN_DECISION in task history, incorporate it explicitly.'
             : null,
