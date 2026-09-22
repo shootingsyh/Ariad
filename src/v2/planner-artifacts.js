@@ -439,7 +439,7 @@ export function validatePlannerArtifactPlan(plan) {
 
 export function loadPlannerArtifactPlan(artifactRoot) {
   if (!artifactRoot) return null;
-  const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
+  const { logicalDir, milestoneDir, featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
   const logicalNodes = scanFlatJsonDirectory(logicalDir, 'logical');
   const rawMilestones = scanFlatJsonDirectory(milestoneDir, 'milestones');
   if (logicalNodes.length === 0 && rawMilestones.length === 0) return null;
@@ -472,7 +472,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
     'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
     'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',
-    'During iteration, feature-tree-diff.json is authoritative for feature changes. Keep stable ids by using update for retained features, add only genuinely new ids, and remove only intentional deletions. The generated logical tree carries revision provenance automatically; TL should not manually classify every unchanged node.'
+    'During iteration, feature-tree-diff.json is authoritative for feature changes. Keep stable ids by using update for retained features, add only genuinely new ids, and remove only intentional deletions. The generated logical tree carries revision provenance automatically; TL should not manually classify every unchanged node.',
     'During iteration, milestone artifacts are a newly planned delivery tree for the target version. Do not preserve obsolete milestone structure merely for history; the immutable previous-version snapshot already preserves it.',
     'For unchanged logical branches with no affected descendants, plan regression-only tasks. For revised/added branches and unchanged ancestors integrating changed descendants, plan implementation/integration work plus fresh regression/E2E.',
     'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',
