@@ -39,6 +39,9 @@ export class V2Supervisor {
       provider: task.execution?.provider ?? null,
       externalId: task.execution?.externalId ?? null,
       failure,
+      provenance: structuredClone(task.execution?.provenance ?? null),
+      protocolVersion: task.execution?.protocolVersion ?? null,
+      projectVersion: task.execution?.projectVersion ?? null,
       at: new Date().toISOString(),
     };
     if (this.incidentSink?.record) await this.incidentSink.record(incident);
@@ -60,6 +63,9 @@ export class V2Supervisor {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure: incident.failure,
+          provenance: structuredClone(execution?.provenance ?? null),
+          protocolVersion: execution?.protocolVersion ?? null,
+          projectVersion: execution?.projectVersion ?? null,
           consumeAttempt: false,
           uncertainStart: Boolean(task.execution?.attemptId),
           at: incident.at,
@@ -105,7 +111,9 @@ export class V2Supervisor {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure,
+          provenance: structuredClone(execution?.provenance ?? null),
           protocolVersion: execution.protocolVersion ?? 'role-result-v2',
+          projectVersion: execution?.projectVersion ?? null,
           at: incident.at,
         }, {
           state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
@@ -141,6 +149,9 @@ export class V2Supervisor {
         type: 'SYSTEM_INTERRUPTION',
         role: task.stage,
         failure,
+        provenance: structuredClone(execution?.provenance ?? null),
+        protocolVersion: execution?.protocolVersion ?? null,
+        projectVersion: execution?.projectVersion ?? null,
         at: incident.at,
       }, {
         state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',

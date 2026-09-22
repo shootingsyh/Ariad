@@ -260,13 +260,23 @@ export function createDefaultV2Roles({
   enqueuePlanning = null,
   artifactRoot = null,
   executionCapabilities = [],
+  executionProvenance = {},
+  resolveRoleExecutionMetadata = null,
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
+
+  const executionProvenanceFor = (task) => ({
+    ...structuredClone(executionProvenance),
+    ...(typeof resolveRoleExecutionMetadata === 'function'
+      ? structuredClone(resolveRoleExecutionMetadata(task.stage) ?? {})
+      : {}),
+  });
 
   const prepareLlm = (task, v2Prompt, extra = {}) => ({
     provider: providerId,
     completionProtocol: 'role_result_tool',
     executionCapabilities: [...executionCapabilities],
+    executionProvenance: executionProvenanceFor(task),
     workspace,
     context: {
       executionCapabilities: [...executionCapabilities],
@@ -438,6 +448,7 @@ export function createDefaultV2Roles({
     plan_validator: {
       prepare: ({ task }) => ({
         provider: codeProviderId,
+        executionProvenance: executionProvenanceFor(task),
         execute: async () => {
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           if (rawArtifactPlan) {

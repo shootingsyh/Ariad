@@ -152,6 +152,7 @@ export class V2Scheduler {
             protocolVersion: spec.completionProtocol === 'role_result_tool' ? 'role-result-v2' : 'provider-terminal-v1',
             projectVersion: project.activeVersion ?? project.projectVersion ?? 0,
             executionCapabilities: structuredClone(spec.executionCapabilities ?? []),
+            provenance: structuredClone(spec.executionProvenance ?? {}),
             startedAt: new Date().toISOString(),
             resources: structuredClone(requirements),
             sessionPolicy: role.sessionPolicy ?? 'fresh',

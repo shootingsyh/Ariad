@@ -1252,6 +1252,14 @@ test('scheduler persists a stable attempt identity before provider start', async
         assert.equal(durable.state, 'WORKING');
         assert.equal(durable.execution.attemptId, spec.attemptId);
         assert.equal(durable.execution.idempotencyKey, spec.idempotencyKey);
+        assert.deepEqual(durable.execution.provenance, {
+          pluginVersion: '0.6.test',
+          openclawVersion: '2026.test',
+          ariadCommit: 'abc123',
+          controllerInstanceId: 'controller-test',
+          runtime: 'openclaw-v2',
+          modelRef: 'fake/model',
+        });
         return { externalId: 'capture-1' };
       },
       async poll() { return { state: 'RUNNING' }; },
@@ -1261,7 +1269,17 @@ test('scheduler persists a stable attempt identity before provider start', async
     providers.register(provider);
     const roleRegistry = new RoleRegistry();
     roleRegistry.register('developer', {
-      prepare: () => ({ provider: 'capture' }),
+      prepare: () => ({
+        provider: 'capture',
+        executionProvenance: {
+          pluginVersion: '0.6.test',
+          openclawVersion: '2026.test',
+          ariadCommit: 'abc123',
+          controllerInstanceId: 'controller-test',
+          runtime: 'openclaw-v2',
+          modelRef: 'fake/model',
+        },
+      }),
       transition: () => ({ stage: 'tester', state: 'READY' }),
     });
     const scheduler = new V2Scheduler({

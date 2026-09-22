@@ -36,6 +36,7 @@ class ProjectRuntime {
   private readonly sourceControl: GitSourceControlFinalizer;
   private readonly logger: any;
   private readonly executionCapabilities: string[];
+  private readonly executionProvenance: Record<string, unknown>;
   private ticking = false;
   private requestSequence = 0;
 
@@ -46,6 +47,7 @@ class ProjectRuntime {
     pushSourceControl,
     logger,
     executionCapabilities = [],
+    executionProvenance = {},
   }: {
     manager: ProjectManager;
     project: any;
@@ -53,10 +55,12 @@ class ProjectRuntime {
     pushSourceControl: boolean;
     logger?: any;
     executionCapabilities?: string[];
+    executionProvenance?: Record<string, unknown>;
   }) {
     this.manager = manager;
     this.logger = logger;
     this.executionCapabilities = [...executionCapabilities];
+    this.executionProvenance = structuredClone(executionProvenance);
     this.projectId = project.id;
     this.store = new SQLiteV2Store(project.stateDb);
 
@@ -114,6 +118,10 @@ class ProjectRuntime {
       sourceControl: this.sourceControl,
       artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
       executionCapabilities: this.executionCapabilities,
+      executionProvenance: this.executionProvenance,
+      resolveRoleExecutionMetadata: (role: string) => ({
+        modelRef: (this.manager.status(project.id).roleModels as Record<string, string | undefined>)?.[role] ?? null,
+      }),
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
         this.store.enqueuePlanningRequest({
@@ -189,6 +197,7 @@ class ProjectRuntime {
       activeVersion: project?.activeVersion ?? 1,
       versionHistory: project?.versionHistory ?? [],
       executionCapabilities: [...this.executionCapabilities],
+      executionProvenance: structuredClone(this.executionProvenance),
       tasks: {
         total: tasks.length,
         working: tasks.filter(task => task.state === 'WORKING').length,
@@ -392,6 +401,9 @@ class ProjectRuntime {
       result: structuredClone(effectivePayload.result ?? null),
       attemptId,
       source: 'role_result_tool',
+      provenance: structuredClone(task.execution?.provenance ?? null),
+      protocolVersion: task.execution?.protocolVersion ?? null,
+      projectVersion: task.execution?.projectVersion ?? null,
       completedAt: new Date().toISOString(),
     };
 
@@ -450,6 +462,7 @@ export class AriadV2Service {
   private readonly pushSourceControl: boolean;
   private readonly logger: any;
   private readonly executionCapabilities: string[];
+  private readonly executionProvenance: Record<string, unknown>;
   private readonly onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private timer: NodeJS.Timeout | null = null;
@@ -461,6 +474,7 @@ export class AriadV2Service {
     pushSourceControl,
     logger,
     executionCapabilities = [],
+    executionProvenance = {},
     onProjectEvent,
   }: {
     manager: ProjectManager;
@@ -468,6 +482,7 @@ export class AriadV2Service {
     pushSourceControl: boolean;
     logger?: any;
     executionCapabilities?: string[];
+    executionProvenance?: Record<string, unknown>;
     onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   }) {
     this.manager = manager;
@@ -475,6 +490,7 @@ export class AriadV2Service {
     this.pushSourceControl = pushSourceControl;
     this.logger = logger;
     this.executionCapabilities = [...executionCapabilities];
+    this.executionProvenance = structuredClone(executionProvenance);
     this.onProjectEvent = onProjectEvent;
   }
 
@@ -523,6 +539,7 @@ export class AriadV2Service {
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
+        executionProvenance: this.executionProvenance,
       });
       this.runtimes.set(current.id, runtime);
     }
@@ -593,6 +610,7 @@ export class AriadV2Service {
           pushSourceControl: this.pushSourceControl,
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
+          executionProvenance: this.executionProvenance,
         });
         this.runtimes.set(project.id, runtime);
       }
@@ -625,6 +643,7 @@ export class AriadV2Service {
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
+        executionProvenance: this.executionProvenance,
       });
       this.runtimes.set(project.id, runtime);
     }
@@ -647,6 +666,7 @@ export class AriadV2Service {
         pushSourceControl: this.pushSourceControl,
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
+        executionProvenance: this.executionProvenance,
       });
       this.runtimes.set(project.id, runtime);
     }
@@ -679,6 +699,7 @@ export class AriadV2Service {
             pushSourceControl: this.pushSourceControl,
             logger: this.logger,
             executionCapabilities: this.executionCapabilities,
+            executionProvenance: this.executionProvenance,
           });
           this.runtimes.set(project.id, runtime);
         }
