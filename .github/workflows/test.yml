@@ -16,6 +16,9 @@ jobs:
       - name: Install OpenClaw plugin dependencies
         working-directory: extensions/openclaw-ariad
         run: npm ci
+      - name: Run OpenClaw Ariad plugin unit tests
+        working-directory: extensions/openclaw-ariad
+        run: npm test
       - name: Build and validate OpenClaw Ariad plugin
         working-directory: extensions/openclaw-ariad
         run: npm run plugin:validate
