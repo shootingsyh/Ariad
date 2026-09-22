@@ -261,7 +261,6 @@ function isProjectExecutionRole(request) {
 function toolCallFor(request) {
   const roleResult = roleResultToolCall(request);
   if (roleResult) return roleResult;
-  if (hasToolResult(request)) return null;
   const v3Write = nextPlannerV3Write(request);
   if (v3Write) {
     return {
@@ -272,6 +271,7 @@ function toolCallFor(request) {
       },
     };
   }
+  if (hasToolResult(request)) return null;
   const artifact = plannerArtifactTransport(request);
   if (artifact) {
     return {
