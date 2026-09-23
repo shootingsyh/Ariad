@@ -3,13 +3,25 @@
   "name": "Ariad",
   "description": "Create and manage isolated Ariad autonomous engineering projects.",
   "version": "0.6.19",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  },
   "activation": {
     "onStartup": true
+  },
+  "mcpServers": {
+    "ariad-role-result": {
+      "transport": "stdio",
+      "command": "node",
+      "args": [
+        "./runtime/ariad-role-result-mcp.js"
+      ],
+      "toolFilter": {
+        "include": [
+          "ariad_role_result"
+        ]
+      },
+      "codex": {
+        "defaultToolsApprovalMode": "auto"
+      }
+    }
   },
   "contracts": {
     "tools": [
@@ -56,21 +68,9 @@
       "optional": true
     }
   },
-  "mcpServers": {
-    "ariad-role-result": {
-      "transport": "stdio",
-      "command": "node",
-      "args": [
-        "./runtime/ariad-role-result-mcp.js"
-      ],
-      "toolFilter": {
-        "include": [
-          "ariad_role_result"
-        ]
-      },
-      "codex": {
-        "defaultToolsApprovalMode": "auto"
-      }
-    }
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
   }
 }
