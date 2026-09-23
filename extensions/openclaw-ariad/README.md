@@ -10,9 +10,11 @@ npm install
 npm run plugin:build
 npm run plugin:validate
 openclaw plugins install --link .
+npm run mcp:register
+openclaw gateway restart
 ```
 
-After OpenClaw reloads the plugin, the model can call `ariad_project` with one of:
+`mcp:register` writes `ariad-role-result` into OpenClaw's authoritative `mcp.servers` registry using an absolute path to the bundled stdio server, then probes it. This is required for Codex app-server runs: the plugin manifest declaration remains useful metadata, but Ariad does not rely on it as the runtime registration boundary. Re-run `npm run mcp:register` after moving/relinking the plugin so the absolute path stays current.\n\nAfter OpenClaw reloads the plugin, the model can call `ariad_project` with one of:
 
 - `create` — create an isolated project folder
 - `list` — list Ariad projects
