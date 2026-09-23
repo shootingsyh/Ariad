@@ -25,6 +25,7 @@ import { AriadV2Service } from './ariad-v2-service.js';
 import { detectExecutionCapabilities } from '../runtime/execution-capabilities.js';
 import { detectExecutionProvenance } from '../runtime/provenance.js';
 import { AriadDashboardService } from './dashboard-service.js';
+import { AriadMcpRoleResultBridge } from './mcp-role-result-bridge.js';
 import {
   CODEX_ROLE_RESULT_TOOL_NAME,
   codexRoleResultToolMetadata,
@@ -43,7 +44,7 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
         '',
         'ARIAD RESULT CONTRACT',
         `Before ending this role, you MUST successfully call ${toolName} exactly once.`,
-        `If ${toolName} is unavailable and ${CODEX_ROLE_RESULT_TOOL_NAME} is available, you are running through the Codex compatibility path: call ${CODEX_ROLE_RESULT_TOOL_NAME} exactly once instead, with the same result payload. Never use the Codex compatibility tool when the role-specific tool is available.`,
+        `If ${toolName} is unavailable, call the MCP tool ariad_role_result exactly once with the same result payload. This is the required Codex path. If ariad_role_result is unavailable but ${CODEX_ROLE_RESULT_TOOL_NAME} is available, call ${CODEX_ROLE_RESULT_TOOL_NAME} as a legacy compatibility path. Never emit terminal JSON as a substitute for an accepted result tool call.`,
         `Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT: ${String(context.attemptId ?? '')}`,
         'The accepted result tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
         'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
@@ -271,6 +272,14 @@ const plugin = defineFeaturePlugin({
       }, 0);
     };
 
+    const mcpRoleResultBridge = new AriadMcpRoleResultBridge({
+      projectsRoot,
+      logger: api.logger,
+      resolveAttempt: (attemptId) => runtimeAdapter.getAttemptRuntimeBinding(attemptId),
+      submit: (attemptId, role, payload) => v2Service.submitRoleResultByAttempt(attemptId, role, payload),
+      terminate: terminateAcceptedAttempt,
+    });
+
     registerRoleResultTools({
       api,
       submit: (attemptId, role, payload) => v2Service.submitRoleResultByAttempt(attemptId, role, payload),
@@ -282,6 +291,12 @@ const plugin = defineFeaturePlugin({
       resolveAttempt: (attemptId) => runtimeAdapter.getAttemptRuntimeBinding(attemptId),
       submit: (attemptId, role, payload) => v2Service.submitRoleResultByAttempt(attemptId, role, payload),
       terminate: terminateAcceptedAttempt,
+    });
+
+    api.registerService({
+      id: 'ariad-mcp-role-result-bridge',
+      async start() { await mcpRoleResultBridge.start(); },
+      async stop() { await mcpRoleResultBridge.stop(); },
     });
 
     api.registerService({
