@@ -1,6 +1,6 @@
 {
   "name": "@ariad/openclaw-plugin",
-  "version": "0.6.19",
+  "version": "0.6.20",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,7 +20,9 @@
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
     "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
     "test:legacy": "npm run build && node --test test/runtime.test.mjs test/project-controller.test.mjs test/human-decision-resumer.test.mjs",
-    "test:e2e:legacy": "npm run build && node test/openclaw-e2e.mjs"
+    "test:e2e:legacy": "npm run build && node test/openclaw-e2e.mjs",
+    "mcp:register": "node ./runtime/configure-role-result-mcp.js",
+    "mcp:show-registration": "node ./runtime/configure-role-result-mcp.js --print"
   },
   "dependencies": {
     "typebox": "1.1.38"
