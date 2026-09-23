@@ -23,6 +23,11 @@
       }
     }
   },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
   "contracts": {
     "tools": [
       "ariad_project",
@@ -67,10 +72,5 @@
     "ariad_pm_result": {
       "optional": true
     }
-  },
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
   }
 }
