@@ -110,6 +110,8 @@ export class OpenClawRuntimeAdapter {
     role: string;
   }>();
   private readonly runtimes = new Map<string, { harness?: string; provider?: string; model?: string }>();
+  private readonly resultTools = new Map<string, string>();
+  private readonly recoveryRuns = new Map<string, string>();
 
   constructor(options: RuntimeAdapterOptions) {
     if (!options?.subagent?.run || !options?.subagent?.waitForRun) throw new Error('OpenClaw subagent runtime is required');
@@ -149,9 +151,6 @@ export class OpenClawRuntimeAdapter {
       attemptId: context.attemptId,
     } : null;
 
-    // Tool factories are resolved as the subagent run starts, so bind the
-    // requested session before run() to make the role-specific result tool
-    // visible during this very invocation.
     if (roleBinding) {
       this.onSessionBound?.({ sessionKey: requestedSessionKey, ...roleBinding });
     }
@@ -162,6 +161,9 @@ export class OpenClawRuntimeAdapter {
     const selectedModel = typeof context.model === 'string' && context.model.trim()
       ? context.model.trim()
       : this.model;
+    const resultToolName = typeof context.resultToolName === 'string' && context.resultToolName.trim()
+      ? context.resultToolName.trim()
+      : null;
     const launched = await this.subagent.run({
       sessionKey: requestedSessionKey,
       message: this.renderMessage(input.role, context),
@@ -170,13 +172,12 @@ export class OpenClawRuntimeAdapter {
       ...(workspace ? { cwd: workspace } : {}),
       ...(selectedProvider ? { provider: selectedProvider } : {}),
       ...(selectedModel ? { model: selectedModel } : {}),
-      ...(typeof context.resultToolName === 'string' && context.resultToolName.trim()
-        ? { toolsAlsoAllow: [context.resultToolName.trim()] }
-        : {}),
+      ...(resultToolName ? { toolsAlsoAllow: [resultToolName] } : {}),
     });
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
     const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
     this.sessions.set(launched.runId, boundSessionKey);
+    if (resultToolName) this.resultTools.set(launched.runId, resultToolName);
     if (launched.runtime) this.runtimes.set(launched.runId, { ...launched.runtime });
     if (roleBinding) {
       this.attempts.set(roleBinding.attemptId, launched.runId);
@@ -266,6 +267,54 @@ export class OpenClawRuntimeAdapter {
     }
   }
 
+  async recoverRoleResult(
+    handle: { externalId: string },
+    input: { attemptId: string; role: string },
+  ) {
+    const binding = this.bindings.get(handle.externalId);
+    if (!binding || binding.attemptId !== input.attemptId || binding.role !== input.role) {
+      return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_BINDING_MISMATCH' };
+    }
+    const key = this.sessions.get(handle.externalId);
+    const resultToolName = this.resultTools.get(handle.externalId);
+    if (!key || !resultToolName) {
+      return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_TOOL_UNAVAILABLE' };
+    }
+
+    let recoveryRunId = this.recoveryRuns.get(handle.externalId);
+    if (!recoveryRunId) {
+      const launched = await this.subagent.run({
+        sessionKey: key,
+        message: [
+          'ARIAD RESULT RECOVERY',
+          `Your role work for attempt ${input.attemptId} has already ended, but Ariad did not receive the required result submission.`,
+          `Do not redo the work. Using the work and artifacts already present in this session, call ${resultToolName} now with the final result for this attempt.`,
+          `The attemptId MUST be exactly ${input.attemptId}.`,
+          'Do not answer with prose or JSON instead of the tool call. If the tool is unavailable, say exactly which tool is unavailable and stop.',
+        ].join('\n'),
+        promptMode: 'minimal',
+        deliver: false,
+        toolsAlsoAllow: [resultToolName],
+      });
+      if (!launched?.runId) return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_RUN_NOT_STARTED' };
+      recoveryRunId = launched.runId;
+      this.recoveryRuns.set(handle.externalId, recoveryRunId);
+    }
+
+    const observed = await this.subagent.waitForRun({ runId: recoveryRunId, timeoutMs: this.pollTimeoutMs });
+    const status = String(observed?.status ?? 'pending');
+    if (status === 'pending' || status === 'timeout') return { state: 'RUNNING', recoveryRunId };
+    if (status === 'error') {
+      return {
+        state: 'FAILED',
+        failure: `ROLE_RESULT_RECOVERY_FAILED:${String(observed?.error ?? observed?.stopReason ?? 'OPENCLAW_RUN_FAILED')}`,
+        recoveryRunId,
+      };
+    }
+    if (status !== 'ok') return { state: 'FAILED', failure: `ROLE_RESULT_RECOVERY_UNKNOWN_STATUS:${status}`, recoveryRunId };
+    return { state: 'COMPLETED', recoveryRunId, terminalReply: extractText(observed?.terminalReply) };
+  }
+
   getAttemptRuntimeBinding(attemptId: string) {
     const externalId = this.attempts.get(attemptId);
     if (!externalId) return null;
@@ -292,6 +341,8 @@ export class OpenClawRuntimeAdapter {
 
   async cancel(handle: { externalId: string }) {
     if (this.cancelRun) await this.cancelRun(handle.externalId);
+    const recoveryRunId = this.recoveryRuns.get(handle.externalId);
+    if (recoveryRunId && this.cancelRun) await this.cancelRun(recoveryRunId);
     return { state: 'CANCELLED' };
   }
 }

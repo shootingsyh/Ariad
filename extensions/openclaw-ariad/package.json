@@ -15,7 +15,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && esbuild src/index.ts src/openclaw-runtime-adapter.ts src/openclaw-v2-provider.ts src/openclaw-project-agent-adapter.ts src/role-result-tools.ts --bundle --platform=node --format=esm --packages=external --outdir=dist --entry-names=[name]",
-    "test": "npm run build && node --test test/codex-role-result.test.mjs test/mcp-loopback-proxy.test.mjs",
+    "test": "npm run build && node --test test/codex-role-result.test.mjs test/mcp-loopback-proxy.test.mjs test/role-result-recovery.test.mjs",
     "test:e2e": "npm run build && node test/openclaw-v2-e2e.mjs",
     "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
     "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",

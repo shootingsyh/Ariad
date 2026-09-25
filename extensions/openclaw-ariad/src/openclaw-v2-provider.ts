@@ -89,6 +89,10 @@ export class OpenClawV2Provider {
     };
   }
 
+  async recoverRoleResult(handle: { externalId: string }, input: { attemptId: string; role: string }) {
+    return this.runtime.recoverRoleResult(handle, input);
+  }
+
   async cancel(handle: { externalId: string }) {
     return this.runtime.cancel(handle);
   }
