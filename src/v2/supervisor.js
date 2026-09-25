@@ -49,6 +49,15 @@ export class V2Supervisor {
     return incident;
   }
 
+  #acceptSubmittedResult(task, submitted) {
+    this.store.updateTask(task.id, task.version, {
+      state: 'RESULT_READY',
+      execution: null,
+      artifacts: [...(task.artifacts ?? []), ...(submitted.artifacts ?? [])],
+    });
+    this.resources.release(task.id);
+  }
+
   async audit(projectId) {
     const incidents = [];
     for (const task of this.store.listTasks(projectId)) {
@@ -87,19 +96,11 @@ export class V2Supervisor {
 
       if (status?.state === 'RUNNING' || status?.state === 'QUEUED') continue;
 
-      const current = this.store.getTask(task.id);
+      let current = this.store.getTask(task.id);
 
-      // The role result tool can commit while waitForRun() is observing the
-      // provider's terminal turn. Re-check durable history after polling so a
-      // valid sealed result always wins over any prose emitted afterward.
       const postPollSubmittedResult = submittedRoleToolResult(current, execution.attemptId);
       if (postPollSubmittedResult) {
-        this.store.updateTask(task.id, current.version, {
-          state: 'RESULT_READY',
-          execution: null,
-          artifacts: [...(current.artifacts ?? []), ...(postPollSubmittedResult.artifacts ?? [])],
-        });
-        this.resources.release(task.id);
+        this.#acceptSubmittedResult(current, postPollSubmittedResult);
         continue;
       }
 
@@ -139,7 +140,37 @@ export class V2Supervisor {
           continue;
         }
 
-        const failure = 'MISSING_ROLE_RESULT_TOOL';
+        // Do not redo completed role work just because the model omitted its
+        // mandatory final result-tool call. Ask the same session to submit the
+        // already-completed result once; the provider keeps that recovery run
+        // stable across supervisor audits.
+        if (typeof provider.recoverRoleResult === 'function') {
+          let recovery;
+          try {
+            recovery = await provider.recoverRoleResult(
+              { externalId: execution.externalId, taskId: task.id },
+              { attemptId: execution.attemptId, role: task.stage },
+            );
+          } catch (error) {
+            recovery = { state: 'FAILED', failure: error?.message ?? String(error) };
+          }
+          if (recovery?.state === 'RUNNING' || recovery?.state === 'QUEUED') continue;
+
+          current = this.store.getTask(task.id);
+          const recoveredResult = submittedRoleToolResult(current, execution.attemptId);
+          if (recoveredResult) {
+            this.#acceptSubmittedResult(current, recoveredResult);
+            continue;
+          }
+
+          if (recovery?.state === 'FAILED') {
+            status = { state: 'FAILED', failure: recovery.failure ?? 'ROLE_RESULT_RECOVERY_FAILED' };
+          }
+        }
+
+        const failure = status?.state === 'FAILED'
+          ? status.failure ?? 'ROLE_RESULT_RECOVERY_FAILED'
+          : 'MISSING_ROLE_RESULT_TOOL';
         const incident = await this.#incident(task, failure);
         incidents.push(incident);
         this.store.appendTaskHistory(task.id, current.version, {
