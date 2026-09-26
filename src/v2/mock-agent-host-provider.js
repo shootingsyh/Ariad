@@ -1,5 +1,5 @@
 export class MockAgentHostProvider {
-  constructor({ id = 'mock-agent-host', worker = null } = {}) {
+  constructor({ id = 'ariad-worker', worker = null } = {}) {
     this.id = id;
     this.worker = worker ?? (async request => ({ outcome: 'PASS', result: request.input ?? null }));
     this.sessions = new Map();
@@ -9,15 +9,21 @@ export class MockAgentHostProvider {
   }
 
   async start(request) {
-    const sessionId = `${request.role}-session-${this.nextSession++}`;
+    const sessionId = `${this.id}-session-${this.nextSession++}`;
     const binding = Object.freeze({
+      hostAgentId: this.id,
       sessionId,
       projectId: request.projectId,
       taskId: request.taskId,
       attemptId: request.attemptId,
       role: request.role,
     });
-    this.sessions.set(sessionId, { role: request.role, turns: [] });
+    this.sessions.set(sessionId, {
+      hostAgentId: this.id,
+      role: request.role,
+      model: request.model ?? null,
+      turns: [],
+    });
     this.bindings.set(sessionId, binding);
 
     const submitResult = async payload => {
@@ -39,7 +45,9 @@ export class MockAgentHostProvider {
     const session = this.sessions.get(sessionId);
     session.turns.push({ type: 'TASK', taskId: request.taskId });
     await this.worker({
+      hostAgentId: this.id,
       role: request.role,
+      model: request.model ?? null,
       prompt: request.prompt ?? request.context?.v2Prompt ?? '',
       context: request.context ?? null,
       submitResult,
@@ -60,5 +68,9 @@ export class MockAgentHostProvider {
 
   getBinding(sessionId) {
     return this.bindings.get(sessionId) ?? null;
+  }
+
+  getSession(sessionId) {
+    return this.sessions.get(sessionId) ?? null;
   }
 }
