@@ -20,6 +20,7 @@ import {
 import { contract } from './contract.js';
 import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
 import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
+import { createAgentSessionSubagentFacade } from './agent-session-subagent-facade.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
 import { detectExecutionCapabilities } from '../runtime/execution-capabilities.js';
@@ -87,9 +88,16 @@ const plugin = defineFeaturePlugin({
       models: any[];
       error: string | null;
     } = { refreshedAt: null, source: 'none', models: [], error: null };
+    const runtimeAgentId = process.env.ARIAD_OPENCLAW_AGENT_ID || 'main';
+    const roleExecutionRuntime = process.env.ARIAD_EXECUTION_MODE === 'agent-session'
+      ? createAgentSessionSubagentFacade(api, { agentId: runtimeAgentId, pluginId: 'ariad' })
+      : api.runtime.subagent;
+    if (process.env.ARIAD_EXECUTION_MODE === 'agent-session') {
+      api.logger?.info?.(`Ariad execution mode: agent-session (host agent ${runtimeAgentId})`);
+    }
     const runtimeAdapter = new OpenClawRuntimeAdapter({
-      subagent: api.runtime.subagent,
-      agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
+      subagent: roleExecutionRuntime,
+      agentId: runtimeAgentId,
       renderMessage: renderRoleMessage,
       cancelRun: async (runId) => {
         await api.runtime.gateway.request('sessions.abort', { runId });
