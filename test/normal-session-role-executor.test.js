@@ -2,13 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MockAgentHostProvider } from '../src/v2/mock-agent-host-provider.js';
 
-test('one role host can execute independent sessions across projects', async () => {
+test('one agent host isolates concurrent sessions across roles and projects', async () => {
   const seen = [];
   const provider = new MockAgentHostProvider({
-    worker: async ({ role, context, submitResult }) => {
-      // The worker receives work data and a bound submit capability. It never
-      // receives or echoes sessionId/projectId/taskId/attemptId as identity.
-      seen.push({ role, marker: context.marker });
+    id: 'ariad-worker',
+    worker: async ({ hostAgentId, role, model, context, submitResult }) => {
+      seen.push({ hostAgentId, role, model, marker: context.marker });
       await submitResult({
         outcome: 'PASS',
         summary: `finished ${context.marker}`,
@@ -17,36 +16,48 @@ test('one role host can execute independent sessions across projects', async () 
     },
   });
 
-  const a = await provider.start({
-    projectId: 'project-a', taskId: 'task-1', attemptId: 'a1', role: 'artist',
-    context: { marker: 'A' },
+  const dev = await provider.start({
+    projectId: 'project-a', taskId: 'task-1', attemptId: 'a1', role: 'developer',
+    model: 'local/qwen', context: { marker: 'DEV-A' },
   });
-  const b = await provider.start({
+  const artist = await provider.start({
     projectId: 'project-b', taskId: 'task-9', attemptId: 'b3', role: 'artist',
-    context: { marker: 'B' },
+    model: 'muse/spark', context: { marker: 'ART-B' },
+  });
+  const pm = await provider.start({
+    projectId: 'project-a', taskId: 'project-lifecycle', attemptId: 'pm-1', role: 'pm',
+    model: 'muse/main', context: { marker: 'PM-A' },
   });
 
-  assert.notEqual(a.sessionId, b.sessionId);
+  assert.notEqual(dev.sessionId, artist.sessionId);
+  assert.notEqual(dev.sessionId, pm.sessionId);
+  assert.match(dev.sessionId, /^ariad-worker-session-/);
+  assert.match(artist.sessionId, /^ariad-worker-session-/);
+  assert.match(pm.sessionId, /^ariad-worker-session-/);
+
   assert.deepEqual(seen, [
-    { role: 'artist', marker: 'A' },
-    { role: 'artist', marker: 'B' },
+    { hostAgentId: 'ariad-worker', role: 'developer', model: 'local/qwen', marker: 'DEV-A' },
+    { hostAgentId: 'ariad-worker', role: 'artist', model: 'muse/spark', marker: 'ART-B' },
+    { hostAgentId: 'ariad-worker', role: 'pm', model: 'muse/main', marker: 'PM-A' },
   ]);
 
-  assert.deepEqual(provider.getBinding(a.sessionId), {
-    sessionId: a.sessionId,
-    projectId: 'project-a', taskId: 'task-1', attemptId: 'a1', role: 'artist',
-  });
-  assert.deepEqual(provider.getBinding(b.sessionId), {
-    sessionId: b.sessionId,
-    projectId: 'project-b', taskId: 'task-9', attemptId: 'b3', role: 'artist',
-  });
+  assert.equal(provider.getBinding(dev.sessionId).hostAgentId, 'ariad-worker');
+  assert.equal(provider.getBinding(dev.sessionId).role, 'developer');
+  assert.equal(provider.getBinding(artist.sessionId).role, 'artist');
+  assert.equal(provider.getBinding(pm.sessionId).role, 'pm');
+  assert.equal(provider.getSession(dev.sessionId).model, 'local/qwen');
+  assert.equal(provider.getSession(artist.sessionId).model, 'muse/spark');
+  assert.equal(provider.getSession(pm.sessionId).model, 'muse/main');
 
-  const ar = await provider.poll({ externalId: a.sessionId });
-  const br = await provider.poll({ externalId: b.sessionId });
-  assert.equal(ar.result.marker, 'A');
-  assert.equal(br.result.marker, 'B');
-  assert.equal(ar.binding.attemptId, 'a1');
-  assert.equal(br.binding.attemptId, 'b3');
+  const dr = await provider.poll({ externalId: dev.sessionId });
+  const ar = await provider.poll({ externalId: artist.sessionId });
+  const pr = await provider.poll({ externalId: pm.sessionId });
+  assert.equal(dr.result.marker, 'DEV-A');
+  assert.equal(ar.result.marker, 'ART-B');
+  assert.equal(pr.result.marker, 'PM-A');
+  assert.equal(dr.binding.attemptId, 'a1');
+  assert.equal(ar.binding.attemptId, 'b3');
+  assert.equal(pr.binding.attemptId, 'pm-1');
 });
 
 test('result submission identity comes from host binding, not model payload', async () => {
@@ -55,9 +66,7 @@ test('result submission identity comes from host binding, not model payload', as
       await submitResult({
         outcome: 'PASS',
         summary: 'done',
-        // Deliberately hostile/incorrect identity-like fields are just result
-        // payload data; they cannot alter the trusted session binding.
-        result: { attemptId: 'wrong-attempt', role: 'wrong-role' },
+        result: { attemptId: 'wrong-attempt', role: 'wrong-role', sessionId: 'wrong-session' },
       });
     },
   });
@@ -68,5 +77,6 @@ test('result submission identity comes from host binding, not model payload', as
   const result = await provider.poll({ externalId: handle.externalId });
   assert.equal(result.binding.attemptId, 'trusted-attempt');
   assert.equal(result.binding.role, 'developer');
+  assert.equal(result.binding.hostAgentId, 'ariad-worker');
   assert.equal(result.result.attemptId, 'wrong-attempt');
 });
