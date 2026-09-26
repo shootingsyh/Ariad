@@ -63,6 +63,7 @@ const env = {
   OPENCLAW_OFFLINE: '1',
   ARIAD_PROJECTS_ROOT: projectsRoot,
   ARIAD_CI_RUNTIME_PROBE: '1',
+  ARIAD_EXECUTION_MODE: 'agent-session',
   ARIAD_SOURCE_CONTROL_PUSH: '0',
   NO_COLOR: '1',
 };
@@ -142,6 +143,10 @@ try {
   await waitFor(() => providerALog.includes('ARIAD_FAKE_PROVIDER_READY A'), 'fake provider A');
   await waitFor(() => providerBLog.includes('ARIAD_FAKE_PROVIDER_READY B'), 'fake provider B');
   await waitFor(async () => (await fetch(`http://127.0.0.1:${gatewayPort}/readyz`)).ok, 'OpenClaw Gateway');
+  await waitFor(
+    () => gatewayLog.includes('Ariad execution mode: agent-session'),
+    'Ariad agent-session execution mode'
+  );
 
   const allRoleModels = Object.fromEntries(
     ['artist', 'developer', 'tester', 'reviewer', 'project_debugger', 'tech_lead', 'tech_lead_critic', 'pm']
@@ -281,6 +286,11 @@ try {
     () => providerBLog.includes('ARIAD_FAKE_TOOL_CALL provider=B role=reviewer cycle=2 tool=ariad_reviewer_result'),
     'v2 reviewer structured result tool call',
     5_000
+  );
+  assert.match(
+    gatewayLog,
+    /Ariad agent-session runEmbeddedAgent start runId=.*sessionKey=agent:main:ariad-session:/,
+    'agent-session E2E must execute the real runEmbeddedAgent path'
   );
 
   assert.notEqual(git(workspace, ['rev-list', '--count', 'HEAD']), '0');
