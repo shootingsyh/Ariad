@@ -1,4 +1,3 @@
-import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
 import { roleResultToolName } from './role-result-tools.js';
 
 type V2ExecutionSpec = {
@@ -11,12 +10,19 @@ type V2ExecutionSpec = {
   [key: string]: unknown;
 };
 
+type RoleRuntime = {
+  start(input: { runId: string; role: string; context?: Record<string, unknown> }): Promise<{ externalId: string; runtimeId: string }>;
+  poll(handle: { externalId: string }): Promise<any>;
+  recoverRoleResult(handle: { externalId: string }, input: { attemptId: string; role: string }): Promise<any>;
+  cancel(handle: { externalId: string }): Promise<any>;
+};
+
 export class OpenClawV2Provider {
   readonly id = 'openclaw-v2';
-  private readonly runtime: OpenClawRuntimeAdapter;
+  private readonly runtime: RoleRuntime;
   private readonly resolveModelRef?: (projectId: string, role: string) => string | null | undefined;
 
-  constructor(runtime: OpenClawRuntimeAdapter, options: {
+  constructor(runtime: RoleRuntime, options: {
     resolveModelRef?: (projectId: string, role: string) => string | null | undefined;
   } = {}) {
     this.runtime = runtime;
@@ -57,27 +63,14 @@ export class OpenClawV2Provider {
       ...(spec.attemptId ? { attemptId: spec.attemptId } : {}),
     };
 
-    const handle = await this.runtime.start({
-      runId,
-      role: spec.role,
-      context,
-    });
-
-    return {
-      externalId: handle.externalId,
-      runtimeId: handle.runtimeId,
-    };
+    const handle = await this.runtime.start({ runId, role: spec.role, context });
+    return { externalId: handle.externalId, runtimeId: handle.runtimeId };
   }
 
   async poll(handle: { externalId: string }) {
     const status = await this.runtime.poll(handle);
     if (status.state !== 'COMPLETED') return status;
-
-    const completed = status as {
-      state: 'COMPLETED';
-      outcome?: unknown;
-      result?: unknown;
-    };
+    const completed = status as { state: 'COMPLETED'; outcome?: unknown; result?: unknown };
     const result = completed.result as Record<string, unknown> | null | undefined;
     return {
       state: 'COMPLETED',
@@ -93,7 +86,5 @@ export class OpenClawV2Provider {
     return this.runtime.recoverRoleResult(handle, input);
   }
 
-  async cancel(handle: { externalId: string }) {
-    return this.runtime.cancel(handle);
-  }
+  async cancel(handle: { externalId: string }) { return this.runtime.cancel(handle); }
 }
