@@ -2,21 +2,75 @@
   "id": "ariad",
   "name": "Ariad",
   "description": "Create and manage isolated Ariad autonomous engineering projects.",
-  "version": "0.3.0",
+  "version": "0.6.20",
+  "activation": {
+    "onStartup": true
+  },
+  "mcpServers": {
+    "ariad-role-result": {
+      "transport": "stdio",
+      "command": "node",
+      "args": [
+        "./runtime/ariad-role-result-mcp.js"
+      ],
+      "toolFilter": {
+        "include": [
+          "ariad_role_result"
+        ]
+      },
+      "codex": {
+        "defaultToolsApprovalMode": "auto"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
   },
-  "activation": {
-    "onStartup": true
-  },
   "contracts": {
-    "tools": ["ariad_project"]
+    "tools": [
+      "ariad_project",
+      "ariad_artist_result",
+      "ariad_developer_result",
+      "ariad_tester_result",
+      "ariad_reviewer_result",
+      "ariad_project_debugger_result",
+      "ariad_tech_lead_result",
+      "ariad_tech_lead_critic_result",
+      "ariad_pm_result",
+      "ariad_codex_role_result"
+    ]
   },
   "toolMetadata": {
     "ariad_project": {
-      "profiles": ["coding"]
+      "profiles": [
+        "coding"
+      ]
+    },
+    "ariad_artist_result": {
+      "optional": true
+    },
+    "ariad_developer_result": {
+      "optional": true
+    },
+    "ariad_tester_result": {
+      "optional": true
+    },
+    "ariad_reviewer_result": {
+      "optional": true
+    },
+    "ariad_project_debugger_result": {
+      "optional": true
+    },
+    "ariad_tech_lead_result": {
+      "optional": true
+    },
+    "ariad_tech_lead_critic_result": {
+      "optional": true
+    },
+    "ariad_pm_result": {
+      "optional": true
     }
   }
 }

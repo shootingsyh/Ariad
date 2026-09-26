@@ -1,0 +1,484 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { buildExecutionGraph } from './execution-graph.js';
+
+const ID_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+
+function fail(path, message) {
+  const error = new Error(`${path}: ${message}`);
+  error.code = 'PLANNER_ARTIFACT_INVALID';
+  throw error;
+}
+
+function assertString(value, path) {
+  if (typeof value !== 'string' || value.trim() === '') fail(path, 'must be a non-empty string');
+}
+
+function assertId(value, path) {
+  assertString(value, path);
+  if (!ID_RE.test(value)) fail(path, 'must use flat dotted-id syntax (letters, digits, _, -, and . only)');
+}
+
+function assertStringArray(value, path, { nonEmpty = false } = {}) {
+  if (!Array.isArray(value)) fail(path, 'must be an array');
+  if (nonEmpty && value.length === 0) fail(path, 'must not be empty');
+  const seen = new Set();
+  value.forEach((item, index) => {
+    assertString(item, `${path}[${index}]`);
+    if (seen.has(item)) fail(path, `contains duplicate value ${item}`);
+    seen.add(item);
+  });
+}
+
+function assertAcyclic(ids, dependenciesOf, path, label) {
+  const visiting = new Set();
+  const visited = new Set();
+  function visit(id) {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) fail(path, `${label} contains a cycle at ${id}`);
+    visiting.add(id);
+    for (const dep of dependenciesOf(id)) visit(dep);
+    visiting.delete(id);
+    visited.add(id);
+  }
+  for (const id of ids) visit(id);
+}
+
+function scanFlatJsonDirectory(dir, kind) {
+  if (!existsSync(dir)) return [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) fail(kind, `subdirectories are not allowed: ${entry.name}`);
+  }
+  return entries
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(entry => {
+      const path = join(dir, entry.name);
+      let value;
+      try {
+        value = JSON.parse(readFileSync(path, 'utf8'));
+      } catch (error) {
+        fail(`${kind}/${entry.name}`, `invalid JSON: ${error?.message ?? String(error)}`);
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${kind}/${entry.name}`, 'must contain one JSON object');
+      assertId(value.id, `${kind}/${entry.name}.id`);
+      const fileId = basename(entry.name, '.json');
+      if (value.id !== fileId) fail(`${kind}/${entry.name}.id`, `must equal filename id ${fileId}`);
+      return value;
+    });
+}
+
+export function ensurePlannerArtifactLayout(artifactRoot) {
+  const plannerRoot = join(artifactRoot, 'planner');
+  const logicalDir = join(plannerRoot, 'logical');
+  const milestoneDir = join(plannerRoot, 'milestones');
+  mkdirSync(logicalDir, { recursive: true });
+  mkdirSync(milestoneDir, { recursive: true });
+  const featureTreeDiffPath = join(plannerRoot, 'feature-tree-diff.json');
+  return { plannerRoot, logicalDir, milestoneDir, featureTreeDiffPath };
+}
+
+
+export function loadFeatureTreeDiff(artifactRoot) {
+  if (!artifactRoot) return null;
+  const { featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
+  if (!existsSync(featureTreeDiffPath)) return null;
+  let value;
+  try {
+    value = JSON.parse(readFileSync(featureTreeDiffPath, 'utf8'));
+  } catch (error) {
+    fail('feature-tree-diff.json', `invalid JSON: ${error?.message ?? String(error)}`);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('feature-tree-diff.json', 'must contain one object');
+  if (value.version !== 1) fail('feature-tree-diff.json.version', 'must equal 1');
+  if (!Number.isInteger(value.targetVersion) || value.targetVersion < 1) fail('feature-tree-diff.json.targetVersion', 'must be a positive integer');
+  if (!Array.isArray(value.operations)) fail('feature-tree-diff.json.operations', 'must be an array');
+
+  const seen = new Set();
+  const operations = value.operations.map((operation, index) => {
+    const path = `feature-tree-diff.json.operations[${index}]`;
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) fail(path, 'must be an object');
+    if (!['add', 'update', 'remove'].includes(operation.op)) fail(`${path}.op`, 'must be add, update, or remove');
+    assertString(operation.reason, `${path}.reason`);
+    const id = operation.op === 'add' ? operation.node?.id : operation.id;
+    assertId(id, `${path}.${operation.op === 'add' ? 'node.id' : 'id'}`);
+    if (seen.has(id)) fail(path, `duplicate operation for ${id}`);
+    seen.add(id);
+
+    if (operation.op === 'add') {
+      const node = operation.node;
+      if (!node || typeof node !== 'object' || Array.isArray(node)) fail(`${path}.node`, 'must be an object');
+      const allowed = new Set(['id', 'title', 'summary', 'parentId']);
+      for (const key of Object.keys(node)) if (!allowed.has(key)) fail(`${path}.node.${key}`, 'unexpected property');
+      assertString(node.title, `${path}.node.title`);
+      assertString(node.summary, `${path}.node.summary`);
+      if (node.parentId !== null) assertId(node.parentId, `${path}.node.parentId`);
+      return { op: 'add', node: structuredClone(node), reason: operation.reason };
+    }
+
+    if (operation.op === 'update') {
+      if (!operation.patch || typeof operation.patch !== 'object' || Array.isArray(operation.patch)) fail(`${path}.patch`, 'must be an object');
+      const allowed = new Set(['title', 'summary', 'parentId']);
+      for (const key of Object.keys(operation.patch)) if (!allowed.has(key)) fail(`${path}.patch.${key}`, 'unexpected property');
+      if (Object.keys(operation.patch).length === 0) fail(`${path}.patch`, 'must change at least one field');
+      if (operation.patch.title != null) assertString(operation.patch.title, `${path}.patch.title`);
+      if (operation.patch.summary != null) assertString(operation.patch.summary, `${path}.patch.summary`);
+      if ('parentId' in operation.patch && operation.patch.parentId !== null) assertId(operation.patch.parentId, `${path}.patch.parentId`);
+      return { op: 'update', id: operation.id, patch: structuredClone(operation.patch), reason: operation.reason };
+    }
+
+    return { op: 'remove', id: operation.id, reason: operation.reason };
+  });
+  return { version: 1, targetVersion: value.targetVersion, operations };
+}
+
+export function applyFeatureTreeDiff(previousNodes, diff) {
+  if (!diff) throw new Error('feature tree diff is required');
+  const current = new Map((previousNodes ?? []).map(node => [node.id, {
+    id: node.id,
+    title: node.title,
+    summary: node.summary,
+    parentId: node.parentId,
+    revision: { version: diff.targetVersion, kind: 'unchanged', reason: 'Unchanged from previous completed version.' },
+  }]));
+
+  for (const operation of diff.operations) {
+    if (operation.op === 'add') {
+      if (current.has(operation.node.id)) fail('feature-tree-diff.json', `cannot add existing node ${operation.node.id}`);
+      current.set(operation.node.id, {
+        ...structuredClone(operation.node),
+        revision: { version: diff.targetVersion, kind: 'added', reason: operation.reason },
+      });
+    } else if (operation.op === 'update') {
+      const before = current.get(operation.id);
+      if (!before) fail('feature-tree-diff.json', `cannot update missing node ${operation.id}`);
+      current.set(operation.id, {
+        ...before,
+        ...structuredClone(operation.patch),
+        revision: { version: diff.targetVersion, kind: 'revised', reason: operation.reason },
+      });
+    } else {
+      if (!current.has(operation.id)) fail('feature-tree-diff.json', `cannot remove missing node ${operation.id}`);
+      current.delete(operation.id);
+    }
+  }
+
+  return normalizeLogicalNodes([...current.values()].sort((a, b) => a.id.localeCompare(b.id))).nodes;
+}
+
+export function materializeLogicalTree(artifactRoot, nodes) {
+  const { logicalDir } = ensurePlannerArtifactLayout(artifactRoot);
+  for (const entry of readdirSync(logicalDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.json')) unlinkSync(join(logicalDir, entry.name));
+  }
+  for (const node of nodes) {
+    writeFileSync(join(logicalDir, `${node.id}.json`), JSON.stringify(node, null, 2) + '\n');
+  }
+  return structuredClone(nodes);
+}
+
+function normalizeLogicalNodes(rawNodes) {
+  if (rawNodes.length === 0) fail('logical', 'requires at least one logical artifact');
+  const byId = new Map();
+  const nodes = rawNodes.map((item, index) => {
+    const path = `logical:${item.id ?? index}`;
+    const allowed = new Set(['id', 'title', 'summary', 'parentId', 'revision']);
+    for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
+    assertId(item.id, `${path}.id`);
+    assertString(item.title, `${path}.title`);
+    assertString(item.summary, `${path}.summary`);
+    if (item.parentId !== null) assertId(item.parentId, `${path}.parentId`);
+    let revision = null;
+    if (item.revision != null) {
+      if (!item.revision || typeof item.revision !== 'object' || Array.isArray(item.revision)) fail(`${path}.revision`, 'must be an object');
+      const allowedRevision = new Set(['version', 'kind', 'reason']);
+      for (const key of Object.keys(item.revision)) if (!allowedRevision.has(key)) fail(`${path}.revision.${key}`, 'unexpected property');
+      if (!Number.isInteger(item.revision.version) || item.revision.version < 1) fail(`${path}.revision.version`, 'must be a positive integer');
+      if (!['unchanged', 'revised', 'added'].includes(item.revision.kind)) fail(`${path}.revision.kind`, 'must be unchanged, revised, or added');
+      if (item.revision.reason != null) assertString(item.revision.reason, `${path}.revision.reason`);
+      revision = {
+        version: item.revision.version,
+        kind: item.revision.kind,
+        ...(item.revision.reason != null ? { reason: item.revision.reason } : {}),
+      };
+    }
+    if (byId.has(item.id)) fail(`${path}.id`, `duplicate logical id ${item.id}`);
+    const node = { id: item.id, title: item.title, summary: item.summary, parentId: item.parentId, ...(revision ? { revision } : {}) };
+    byId.set(node.id, node);
+    return node;
+  });
+
+  for (const node of nodes) {
+    if (node.parentId === null) continue;
+    if (!byId.has(node.parentId)) fail(`logical:${node.id}.parentId`, `unknown logical parent ${node.parentId}`);
+    if (node.parentId === node.id) fail(`logical:${node.id}.parentId`, 'must not reference itself');
+  }
+  assertAcyclic(nodes.map(node => node.id), id => byId.get(id)?.parentId ? [byId.get(id).parentId] : [], 'logical', 'logical tree');
+  const roots = nodes.filter(node => node.parentId === null);
+  if (roots.length !== 1) fail('logical', `must contain exactly one root; found ${roots.length}`);
+  const revisionNodes = nodes.filter(node => node.revision != null);
+  if (revisionNodes.length > 0 && revisionNodes.length !== nodes.length) {
+    fail('logical', 'iteration revision metadata must be present on every current logical node when used');
+  }
+  if (revisionNodes.length > 0) {
+    const versions = new Set(revisionNodes.map(node => node.revision.version));
+    if (versions.size !== 1) fail('logical', 'all logical revision metadata must target the same version');
+  }
+  return { nodes, byId, root: roots[0] };
+}
+
+function normalizeTask(item, milestoneId, logicalById, taskIds) {
+  const path = `milestone:${milestoneId}.task:${item?.id ?? '?'}`;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) fail(path, 'must be an object');
+  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'verification', 'art', 'history']);
+  for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
+  assertId(item.id, `${path}.id`);
+  if (taskIds.has(item.id)) fail(`${path}.id`, `duplicate task id ${item.id}`);
+  taskIds.add(item.id);
+  assertString(item.title, `${path}.title`);
+  assertString(item.intent, `${path}.intent`);
+  assertStringArray(item.dependsOn, `${path}.dependsOn`);
+  assertStringArray(item.logicalRefs, `${path}.logicalRefs`, { nonEmpty: true });
+  for (const ref of item.logicalRefs) if (!logicalById.has(ref)) fail(`${path}.logicalRefs`, `unknown logical ref ${ref}`);
+  assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
+  assertString(item.testStrategy, `${path}.testStrategy`);
+  if (item.verification != null) {
+    if (!Array.isArray(item.verification)) fail(`${path}.verification`, 'must be an array');
+    const seenVerification = new Set();
+    for (let index = 0; index < item.verification.length; index += 1) {
+      const entry = item.verification[index];
+      const vPath = `${path}.verification[${index}]`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(vPath, 'must be an object');
+      const allowedVerification = new Set(['criterionId', 'mode', 'target']);
+      for (const key of Object.keys(entry)) if (!allowedVerification.has(key)) fail(`${vPath}.${key}`, 'unexpected property');
+      if (!/^AC[1-9][0-9]*$/.test(entry.criterionId ?? '')) fail(`${vPath}.criterionId`, 'must reference AC1, AC2, ...');
+      const criterionIndex = Number(entry.criterionId.slice(2)) - 1;
+      if (criterionIndex < 0 || criterionIndex >= item.acceptanceCriteria.length) fail(`${vPath}.criterionId`, 'references missing acceptance criterion');
+      if (!['runtime', 'static', 'behavioral'].includes(entry.mode)) fail(`${vPath}.mode`, 'unsupported verification mode');
+      if (entry.target != null) assertString(entry.target, `${vPath}.target`);
+      if (seenVerification.has(entry.criterionId)) fail(`${path}.verification`, `duplicate verification entry for ${entry.criterionId}`);
+      seenVerification.add(entry.criterionId);
+    }
+  }
+  if (item.art != null) {
+    if (!item.art || typeof item.art !== 'object' || Array.isArray(item.art)) fail(`${path}.art`, 'must be an object when present');
+    const allowedArt = new Set(['required', 'media', 'deliverables', 'placeholderAllowed']);
+    for (const key of Object.keys(item.art)) if (!allowedArt.has(key)) fail(`${path}.art.${key}`, 'unexpected property');
+    if (typeof item.art.required !== 'boolean') fail(`${path}.art.required`, 'must be boolean');
+    assertStringArray(item.art.media, `${path}.art.media`);
+    for (const media of item.art.media) if (!['image', 'video', 'audio', 'music'].includes(media)) fail(`${path}.art.media`, `unsupported media type ${media}`);
+    assertStringArray(item.art.deliverables, `${path}.art.deliverables`);
+    if (typeof item.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
+  }
+  if (item.history != null && !Array.isArray(item.history)) fail(`${path}.history`, 'must be an array when present');
+  return {
+    id: item.id,
+    title: item.title,
+    intent: item.intent,
+    dependsOn: [...item.dependsOn],
+    logicalRefs: [...item.logicalRefs],
+    milestoneId,
+    acceptanceCriteria: [...item.acceptanceCriteria],
+    testStrategy: item.testStrategy,
+    verification: structuredClone(item.verification ?? []),
+    art: item.art == null ? null : structuredClone(item.art),
+    history: structuredClone(item.history ?? []),
+  };
+}
+
+function normalizeMilestones(rawMilestones, logicalById) {
+  if (rawMilestones.length === 0) fail('milestones', 'requires at least one milestone artifact');
+  const byId = new Map();
+  const taskIds = new Set();
+  const milestones = rawMilestones.map((item, index) => {
+    const path = `milestone:${item.id ?? index}`;
+    const allowed = new Set(['id', 'title', 'goal', 'parentId', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'tasks']);
+    for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
+    assertId(item.id, `${path}.id`);
+    if (byId.has(item.id)) fail(`${path}.id`, `duplicate milestone id ${item.id}`);
+    assertString(item.title, `${path}.title`);
+    assertString(item.goal, `${path}.goal`);
+    if (item.parentId !== null) assertId(item.parentId, `${path}.parentId`);
+    assertStringArray(item.dependsOn, `${path}.dependsOn`);
+    assertStringArray(item.logicalRefs, `${path}.logicalRefs`, { nonEmpty: true });
+    for (const ref of item.logicalRefs) if (!logicalById.has(ref)) fail(`${path}.logicalRefs`, `unknown logical ref ${ref}`);
+    assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
+    assertString(item.testStrategy, `${path}.testStrategy`);
+    if (!Array.isArray(item.tasks) || item.tasks.length === 0) fail(`${path}.tasks`, 'must contain at least one execution/integration task');
+    const milestone = {
+      id: item.id,
+      title: item.title,
+      goal: item.goal,
+      parentId: item.parentId,
+      dependsOn: [...item.dependsOn],
+      logicalRefs: [...item.logicalRefs],
+      acceptanceCriteria: [...item.acceptanceCriteria],
+      testStrategy: item.testStrategy,
+      tasks: [],
+    };
+    byId.set(milestone.id, milestone);
+    milestone.tasks = item.tasks.map(task => normalizeTask(task, milestone.id, logicalById, taskIds));
+    return milestone;
+  });
+
+  for (const milestone of milestones) {
+    if (milestone.parentId !== null) {
+      if (!byId.has(milestone.parentId)) fail(`milestone:${milestone.id}.parentId`, `unknown milestone parent ${milestone.parentId}`);
+      if (milestone.parentId === milestone.id) fail(`milestone:${milestone.id}.parentId`, 'must not reference itself');
+    }
+    for (const depId of milestone.dependsOn) {
+      if (!byId.has(depId)) fail(`milestone:${milestone.id}.dependsOn`, `unknown milestone dependency ${depId}`);
+      if (depId === milestone.id) fail(`milestone:${milestone.id}.dependsOn`, 'must not depend on itself');
+    }
+  }
+
+  assertAcyclic(milestones.map(m => m.id), id => byId.get(id)?.parentId ? [byId.get(id).parentId] : [], 'milestones', 'milestone tree');
+  assertAcyclic(milestones.map(m => m.id), id => byId.get(id)?.dependsOn ?? [], 'milestones', 'milestone dependencies');
+
+  const childrenById = new Map(milestones.map(m => [m.id, []]));
+  for (const milestone of milestones) {
+    if (milestone.parentId) childrenById.get(milestone.parentId).push(milestone.id);
+  }
+
+  return { milestones, byId, childrenById };
+}
+
+function dependencyClosure(milestonesById, childrenById, milestoneId) {
+  const seen = new Set();
+  const stack = [
+    ...(milestonesById.get(milestoneId)?.dependsOn ?? []),
+    ...(childrenById.get(milestoneId) ?? []),
+  ];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(
+      ...(milestonesById.get(id)?.dependsOn ?? []),
+      ...(childrenById.get(id) ?? [])
+    );
+  }
+  return seen;
+}
+
+export function validatePlannerArtifactPlan(plan) {
+  if (!plan || plan.version !== 3) fail('$', 'artifact plan version must equal 3');
+  const logical = normalizeLogicalNodes(plan.logicalNodes ?? []);
+  const milestoneState = normalizeMilestones(plan.milestones ?? [], logical.byId);
+  const tasks = milestoneState.milestones.flatMap(m => m.tasks.map(task => structuredClone(task)));
+  const taskById = new Map(tasks.map(task => [task.id, task]));
+
+  const revisionAware = logical.nodes.length > 0 && logical.nodes.every(node => node.revision != null);
+  const affectedLogicalIds = new Set();
+  if (revisionAware) {
+    for (const node of logical.nodes) {
+      if (['revised', 'added'].includes(node.revision.kind)) {
+        let current = node;
+        while (current) {
+          affectedLogicalIds.add(current.id);
+          current = current.parentId ? logical.byId.get(current.parentId) : null;
+        }
+      }
+    }
+  }
+  for (const task of tasks) {
+    task.revisionMode = revisionAware
+      ? (task.logicalRefs.some(ref => affectedLogicalIds.has(ref)) ? 'implementation' : 'regression')
+      : 'implementation';
+  }
+
+  for (const task of tasks) {
+    for (const depId of task.dependsOn) {
+      const dep = taskById.get(depId);
+      if (!dep) fail(`task:${task.id}.dependsOn`, `unknown task dependency ${depId}`);
+      if (depId === task.id) fail(`task:${task.id}.dependsOn`, 'must not depend on itself');
+      if (dep.milestoneId !== task.milestoneId) {
+        const allowed = dependencyClosure(milestoneState.byId, milestoneState.childrenById, task.milestoneId);
+        if (!allowed.has(dep.milestoneId)) {
+          fail(`task:${task.id}.dependsOn`, `cross-milestone dependency ${depId} is outside milestone prerequisites for ${task.milestoneId}`);
+        }
+      }
+    }
+  }
+
+  // Milestone hierarchy is execution structure: every task owned by a parent
+  // milestone waits for the integration tasks of each direct child milestone.
+  // Explicit milestone dependsOn behaves the same way. Logical hierarchy never
+  // contributes execution edges.
+  for (const milestone of milestoneState.milestones) {
+    const prerequisiteMilestoneIds = [
+      ...(milestoneState.childrenById.get(milestone.id) ?? []),
+      ...milestone.dependsOn,
+    ];
+    const derived = prerequisiteMilestoneIds.flatMap(id => milestoneState.byId.get(id).tasks.map(task => task.id));
+    for (const milestoneTask of milestone.tasks) {
+      const task = taskById.get(milestoneTask.id);
+      task.dependsOn = [...new Set([...task.dependsOn, ...derived])];
+    }
+  }
+
+  try {
+    buildExecutionGraph(tasks);
+  } catch (error) {
+    fail('tasks', error?.message ?? String(error));
+  }
+
+  return {
+    ok: true,
+    plan: {
+      version: 3,
+      projectSummary: logical.root.summary,
+      logicalRootId: logical.root.id,
+      logicalNodes: structuredClone(logical.nodes),
+      milestones: milestoneState.milestones.map(({ tasks: _tasks, ...milestone }) => structuredClone(milestone)),
+      tasks,
+    },
+  };
+}
+
+export function loadPlannerArtifactPlan(artifactRoot) {
+  if (!artifactRoot) return null;
+  const { logicalDir, milestoneDir, featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
+  const logicalNodes = scanFlatJsonDirectory(logicalDir, 'logical');
+  const rawMilestones = scanFlatJsonDirectory(milestoneDir, 'milestones');
+  if (logicalNodes.length === 0 && rawMilestones.length === 0) return null;
+  return {
+    version: 3,
+    logicalNodes,
+    milestones: rawMilestones,
+  };
+}
+
+export function plannerArtifactInstructions(artifactRoot) {
+  const { logicalDir, milestoneDir, featureTreeDiffPath } = ensurePlannerArtifactLayout(artifactRoot);
+  return [
+    'PLANNER ARTIFACT TRANSPORT',
+    'Do NOT return or write one monolithic project-plan JSON.',
+    'The filesystem is the artifact registry; there is no manifest.',
+    `Write logical artifacts as flat JSON files in: ${logicalDir}`,
+    `Write milestone artifacts as flat JSON files in: ${milestoneDir}`,
+    'Use exactly <id>.json. IDs may contain dots for hierarchy (for example battle.combat or M1.1.2) but filenames/directories do not define parentage.',
+    'Do not create subdirectories. parentId is the only durable parent relation. Do not store children arrays; children are derived by scanning parentId.',
+    'Logical artifacts describe WHAT the product is and never create execution dependencies.',
+    'Initial version logical artifact shape: {"id":"battle.combat","title":"Combat","summary":"...","parentId":"battle"}.',
+    `Iteration feature-tree diff path: ${featureTreeDiffPath}`,
+    'During iteration, DO NOT hand-edit or rewrite the logical tree as the authoritative change description. Write feature-tree-diff.json instead. Shape: {"version":1,"targetVersion":2,"operations":[{"op":"add","node":{"id":"...","title":"...","summary":"...","parentId":"..."},"reason":"..."},{"op":"update","id":"...","patch":{"summary":"..."},"reason":"..."},{"op":"remove","id":"...","reason":"..."}]}. Ariad deterministically applies this diff to the immutable previous-version tree and materializes the new living logical tree.',
+    'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
+    'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
+    'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
+    'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","verification":[{"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}],"art":null,"history":[]}',
+    'Use verification only when evidence semantics matter. mode=runtime means the target behavior must actually execute; static/proxy/manual evidence cannot satisfy it. mode=static is artifact inspection; mode=behavioral is non-platform behavioral verification.',
+    'Before deciding art=null for a media-heavy product, inventory existing project assets against the current scope. In TAKEOVER/legacy projects, absence of a historical Artist role does not mean assets are absent; preserve and reuse good existing sprites/textures/backgrounds/icons/VFX/audio/music.',
+    'TL may use filenames, metadata, import/resource references, scene references, dimensions/types, prior docs, and runtime evidence when it cannot inspect pixels directly. If visual quality or semantic fit is uncertain, preserve that uncertainty and require downstream visual review via a vision-capable Reviewer/Tester or rendered screenshots/frames.',
+    'If required media is missing, placeholder-only, inconsistent, or needs repair, represent that gap explicitly on concrete tasks with art.required=true and specific deliverables. Do not bury asset creation inside generic Developer work.',
+    'Use art only for pure media resources. Shape: {"required":true,"media":["image"],"deliverables":["hero background"],"placeholderAllowed":false}. Artist does not own UX/CSS/layout.',
+    'Every milestone, including non-leaf milestones, must own at least one bounded execution/integration task so its acceptance boundary is executable.',
+    'TL chooses decomposition depth. Split large logical areas and large milestones recursively until each artifact is bounded enough to generate and review reliably.',
+    'During iteration, feature-tree-diff.json is authoritative for feature changes. Keep stable ids by using update for retained features, add only genuinely new ids, and remove only intentional deletions. The generated logical tree carries revision provenance automatically; TL should not manually classify every unchanged node.',
+    'During iteration, milestone artifacts are a newly planned delivery tree for the target version. Do not preserve obsolete milestone structure merely for history; the immutable previous-version snapshot already preserves it.',
+    'For unchanged logical branches with no affected descendants, plan regression-only tasks. For revised/added branches and unchanged ancestors integrating changed descendants, plan implementation/integration work plus fresh regression/E2E.',
+    'When repairing or adding scope, edit only affected artifacts; do not rewrite unrelated files.',
+    'After all required files are successfully written, return only a small JSON result; never echo the full artifacts in the final reply.',
+  ].join('\n');
+}

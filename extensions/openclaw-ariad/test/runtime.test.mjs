@@ -46,6 +46,31 @@ test('OpenClawRuntimeAdapter translates Ariad Run lifecycle to subagent lifecycl
   assert.deepEqual(result, { state: 'COMPLETED', outcome: 'PASS', result: { ok: true } });
 });
 
+test('OpenClawRuntimeAdapter terminates the exact run bound to an Ariad attempt', async () => {
+  const cancelled = [];
+  const adapter = new OpenClawRuntimeAdapter({
+    subagent: {
+      async run(input) { return { runId: 'oc-terminal', sessionKey: input.sessionKey }; },
+      async waitForRun() { return { status: 'pending' }; },
+    },
+    cancelRun: async (runId) => { cancelled.push(runId); },
+  });
+  await adapter.start({
+    runId: 'ariad-terminal',
+    role: 'reviewer',
+    context: {
+      projectId: 'P1',
+      taskId: 'T1',
+      attemptId: 'P1:T1:reviewer:1',
+    },
+  });
+  assert.deepEqual(
+    await adapter.terminateAttempt('P1:T1:reviewer:1'),
+    { requested: true, externalId: 'oc-terminal' },
+  );
+  assert.deepEqual(cancelled, ['oc-terminal']);
+});
+
 test('OpenClawRuntimeAdapter falls back to full session message when terminal reply is truncated', async () => {
   const full = JSON.stringify({
     executionStatus: 'COMPLETED',

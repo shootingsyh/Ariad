@@ -1,5 +1,5 @@
 type SubagentRuntime = {
-  run(input: Record<string, unknown>): Promise<{ runId: string; sessionKey?: string }>;
+  run(input: Record<string, unknown>): Promise<{ runId: string; sessionKey?: string; runtime?: { harness?: string; provider?: string; model?: string } }>;
   waitForRun(input: { runId: string; timeoutMs?: number }): Promise<Record<string, unknown>>;
   getSessionMessages?(input: { sessionKey: string; limit?: number }): Promise<{ messages?: unknown[] }>;
 };
@@ -12,6 +12,7 @@ type RuntimeAdapterOptions = {
   renderMessage?: (role: string, context: Record<string, unknown>) => string;
   cancelRun?: (runId: string) => Promise<unknown> | unknown;
   pollTimeoutMs?: number;
+  onSessionBound?: (binding: { sessionKey: string; projectId: string; taskId: string; role: string; attemptId: string }) => void;
 };
 
 function parseJsonText(text: string): any {
@@ -41,6 +42,55 @@ function sessionKey(agentId: string, runId: string): string {
   return `agent:${agentId}:subagent:ariad-${safe}`;
 }
 
+const ROLE_OUTCOMES: Record<string, Set<string>> = {
+  artist: new Set(['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY']),
+  developer: new Set(['PASS', 'NOT_PASS']),
+  tester: new Set(['PASS', 'NOT_PASS']),
+  reviewer: new Set(['PASS', 'NOT_PASS']),
+  project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'NEEDS_HUMAN']),
+  tech_lead: new Set(['PLANNED', 'REPLANNED']),
+  tech_lead_critic: new Set(['CLEAN', 'MINOR_ONLY', 'ISSUES']),
+  pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN']),
+};
+
+function parseUnavailableResultToolFallback(
+  text: string,
+  binding: { attemptId: string; role: string } | undefined,
+  runtime: { harness?: string; provider?: string; model?: string } | undefined,
+) {
+  if (!binding) return null;
+  let parsed: any;
+  try {
+    parsed = parseJsonText(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.resultTool !== 'unavailable') return null;
+  if (parsed.attemptId !== binding.attemptId) return null;
+  const outcome = typeof parsed.outcome === 'string' ? parsed.outcome : '';
+  if (!ROLE_OUTCOMES[binding.role]?.has(outcome)) return null;
+  const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
+    ? parsed.summary.trim()
+    : `${binding.role} completed with the Ariad result tool unavailable in the selected harness.`;
+  return {
+    source: 'terminal_json_result_tool_unavailable',
+    attemptId: binding.attemptId,
+    role: binding.role,
+    outcome,
+    summary,
+    keyPoints: Array.isArray(parsed.keyPoints)
+      ? parsed.keyPoints.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    artifacts: Array.isArray(parsed.artifacts)
+      ? parsed.artifacts.filter((value: unknown): value is string => typeof value === 'string')
+      : [],
+    result: parsed.result ?? null,
+    runtime: runtime ? { ...runtime } : null,
+    raw: parsed,
+  };
+}
+
 export class OpenClawRuntimeAdapter {
   readonly id = 'openclaw-subagent';
   private readonly subagent: SubagentRuntime;
@@ -50,7 +100,18 @@ export class OpenClawRuntimeAdapter {
   private readonly renderMessage: (role: string, context: Record<string, unknown>) => string;
   private readonly cancelRun?: (runId: string) => Promise<unknown> | unknown;
   private readonly pollTimeoutMs: number;
+  private readonly onSessionBound?: RuntimeAdapterOptions['onSessionBound'];
   private readonly sessions = new Map<string, string>();
+  private readonly attempts = new Map<string, string>();
+  private readonly bindings = new Map<string, {
+    projectId: string;
+    taskId: string;
+    attemptId: string;
+    role: string;
+  }>();
+  private readonly runtimes = new Map<string, { harness?: string; provider?: string; model?: string }>();
+  private readonly resultTools = new Map<string, string>();
+  private readonly recoveryRuns = new Map<string, string>();
 
   constructor(options: RuntimeAdapterOptions) {
     if (!options?.subagent?.run || !options?.subagent?.waitForRun) throw new Error('OpenClaw subagent runtime is required');
@@ -61,6 +122,7 @@ export class OpenClawRuntimeAdapter {
     this.renderMessage = options.renderMessage ?? ((role, context) => JSON.stringify({ role, context }));
     this.cancelRun = options.cancelRun;
     this.pollTimeoutMs = options.pollTimeoutMs ?? 5_000;
+    this.onSessionBound = options.onSessionBound;
   }
 
   async install() {
@@ -74,18 +136,56 @@ export class OpenClawRuntimeAdapter {
   async start(input: { runId: string; role: string; context?: Record<string, unknown> }) {
     const context = input.context ?? {};
     const workspace = typeof context.workspace === 'string' && context.workspace.trim() ? context.workspace : null;
-    const requestedSessionKey = sessionKey(this.agentId, input.runId);
+    const stableIdentity = context.sessionPolicy === 'persistent' && typeof context.projectId === 'string'
+      ? `persistent-${context.projectId}-${input.role}`
+      : input.runId;
+    const requestedSessionKey = sessionKey(this.agentId, stableIdentity);
+    const roleBinding = (
+      typeof context.projectId === 'string'
+      && typeof context.taskId === 'string'
+      && typeof context.attemptId === 'string'
+    ) ? {
+      projectId: context.projectId,
+      taskId: context.taskId,
+      role: input.role,
+      attemptId: context.attemptId,
+    } : null;
+
+    if (roleBinding) {
+      this.onSessionBound?.({ sessionKey: requestedSessionKey, ...roleBinding });
+    }
+
+    const selectedProvider = typeof context.provider === 'string' && context.provider.trim()
+      ? context.provider.trim()
+      : this.provider;
+    const selectedModel = typeof context.model === 'string' && context.model.trim()
+      ? context.model.trim()
+      : this.model;
+    const resultToolName = typeof context.resultToolName === 'string' && context.resultToolName.trim()
+      ? context.resultToolName.trim()
+      : null;
     const launched = await this.subagent.run({
       sessionKey: requestedSessionKey,
       message: this.renderMessage(input.role, context),
       promptMode: 'minimal',
       deliver: false,
       ...(workspace ? { cwd: workspace } : {}),
-      ...(this.provider ? { provider: this.provider } : {}),
-      ...(this.model ? { model: this.model } : {}),
+      ...(selectedProvider ? { provider: selectedProvider } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(resultToolName ? { toolsAlsoAllow: [resultToolName] } : {}),
     });
     if (!launched?.runId) throw new Error('OpenClaw subagent.run returned no runId');
-    this.sessions.set(launched.runId, launched.sessionKey ?? requestedSessionKey);
+    const boundSessionKey = launched.sessionKey ?? requestedSessionKey;
+    this.sessions.set(launched.runId, boundSessionKey);
+    if (resultToolName) this.resultTools.set(launched.runId, resultToolName);
+    if (launched.runtime) this.runtimes.set(launched.runId, { ...launched.runtime });
+    if (roleBinding) {
+      this.attempts.set(roleBinding.attemptId, launched.runId);
+      this.bindings.set(launched.runId, { ...roleBinding });
+    }
+    if (roleBinding && boundSessionKey !== requestedSessionKey) {
+      this.onSessionBound?.({ sessionKey: boundSessionKey, ...roleBinding });
+    }
     return { runtimeId: this.id, runId: input.runId, externalId: launched.runId, state: 'RUNNING' };
   }
 
@@ -112,6 +212,19 @@ export class OpenClawRuntimeAdapter {
 
     const terminalText = extractText(observed?.terminalReply);
     if (terminalText) {
+      const fallback = parseUnavailableResultToolFallback(
+        terminalText,
+        this.bindings.get(handle.externalId),
+        this.runtimes.get(handle.externalId),
+      );
+      if (fallback) {
+        return {
+          state: 'COMPLETED',
+          outcome: fallback.outcome,
+          result: fallback.result,
+          roleResultFallback: fallback,
+        };
+      }
       try {
         return parseResult(terminalText);
       } catch {
@@ -125,6 +238,19 @@ export class OpenClawRuntimeAdapter {
       const session = await this.subagent.getSessionMessages({ sessionKey: key, limit: 10 });
       const sessionText = extractText(session?.messages ?? null);
       if (sessionText) {
+        const fallback = parseUnavailableResultToolFallback(
+          sessionText,
+          this.bindings.get(handle.externalId),
+          this.runtimes.get(handle.externalId),
+        );
+        if (fallback) {
+          return {
+            state: 'COMPLETED',
+            outcome: fallback.outcome,
+            result: fallback.result,
+            roleResultFallback: fallback,
+          };
+        }
         try {
           return parseResult(sessionText);
         } catch (error) {
@@ -141,8 +267,82 @@ export class OpenClawRuntimeAdapter {
     }
   }
 
+  async recoverRoleResult(
+    handle: { externalId: string },
+    input: { attemptId: string; role: string },
+  ) {
+    const binding = this.bindings.get(handle.externalId);
+    if (!binding || binding.attemptId !== input.attemptId || binding.role !== input.role) {
+      return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_BINDING_MISMATCH' };
+    }
+    const key = this.sessions.get(handle.externalId);
+    const resultToolName = this.resultTools.get(handle.externalId);
+    if (!key || !resultToolName) {
+      return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_TOOL_UNAVAILABLE' };
+    }
+
+    let recoveryRunId = this.recoveryRuns.get(handle.externalId);
+    if (!recoveryRunId) {
+      const launched = await this.subagent.run({
+        sessionKey: key,
+        message: [
+          'ARIAD RESULT RECOVERY',
+          `Your role work for attempt ${input.attemptId} has already ended, but Ariad did not receive the required result submission.`,
+          `Do not redo the work. Using the work and artifacts already present in this session, call ${resultToolName} now with the final result for this attempt.`,
+          `The attemptId MUST be exactly ${input.attemptId}.`,
+          'Do not answer with prose or JSON instead of the tool call. If the tool is unavailable, say exactly which tool is unavailable and stop.',
+        ].join('\n'),
+        promptMode: 'minimal',
+        deliver: false,
+        toolsAlsoAllow: [resultToolName],
+      });
+      if (!launched?.runId) return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_RUN_NOT_STARTED' };
+      recoveryRunId = launched.runId;
+      this.recoveryRuns.set(handle.externalId, recoveryRunId);
+    }
+
+    const observed = await this.subagent.waitForRun({ runId: recoveryRunId, timeoutMs: this.pollTimeoutMs });
+    const status = String(observed?.status ?? 'pending');
+    if (status === 'pending' || status === 'timeout') return { state: 'RUNNING', recoveryRunId };
+    if (status === 'error') {
+      return {
+        state: 'FAILED',
+        failure: `ROLE_RESULT_RECOVERY_FAILED:${String(observed?.error ?? observed?.stopReason ?? 'OPENCLAW_RUN_FAILED')}`,
+        recoveryRunId,
+      };
+    }
+    if (status !== 'ok') return { state: 'FAILED', failure: `ROLE_RESULT_RECOVERY_UNKNOWN_STATUS:${status}`, recoveryRunId };
+    return { state: 'COMPLETED', recoveryRunId, terminalReply: extractText(observed?.terminalReply) };
+  }
+
+  getAttemptRuntimeBinding(attemptId: string) {
+    const externalId = this.attempts.get(attemptId);
+    if (!externalId) return null;
+    const binding = this.bindings.get(externalId);
+    if (!binding) return null;
+    const runtime = this.runtimes.get(externalId);
+    return {
+      ...binding,
+      externalId,
+      harness: runtime?.harness,
+      provider: runtime?.provider,
+      model: runtime?.model,
+    };
+  }
+
+  async terminateAttempt(attemptId: string) {
+    const externalId = this.attempts.get(attemptId);
+    if (!externalId) return { requested: false, reason: 'ATTEMPT_NOT_BOUND' };
+    if (!this.cancelRun) return { requested: false, reason: 'CANCEL_UNAVAILABLE' };
+    this.attempts.delete(attemptId);
+    await this.cancelRun(externalId);
+    return { requested: true, externalId };
+  }
+
   async cancel(handle: { externalId: string }) {
     if (this.cancelRun) await this.cancelRun(handle.externalId);
+    const recoveryRunId = this.recoveryRuns.get(handle.externalId);
+    if (recoveryRunId && this.cancelRun) await this.cancelRun(recoveryRunId);
     return { state: 'CANCELLED' };
   }
 }

@@ -7,7 +7,8 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "test:llm": "node --test test/live-llm.test.js"
+    "test": "node --test test/v2-minimal-runtime.test.js test/git-source-control-finalizer.test.js test/openclaw-project-manager.test.js test/role-spec-prompt-renderer.test.js test/art-capabilities.test.js",
+    "test:llm": "node --test test/live-llm.test.js",
+    "test:legacy": "node --test test/*.test.js"
   }
 }

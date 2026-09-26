@@ -1,0 +1,230 @@
+function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
+  if (!attemptId) return null;
+  return [...(task?.history ?? [])].reverse().find(
+    entry => entry?.type === 'ROLE_RESULT'
+      && entry?.source === 'role_result_tool'
+      && entry?.attemptId === attemptId
+      && entry?.role === task.stage
+  ) ?? null;
+}
+
+function systemFailureCount(task) {
+  let count = 0;
+  const history = task.history ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_RECOVERY') break;
+    if (entry?.type === 'SYSTEM_INTERRUPTION') count += 1;
+  }
+  return count;
+}
+
+export class V2Supervisor {
+  constructor({ store, providers, resources, incidentSink = null }) {
+    this.store = store;
+    this.providers = providers;
+    this.resources = resources;
+    this.incidentSink = incidentSink;
+  }
+
+  recover(projectId) {
+    this.resources.recover(this.store.listTasks(projectId));
+  }
+
+  async #incident(task, failure) {
+    const incident = {
+      type: 'SYSTEM_INCIDENT',
+      projectId: task.projectId,
+      taskId: task.id,
+      provider: task.execution?.provider ?? null,
+      externalId: task.execution?.externalId ?? null,
+      failure,
+      provenance: structuredClone(task.execution?.provenance ?? null),
+      protocolVersion: task.execution?.protocolVersion ?? null,
+      projectVersion: task.execution?.projectVersion ?? null,
+      at: new Date().toISOString(),
+    };
+    if (this.incidentSink?.record) await this.incidentSink.record(incident);
+    else if (typeof this.store.recordIncident === 'function') this.store.recordIncident(incident);
+    return incident;
+  }
+
+  #acceptSubmittedResult(task, submitted) {
+    this.store.updateTask(task.id, task.version, {
+      state: 'RESULT_READY',
+      execution: null,
+      artifacts: [...(task.artifacts ?? []), ...(submitted.artifacts ?? [])],
+    });
+    this.resources.release(task.id);
+  }
+
+  async audit(projectId) {
+    const incidents = [];
+    for (const task of this.store.listTasks(projectId)) {
+      if (task.state !== 'WORKING') continue;
+      const execution = task.execution;
+
+      if (!execution?.provider || !execution?.externalId) {
+        const incident = await this.#incident(task, 'MISSING_EXECUTION_HANDLE');
+        incidents.push(incident);
+        const current = this.store.getTask(task.id);
+        this.store.appendTaskHistory(task.id, current.version, {
+          type: 'SYSTEM_INTERRUPTION',
+          role: task.stage,
+          failure: incident.failure,
+          provenance: structuredClone(execution?.provenance ?? null),
+          protocolVersion: execution?.protocolVersion ?? null,
+          projectVersion: execution?.projectVersion ?? null,
+          consumeAttempt: false,
+          uncertainStart: Boolean(task.execution?.attemptId),
+          at: incident.at,
+        }, {
+          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+          execution: null,
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
+      const provider = this.providers.get(execution.provider);
+      let status;
+      try {
+        status = await provider.poll({ externalId: execution.externalId, taskId: task.id });
+      } catch (error) {
+        status = { state: 'LOST', failure: error?.message ?? String(error) };
+      }
+
+      if (status?.state === 'RUNNING' || status?.state === 'QUEUED') continue;
+
+      let current = this.store.getTask(task.id);
+
+      const postPollSubmittedResult = submittedRoleToolResult(current, execution.attemptId);
+      if (postPollSubmittedResult) {
+        this.#acceptSubmittedResult(current, postPollSubmittedResult);
+        continue;
+      }
+
+      if (status?.state === 'COMPLETED' && execution.completionProtocol === 'role_result_tool') {
+        const fallback = status?.roleResultFallback;
+        if (
+          fallback?.source === 'terminal_json_result_tool_unavailable'
+          && fallback?.attemptId === execution.attemptId
+          && fallback?.role === task.stage
+          && typeof fallback?.outcome === 'string'
+        ) {
+          this.store.appendTaskHistory(task.id, current.version, {
+            type: 'ROLE_RESULT',
+            role: task.stage,
+            outcome: fallback.outcome,
+            summary: fallback.summary ?? '',
+            keyPoints: Array.isArray(fallback.keyPoints) ? fallback.keyPoints : [],
+            artifacts: Array.isArray(fallback.artifacts) ? fallback.artifacts : [],
+            result: fallback.result ?? null,
+            attemptId: execution.attemptId,
+            source: 'terminal_json_compatibility',
+            compatibility: {
+              reason: 'RESULT_TOOL_UNAVAILABLE',
+              runtime: fallback.runtime ?? null,
+              raw: fallback.raw ?? null,
+            },
+            provenance: structuredClone(execution?.provenance ?? null),
+            protocolVersion: execution.protocolVersion ?? 'role-result-v2',
+            projectVersion: execution?.projectVersion ?? null,
+            completedAt: new Date().toISOString(),
+          }, {
+            state: 'RESULT_READY',
+            execution: null,
+            artifacts: [...(current.artifacts ?? []), ...(Array.isArray(fallback.artifacts) ? fallback.artifacts : [])],
+          });
+          this.resources.release(task.id);
+          continue;
+        }
+
+        // Do not redo completed role work just because the model omitted its
+        // mandatory final result-tool call. Ask the same session to submit the
+        // already-completed result once; the provider keeps that recovery run
+        // stable across supervisor audits.
+        if (typeof provider.recoverRoleResult === 'function') {
+          let recovery;
+          try {
+            recovery = await provider.recoverRoleResult(
+              { externalId: execution.externalId, taskId: task.id },
+              { attemptId: execution.attemptId, role: task.stage },
+            );
+          } catch (error) {
+            recovery = { state: 'FAILED', failure: error?.message ?? String(error) };
+          }
+          if (recovery?.state === 'RUNNING' || recovery?.state === 'QUEUED') continue;
+
+          current = this.store.getTask(task.id);
+          const recoveredResult = submittedRoleToolResult(current, execution.attemptId);
+          if (recoveredResult) {
+            this.#acceptSubmittedResult(current, recoveredResult);
+            continue;
+          }
+
+          if (recovery?.state === 'FAILED') {
+            status = { state: 'FAILED', failure: recovery.failure ?? 'ROLE_RESULT_RECOVERY_FAILED' };
+          }
+        }
+
+        const failure = status?.state === 'FAILED'
+          ? status.failure ?? 'ROLE_RESULT_RECOVERY_FAILED'
+          : 'MISSING_ROLE_RESULT_TOOL';
+        const incident = await this.#incident(task, failure);
+        incidents.push(incident);
+        this.store.appendTaskHistory(task.id, current.version, {
+          type: 'SYSTEM_INTERRUPTION',
+          role: task.stage,
+          failure,
+          provenance: structuredClone(execution?.provenance ?? null),
+          protocolVersion: execution.protocolVersion ?? 'role-result-v2',
+          projectVersion: execution?.projectVersion ?? null,
+          at: incident.at,
+        }, {
+          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+          execution: null,
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
+      if (status?.state === 'COMPLETED') {
+        this.store.appendTaskHistory(task.id, current.version, {
+          type: 'ROLE_RESULT',
+          role: task.stage,
+          outcome: status.outcome ?? 'PASS',
+          summary: status.summary ?? '',
+          keyPoints: status.keyPoints ?? [],
+          artifacts: status.artifacts ?? [],
+          result: status.result ?? null,
+          completedAt: new Date().toISOString(),
+        }, {
+          state: 'RESULT_READY',
+          execution: null,
+          artifacts: [...(current.artifacts ?? []), ...(status.artifacts ?? [])],
+        });
+        this.resources.release(task.id);
+        continue;
+      }
+
+      const failure = status?.failure ?? status?.state ?? 'EXECUTION_LOST';
+      const incident = await this.#incident(task, failure);
+      incidents.push(incident);
+      this.store.appendTaskHistory(task.id, current.version, {
+        type: 'SYSTEM_INTERRUPTION',
+        role: task.stage,
+        failure,
+        provenance: structuredClone(execution?.provenance ?? null),
+        protocolVersion: execution?.protocolVersion ?? null,
+        projectVersion: execution?.projectVersion ?? null,
+        at: incident.at,
+      }, {
+        state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+    }
+    return { incidents };
+  }
+}
