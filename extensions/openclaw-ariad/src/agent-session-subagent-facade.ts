@@ -27,10 +27,15 @@ export function createAgentSessionSubagentFacade(api: any, options: { agentId: s
     const existing = api.runtime.agent.session.getSessionEntry?.({ agentId, sessionKey });
     let sessionId = existing?.sessionId as string | undefined;
     if (!sessionId) {
+      // OpenClaw's canonical session creator requires initialEntry even when the
+      // plugin does not need to seed any trusted harness/backend metadata.
+      // Keep it deliberately empty: Ariad wants an ordinary host-agent session,
+      // not a plugin-owned harness/CLI/ACP session.
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg,
         key: sessionKey,
         agentId,
+        initialEntry: {},
         ...(typeof input.cwd === 'string' && input.cwd ? { spawnedCwd: input.cwd } : {}),
         displayName: `Ariad worker ${sessionKey.split(':').at(-1) ?? runId}`,
       });
