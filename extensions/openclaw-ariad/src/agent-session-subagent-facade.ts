@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 type Pending = {
   status: 'pending' | 'ok' | 'error';
@@ -24,24 +24,14 @@ export function createAgentSessionSubagentFacade(api: any, options: { agentId: s
     const sessionKey = typeof input.sessionKey === 'string' && input.sessionKey
       ? input.sessionKey.replace(':subagent:', ':ariad-session:')
       : `agent:${agentId}:ariad-session:${runId}`;
+    // Do NOT call plugin createSessionEntry() here. That API creates a
+    // plugin-owned harness/CLI/ACP session and therefore requires an explicit
+    // runtime owner. Ariad wants a normal host-agent session. runEmbeddedAgent
+    // is the supported neutral entry point for that path.
     const existing = api.runtime.agent.session.getSessionEntry?.({ agentId, sessionKey });
-    let sessionId = existing?.sessionId as string | undefined;
-    if (!sessionId) {
-      // OpenClaw's canonical session creator requires initialEntry even when the
-      // plugin does not need to seed any trusted harness/backend metadata.
-      // Keep it deliberately empty: Ariad wants an ordinary host-agent session,
-      // not a plugin-owned harness/CLI/ACP session.
-      const created = await api.runtime.agent.session.createSessionEntry({
-        cfg,
-        key: sessionKey,
-        agentId,
-        initialEntry: {},
-        ...(typeof input.cwd === 'string' && input.cwd ? { spawnedCwd: input.cwd } : {}),
-        displayName: `Ariad worker ${sessionKey.split(':').at(-1) ?? runId}`,
-      });
-      const entry = created?.entry ?? created;
-      sessionId = typeof entry?.sessionId === 'string' && entry.sessionId ? entry.sessionId : `ariad-${runId}`;
-    }
+    const sessionId = typeof existing?.sessionId === 'string' && existing.sessionId
+      ? existing.sessionId
+      : `ariad-${createHash('sha1').update(sessionKey).digest('hex').slice(0, 24)}`;
     const storePath = api.runtime.agent.session.resolveStorePath?.(cfg?.session?.store, { agentId });
     const controller = new AbortController();
     const state: Pending = { status: 'pending', controller };
@@ -55,6 +45,7 @@ export function createAgentSessionSubagentFacade(api: any, options: { agentId: s
       : api.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = api.runtime.agent.resolveAgentDir?.(cfg, agentId);
 
+    api.logger?.info?.(`Ariad agent-session runEmbeddedAgent start runId=${runId} sessionKey=${sessionKey} sessionId=${sessionId}`);
     void api.runtime.agent.runEmbeddedAgent({
       sessionId,
       sessionKey,
