@@ -32,7 +32,6 @@ export function createAgentSessionSubagentFacade(api: any, options: { agentId: s
     const sessionId = typeof existing?.sessionId === 'string' && existing.sessionId
       ? existing.sessionId
       : `ariad-${createHash('sha1').update(sessionKey).digest('hex').slice(0, 24)}`;
-    const storePath = api.runtime.agent.session.resolveStorePath?.(cfg?.session?.store, { agentId });
     const controller = new AbortController();
     const state: Pending = { status: 'pending', controller };
     pending.set(runId, state);
@@ -50,7 +49,6 @@ export function createAgentSessionSubagentFacade(api: any, options: { agentId: s
       sessionId,
       sessionKey,
       agentId,
-      ...(storePath ? { sessionTarget: { agentId, sessionId, sessionKey, storePath } } : {}),
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
       config: cfg,
