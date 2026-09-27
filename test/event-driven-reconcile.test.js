@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ReconcileTrigger } from '../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../src/v2/sqlite-reconcile-signal.js';
+import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 20));
 
@@ -83,6 +84,40 @@ test('sqlite reconcile generation survives reopen and increments atomically', ()
     assert.equal(signal.bump(), 3);
     signal.close();
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('durable v2 state mutations automatically advance reconcile generation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-reconcile-store-'));
+  const file = path.join(dir, 'state.db');
+  let store;
+  let signal;
+  try {
+    // The production runtime opens/migrates the v2 store before attaching the
+    // reconcile signal, so the signal can install triggers on durable tables.
+    store = new SQLiteV2Store(file);
+    signal = new SQLiteReconcileSignal(file);
+    const initial = signal.read();
+
+    store.createProject({ id: 'p1', spec: 'test', workspace: dir });
+    const afterCreate = signal.read();
+    assert.ok(afterCreate > initial);
+
+    const project = store.getProject('p1');
+    store.updateProject('p1', project.version, { deliveryEnabled: true });
+    const afterUpdate = signal.read();
+    assert.ok(afterUpdate > afterCreate);
+
+    store.enqueuePlanningRequest({
+      id: 'plan-1',
+      projectId: 'p1',
+      request: { purpose: 'INITIAL_PLAN' },
+    });
+    assert.ok(signal.read() > afterUpdate);
+  } finally {
+    signal?.close();
+    store?.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
