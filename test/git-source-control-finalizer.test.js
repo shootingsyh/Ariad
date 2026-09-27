@@ -39,12 +39,13 @@ test('git finalizer commits workspace changes without pushing when disabled', as
   }
 });
 
-test('state checkpoint commits only .ariad and leaves unfinished product changes uncommitted', async () => {
+test('runtime state checkpoint is a no-op and never creates Git history', async () => {
   const dir = initRepo();
   try {
     writeFileSync(join(dir, '.gitignore'), '.ariad/\n');
     git(dir, ['add', '.gitignore']);
     git(dir, ['-c', 'user.name=Seed', '-c', 'user.email=seed@localhost', 'commit', '-m', 'ignore runtime state']);
+    const before = git(dir, ['rev-parse', 'HEAD']);
     mkdirSync(join(dir, '.ariad', 'artifacts'), { recursive: true });
     writeFileSync(join(dir, '.ariad', 'project.json'), '{"id":"P1"}\n');
     writeFileSync(join(dir, '.ariad', 'state.db'), 'db-state');
@@ -55,21 +56,16 @@ test('state checkpoint commits only .ariad and leaves unfinished product changes
     const result = await finalizer.checkpointState({ label: 'P1 running' });
 
     assert.equal(result.ok, true);
-    assert.equal(result.committed, true);
-    assert.match(git(dir, ['log', '-1', '--pretty=%s']), /^Ariad state: P1 running$/);
-    const committed = git(dir, ['show', '--pretty=', '--name-only', 'HEAD']).split('\n').filter(Boolean).sort();
-    assert.deepEqual(committed, [
-      '.ariad/artifacts/shot.png',
-      '.ariad/project.json',
-      '.ariad/state.db',
-    ]);
+    assert.equal(result.committed, false);
+    assert.equal(result.commit, null);
+    assert.equal(git(dir, ['rev-parse', 'HEAD']), before);
     assert.match(git(dir, ['status', '--porcelain']), /\?\? feature\.txt/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('state checkpoint never tracks SQLite WAL or SHM sidecars', async () => {
+test('runtime checkpoint never tracks SQLite WAL or SHM sidecars', async () => {
   const dir = initRepo();
   try {
     mkdirSync(join(dir, '.ariad'), { recursive: true });
@@ -89,7 +85,7 @@ test('state checkpoint never tracks SQLite WAL or SHM sidecars', async () => {
   }
 });
 
-test('full finalize commits product changes and an open SQLite state snapshot after state checkpoints', async () => {
+test('full finalize commits product changes and an open SQLite state snapshot', async () => {
   const dir = initRepo();
   const ariad = join(dir, '.ariad');
   mkdirSync(ariad, { recursive: true });
@@ -110,6 +106,7 @@ test('full finalize commits product changes and an open SQLite state snapshot af
     const finalizer = new GitSourceControlFinalizer({ workspace: dir, push: false });
     const stateResult = await finalizer.checkpointState({ label: 'P1 running' });
     assert.equal(stateResult.ok, true);
+    assert.equal(stateResult.committed, false);
 
     writeFileSync(join(dir, 'feature.txt'), 'accepted product work\n');
     let task = store.getTask('T1');
