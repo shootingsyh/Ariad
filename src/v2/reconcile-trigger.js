@@ -1,4 +1,12 @@
 export class ReconcileTrigger {
+  /**
+   * @param {{
+   *   reconcile: () => Promise<void> | void,
+   *   readGeneration: () => Promise<unknown> | unknown,
+   *   safetyIntervalMs?: number,
+   *   onError?: ((error: unknown) => void) | null,
+   * }} options
+   */
   constructor({ reconcile, readGeneration, safetyIntervalMs = 10 * 60 * 1000, onError = null }) {
     if (typeof reconcile !== 'function') throw new Error('reconcile is required');
     if (typeof readGeneration !== 'function') throw new Error('readGeneration is required');
