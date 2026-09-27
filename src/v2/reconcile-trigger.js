@@ -1,3 +1,5 @@
+import { AsyncResource } from 'node:async_hooks';
+
 export class ReconcileTrigger {
   /**
    * @param {{
@@ -18,6 +20,10 @@ export class ReconcileTrigger {
     this.queued = false;
     this.stopped = true;
     this.safetyTimer = null;
+    // Created with the long-lived service, outside transient OpenClaw tool
+    // requests. Scheduling through this resource prevents AsyncLocalStorage
+    // request/model-override authority from leaking into background role runs.
+    this.backgroundResource = new AsyncResource('AriadReconcileTrigger');
   }
 
   start() {
@@ -34,11 +40,17 @@ export class ReconcileTrigger {
     this.safetyTimer = null;
   }
 
+  #scheduleDrain() {
+    this.backgroundResource.runInAsyncScope(() => {
+      queueMicrotask(() => void this.#drain());
+    });
+  }
+
   wake(_reason = 'event') {
     if (this.stopped) return;
     this.queued = true;
     if (this.running) return;
-    queueMicrotask(() => void this.#drain());
+    this.#scheduleDrain();
   }
 
   async #drain() {
@@ -59,7 +71,7 @@ export class ReconcileTrigger {
     } finally {
       this.running = false;
       // Covers a wake racing with the final loop condition/finally boundary.
-      if (!this.stopped && this.queued) queueMicrotask(() => void this.#drain());
+      if (!this.stopped && this.queued) this.#scheduleDrain();
     }
   }
 }
