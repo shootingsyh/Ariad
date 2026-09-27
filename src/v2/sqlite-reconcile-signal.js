@@ -25,7 +25,11 @@ export class SQLiteReconcileSignal {
   }
 
   #installMutationTriggers() {
+    const tableExists = this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
+    );
     for (const table of DURABLE_TABLES) {
+      if (!tableExists.get(table)) continue;
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const trigger = `ariad_reconcile_${table}_${operation.toLowerCase()}`;
         this.db.exec(`
