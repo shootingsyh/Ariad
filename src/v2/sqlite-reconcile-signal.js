@@ -47,6 +47,10 @@ export class SQLiteReconcileSignal {
   }
 
   read() {
+    // Stores may create/migrate durable tables after this signal is opened.
+    // Refreshing trigger installation here keeps upgrades zero-touch and makes
+    // every subsequent durable mutation visible to the generation counter.
+    this.#installMutationTriggers();
     return Number(this.db.prepare(
       'SELECT generation FROM v2_reconcile_signal WHERE singleton = 1'
     ).get().generation);
