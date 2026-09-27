@@ -42,8 +42,8 @@ export class GitSourceControlFinalizer {
   // history merely because durable scheduler/task state changed. Keep this
   // compatibility method as a no-op for older callers while feature/reviewer
   // finalization below remains the only place that creates product commits.
-  async checkpointState() {
-    return { ok: true, committed: false, pushed: false, commit: null };
+  async checkpointState(_options = {}) {
+    return { ok: true, committed: false, pushed: false, commit: null, failure: null };
   }
 
   async finalize({ taskId, strategyEpoch, devCycle }) {
