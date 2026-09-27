@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,25 @@ test('coalesces concurrent wakes into a single reconcile when durable generation
   trigger.wake();
   await flush();
   assert.equal(calls, 1);
+  trigger.stop();
+});
+
+test('wake from request context reconciles in the trigger background context', async () => {
+  const requestContext = new AsyncLocalStorage();
+  const seen = [];
+  const trigger = new ReconcileTrigger({
+    readGeneration: () => 0,
+    reconcile: async () => { seen.push(requestContext.getStore() ?? null); },
+    safetyIntervalMs: 60_000,
+  });
+  trigger.start();
+  await flush();
+  seen.length = 0;
+
+  requestContext.run({ modelOverride: 'caller-owned' }, () => trigger.wake('tool-request'));
+  await flush();
+
+  assert.deepEqual(seen, [null]);
   trigger.stop();
 });
 
