@@ -35,6 +35,9 @@ type ActiveRun = {
   binding?: Binding;
   runtime?: { harness?: string; provider?: string; model?: string };
   resultToolName?: string;
+  workspaceDir: string;
+  agentDir?: string;
+  timeoutMs?: number;
   controller: AbortController;
   state: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   result?: any;
@@ -84,6 +87,7 @@ export class OpenClawAgentSessionRuntimeAdapter {
   private readonly onSessionBound?: AgentSessionRuntimeOptions['onSessionBound'];
   private readonly runs = new Map<string, ActiveRun>();
   private readonly attempts = new Map<string, string>();
+  private readonly recoveryRuns = new Map<string, string>();
 
   constructor(options: AgentSessionRuntimeOptions) {
     if (!options?.agent?.runEmbeddedAgent) throw new Error('OpenClaw agent runtime is required');
@@ -132,6 +136,11 @@ export class OpenClawAgentSessionRuntimeAdapter {
     const resultToolName = typeof context.resultToolName === 'string' && context.resultToolName.trim() ? context.resultToolName.trim() : undefined;
     const session = this.resolveSession(sessionKey, requestedSessionId);
     const cfg = session.cfg;
+    const workspaceDir = workspace
+      ?? this.agent.resolveAgentWorkspaceDir?.(cfg, this.agentId)
+      ?? process.cwd();
+    const agentDir = this.agent.resolveAgentDir?.(cfg, this.agentId);
+    const timeoutMs = this.agent.resolveAgentTimeoutMs?.(cfg);
     const externalId = randomUUID();
     const controller = new AbortController();
     const active: ActiveRun = {
@@ -140,6 +149,9 @@ export class OpenClawAgentSessionRuntimeAdapter {
       sessionKey,
       binding,
       resultToolName,
+      workspaceDir,
+      ...(agentDir ? { agentDir } : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
       controller,
       state: 'RUNNING',
       runtime: { provider: selectedProvider, model: selectedModel },
@@ -149,12 +161,6 @@ export class OpenClawAgentSessionRuntimeAdapter {
       this.attempts.set(binding.attemptId, externalId);
       this.onSessionBound?.({ sessionKey, ...binding });
     }
-
-    const workspaceDir = workspace
-      ?? this.agent.resolveAgentWorkspaceDir?.(cfg, this.agentId)
-      ?? process.cwd();
-    const agentDir = this.agent.resolveAgentDir?.(cfg, this.agentId);
-    const timeoutMs = this.agent.resolveAgentTimeoutMs?.(cfg);
 
     void this.agent.runEmbeddedAgent({
       sessionId: session.sessionId,
@@ -229,10 +235,84 @@ export class OpenClawAgentSessionRuntimeAdapter {
     if (!active?.binding || active.binding.attemptId !== input.attemptId || active.binding.role !== input.role) {
       return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_BINDING_MISMATCH' };
     }
-    // Normal sessions retain the same session/tool environment. A later version
-    // can add an explicit continuation turn; for the first real-machine probe we
-    // fail closed so the supervisor retries the task as a fresh attempt.
-    return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_RETRY_REQUIRED' };
+    if (!active.resultToolName) {
+      return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_TOOL_UNAVAILABLE' };
+    }
+
+    let recoveryExternalId = this.recoveryRuns.get(handle.externalId);
+    if (!recoveryExternalId) {
+      recoveryExternalId = randomUUID();
+      const controller = new AbortController();
+      const recovery: ActiveRun = {
+        externalId: recoveryExternalId,
+        sessionId: active.sessionId,
+        sessionKey: active.sessionKey,
+        binding: active.binding,
+        resultToolName: active.resultToolName,
+        workspaceDir: active.workspaceDir,
+        ...(active.agentDir ? { agentDir: active.agentDir } : {}),
+        ...(active.timeoutMs ? { timeoutMs: active.timeoutMs } : {}),
+        controller,
+        state: 'RUNNING',
+        runtime: active.runtime ? { ...active.runtime } : undefined,
+      };
+      this.runs.set(recoveryExternalId, recovery);
+      this.recoveryRuns.set(handle.externalId, recoveryExternalId);
+
+      const cfg = this.config();
+      void this.agent.runEmbeddedAgent({
+        sessionId: recovery.sessionId,
+        sessionKey: recovery.sessionKey,
+        agentId: this.agentId,
+        workspaceDir: recovery.workspaceDir,
+        ...(recovery.agentDir ? { agentDir: recovery.agentDir } : {}),
+        config: cfg,
+        prompt: [
+          'ARIAD RESULT RECOVERY',
+          `Your work for attempt ${input.attemptId} is already complete, but Ariad did not receive the required structured result.`,
+          'Do not redo the task and do not change product files.',
+          `Use the existing session context and artifacts, then call ${active.resultToolName} exactly once.`,
+          `The attemptId MUST be exactly ${input.attemptId}.`,
+          'The accepted result tool call must be your final action. Do not answer with prose or terminal JSON instead.',
+        ].join('\n'),
+        ...(active.runtime?.provider ? { provider: active.runtime.provider } : {}),
+        ...(active.runtime?.model ? { model: active.runtime.model } : {}),
+        ...(recovery.timeoutMs ? { timeoutMs: recovery.timeoutMs } : {}),
+        runId: recoveryExternalId,
+        trigger: 'manual',
+        promptMode: 'minimal',
+        terminalReplyExpectation: 'optional',
+        runtimePluginToolGrant: { pluginId: this.pluginId, toolNames: [active.resultToolName] },
+        abortSignal: controller.signal,
+      }).then((result) => {
+        recovery.result = result;
+        recovery.state = 'COMPLETED';
+      }).catch((error) => {
+        recovery.error = error;
+        recovery.state = controller.signal.aborted ? 'CANCELLED' : 'FAILED';
+      });
+      return { state: 'RUNNING', recoveryRunId: recoveryExternalId };
+    }
+
+    const recovery = this.runs.get(recoveryExternalId);
+    if (!recovery) return { state: 'FAILED', failure: 'ROLE_RESULT_RECOVERY_RUN_NOT_FOUND' };
+    if (recovery.state === 'RUNNING') return { state: 'RUNNING', recoveryRunId: recoveryExternalId };
+    if (recovery.state === 'FAILED') {
+      return {
+        state: 'FAILED',
+        failure: `ROLE_RESULT_RECOVERY_FAILED:${recovery.error instanceof Error ? recovery.error.message : String(recovery.error)}`,
+        recoveryRunId: recoveryExternalId,
+      };
+    }
+    if (recovery.state === 'CANCELLED') {
+      // Accepted result-tool submission aborts the recovery turn deliberately.
+      return { state: 'COMPLETED', recoveryRunId: recoveryExternalId };
+    }
+    return {
+      state: 'COMPLETED',
+      recoveryRunId: recoveryExternalId,
+      terminalReply: extractText(recovery.result?.terminalReply ?? recovery.result),
+    };
   }
 
   getAttemptRuntimeBinding(attemptId: string) {
@@ -256,6 +336,8 @@ export class OpenClawAgentSessionRuntimeAdapter {
   async cancel(handle: { externalId: string }) {
     const active = this.runs.get(handle.externalId);
     if (active) active.controller.abort(new Error('ARIAD_CANCELLED'));
+    const recoveryExternalId = this.recoveryRuns.get(handle.externalId);
+    if (recoveryExternalId) this.runs.get(recoveryExternalId)?.controller.abort(new Error('ARIAD_CANCELLED'));
     return { state: 'CANCELLED' };
   }
 }
