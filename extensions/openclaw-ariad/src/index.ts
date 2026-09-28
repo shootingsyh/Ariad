@@ -106,11 +106,12 @@ const plugin = defineFeaturePlugin({
     });
     const readModelOverridePolicy = () => {
       const cfg = (api.runtime as any)?.config?.current?.() ?? {};
-      const subagent = cfg?.plugins?.entries?.ariad?.subagent ?? {};
+      const pluginConfig = cfg?.plugins?.entries?.ariad ?? {};
+      const policy = pluginConfig.roleExecution ?? pluginConfig.subagent ?? {};
       return {
-        allowModelOverride: subagent.allowModelOverride === true,
-        allowedModels: Array.isArray(subagent.allowedModels)
-          ? subagent.allowedModels.filter((value: unknown) => typeof value === 'string' && value.trim()).map((value: string) => value.trim())
+        allowModelOverride: policy.allowModelOverride === true,
+        allowedModels: Array.isArray(policy.allowedModels)
+          ? policy.allowedModels.filter((value: unknown) => typeof value === 'string' && value.trim()).map((value: string) => value.trim())
           : [],
       };
     };
@@ -119,14 +120,14 @@ const plugin = defineFeaturePlugin({
       const policy = readModelOverridePolicy();
       if (!policy.allowModelOverride) {
         throw new Error(
-          'Ariad explicit role models require plugins.entries.ariad.subagent.allowModelOverride=true in OpenClaw config'
+          'Ariad explicit role models require plugins.entries.ariad.roleExecution.allowModelOverride=true in OpenClaw config (legacy subagent config is still accepted)'
         );
       }
       if (roleModels && policy.allowedModels.length > 0 && !policy.allowedModels.includes('*')) {
         for (const [role, ref] of Object.entries(roleModels)) {
           if (!policy.allowedModels.includes(ref)) {
             throw new Error(
-              `Ariad model ${ref} for ${role} is not allowed by plugins.entries.ariad.subagent.allowedModels`
+              `Ariad model ${ref} for ${role} is not allowed by plugins.entries.ariad.roleExecution.allowedModels`
             );
           }
         }
