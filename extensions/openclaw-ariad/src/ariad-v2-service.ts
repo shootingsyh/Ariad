@@ -869,6 +869,5 @@ export class AriadV2Service {
           }
         }
       }
-    }
   }
 }
