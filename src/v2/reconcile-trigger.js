@@ -17,13 +17,11 @@ export class ReconcileTrigger {
     this.safetyIntervalMs = safetyIntervalMs;
     this.onError = onError;
     this.running = false;
+    this.scheduled = false;
     this.wakeGeneration = 0;
     this.processedWakeGeneration = 0;
     this.stopped = true;
     this.safetyTimer = null;
-    // Created with the long-lived service, outside transient OpenClaw tool
-    // requests. Scheduling through this resource prevents AsyncLocalStorage
-    // request/model-override authority from leaking into background role runs.
     this.backgroundResource = new AsyncResource('AriadReconcileTrigger');
   }
 
@@ -42,49 +40,49 @@ export class ReconcileTrigger {
   }
 
   #scheduleDrain() {
+    if (this.scheduled || this.running || this.stopped) return;
+    this.scheduled = true;
     this.backgroundResource.runInAsyncScope(() => {
-      setImmediate(() => void this.#drain());
+      setImmediate(() => {
+        this.scheduled = false;
+        void this.#drain();
+      });
     });
   }
 
   wake(_reason = 'event') {
     if (this.stopped) return;
-    // A monotonic in-memory wake generation makes coalescing explicit: many
-    // wakes may collapse into one pass, but a wake can never be erased by a
-    // racing drain boundary.
     this.wakeGeneration += 1;
-    if (this.running) return;
     this.#scheduleDrain();
   }
 
   async #drain() {
     if (this.running || this.stopped || this.processedWakeGeneration === this.wakeGeneration) return;
     this.running = true;
+    const targetWakeGeneration = this.wakeGeneration;
     try {
-      while (!this.stopped && this.processedWakeGeneration !== this.wakeGeneration) {
-        const targetWakeGeneration = this.wakeGeneration;
-        let before;
-        try {
-          before = await this.readGeneration();
-          await this.reconcile();
-          const after = await this.readGeneration();
-          this.processedWakeGeneration = targetWakeGeneration;
-          // Durable state may have changed without an explicit process-local
-          // wake (for example, a mutation made during reconciliation). Treat
-          // that as another generation of work.
-          if (after !== before && this.processedWakeGeneration === this.wakeGeneration) {
-            this.wakeGeneration += 1;
-          }
-        } catch (error) {
-          // Consume this wake so a persistent error does not hot-spin. The
-          // ten-minute safety wake (or any subsequent real event) retries it.
-          this.processedWakeGeneration = targetWakeGeneration;
-          this.onError?.(error);
-        }
+      const before = await this.readGeneration();
+      await this.reconcile();
+      const after = await this.readGeneration();
+      this.processedWakeGeneration = targetWakeGeneration;
+
+      // A durable mutation that happened during the pass counts as more work
+      // even if no explicit process-local wake accompanied it.
+      if (after !== before && this.processedWakeGeneration === this.wakeGeneration) {
+        this.wakeGeneration += 1;
       }
+    } catch (error) {
+      // Consume only the wake this pass attempted. A later real event or the
+      // safety wake can retry without turning a persistent error into a hot loop.
+      this.processedWakeGeneration = targetWakeGeneration;
+      this.onError?.(error);
     } finally {
       this.running = false;
-      if (!this.stopped && this.processedWakeGeneration !== this.wakeGeneration) this.#scheduleDrain();
+      // Yield between passes. This preserves single-flight/race safety without
+      // an unbounded synchronous drain loop if each reconcile mutates state.
+      if (!this.stopped && this.processedWakeGeneration !== this.wakeGeneration) {
+        this.#scheduleDrain();
+      }
     }
   }
 }
