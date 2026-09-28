@@ -142,6 +142,10 @@ try {
   await waitFor(() => providerALog.includes('ARIAD_FAKE_PROVIDER_READY A'), 'fake provider A');
   await waitFor(() => providerBLog.includes('ARIAD_FAKE_PROVIDER_READY B'), 'fake provider B');
   await waitFor(async () => (await fetch(`http://127.0.0.1:${gatewayPort}/readyz`)).ok, 'OpenClaw Gateway');
+  await waitFor(
+    () => gatewayLog.includes('Ariad execution mode: agent-session'),
+    'Ariad agent-session execution mode'
+  );
 
   const allRoleModels = Object.fromEntries(
     ['artist', 'developer', 'tester', 'reviewer', 'project_debugger', 'tech_lead', 'tech_lead_critic', 'pm']
@@ -204,6 +208,11 @@ try {
     () => providerBLog.includes('ARIAD_FAKE_MODEL provider=B model=role'),
     'explicit Ariad role model override',
     5_000
+  );
+  assert.match(
+    gatewayLog,
+    /Ariad agent-session bound sessionKey=agent:main:ariad:(?:attempt|persistent)-/,
+    'role execution must bind a first-class OpenClaw agent session'
   );
 
   const frontdeskIterate = spawnSync(openclaw, [
