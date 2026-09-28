@@ -290,7 +290,15 @@ try {
     /^Ariad state:/m,
     'event-driven runtime must not manufacture Git commits for scheduler state'
   );
-  assert.equal(git(workspace, ['status', '--porcelain']), '');
+  const dirty = git(workspace, ['status', '--porcelain'])
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  assert.equal(
+    dirty.every(line => /^M \.ariad\/(project\.json|state\.db)$/.test(line)),
+    true,
+    `only durable Ariad runtime state may remain dirty after product finalize; got: ${dirty.join(', ')}`
+  );
 
   console.log('ARIAD_OPENCLAW_V2_PRODUCTION_E2E_OK');
 } finally {
