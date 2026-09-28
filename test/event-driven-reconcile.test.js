@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ReconcileTrigger } from '../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../src/v2/sqlite-reconcile-signal.js';
+import { FileReconcileWake } from '../src/v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 20));
@@ -140,4 +141,20 @@ test('durable v2 state mutations automatically advance reconcile generation', ()
     store?.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('cross-process wake file notifies the sleeping scheduler owner', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-wake-file-'));
+  const wakeFile = join(root, 'reconcile.wake');
+  const ownerSignal = new FileReconcileWake(wakeFile);
+  const externalSignal = new FileReconcileWake(wakeFile);
+  let wakes = 0;
+  ownerSignal.start(() => { wakes += 1; });
+
+  externalSignal.emit('iterate');
+
+  await waitFor(() => wakes > 0);
+  ownerSignal.stop();
+  rmSync(root, { recursive: true, force: true });
 });
