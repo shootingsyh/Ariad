@@ -34,7 +34,7 @@ Installing or linking the plugin does **not** grant model-override authority aut
     "entries": {
       "ariad": {
         "enabled": true,
-        "roleExecution": {
+        "subagent": {
           "allowModelOverride": true,
           "allowedModels": [
             "llamacpp/qwen3.8-27b",
@@ -48,7 +48,7 @@ Installing or linking the plugin does **not** grant model-override authority aut
 }
 ```
 
-The former `subagent.allowModelOverride` / `subagent.allowedModels` fields are still accepted as a compatibility fallback, but `roleExecution` is the current configuration name.
+OpenClaw currently exposes model-override authorization for plugins under the `subagent` configuration namespace. Ariad 0.7.0 still uses that host policy namespace for authorization, but role execution itself runs as first-class agent sessions rather than subagents.
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
