@@ -15,6 +15,7 @@ import type { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { requireCompleteRoleModels } from '../runtime/role-models.js';
 import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
+import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 
 type ProjectManager = {
   list(): any[];
@@ -542,6 +543,7 @@ export class AriadV2Service {
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private readonly signals = new Map<string, SQLiteReconcileSignal>();
   private readonly trigger: ReconcileTrigger;
+  private readonly externalWake: FileReconcileWake | null;
 
   constructor({
     manager,
@@ -551,6 +553,7 @@ export class AriadV2Service {
     executionCapabilities = [],
     executionProvenance = {},
     onProjectEvent,
+    reconcileWakePath = null,
   }: {
     manager: ProjectManager;
     provider: OpenClawV2Provider;
@@ -559,6 +562,7 @@ export class AriadV2Service {
     executionCapabilities?: string[];
     executionProvenance?: Record<string, unknown>;
     onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
+    reconcileWakePath?: string | null;
   }) {
     this.manager = manager;
     this.provider = provider;
@@ -567,6 +571,13 @@ export class AriadV2Service {
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
     this.onProjectEvent = onProjectEvent;
+    this.externalWake = reconcileWakePath
+      ? new FileReconcileWake(reconcileWakePath, {
+          onError: (error: unknown) => this.logger?.warn?.(
+            `Ariad cross-process wake signal failed: ${error instanceof Error ? error.message : String(error)}`
+          ),
+        })
+      : null;
     this.trigger = new ReconcileTrigger({
       reconcile: () => this.reconcile(),
       readGeneration: () => this.readGeneration(),
@@ -597,15 +608,20 @@ export class AriadV2Service {
   }
 
   private wake(reason: string) {
-    this.trigger.wake(reason);
+    const acceptedLocally = this.trigger.wake(reason);
+    if (!acceptedLocally) this.externalWake?.emit(reason);
   }
 
   async start() {
+    this.externalWake?.start(() => {
+      this.trigger.wake('external-process');
+    });
     await this.reconcile();
     this.trigger.start();
   }
 
   async stop() {
+    this.externalWake?.stop();
     this.trigger.stop();
     for (const signal of this.signals.values()) signal.close();
     this.signals.clear();
