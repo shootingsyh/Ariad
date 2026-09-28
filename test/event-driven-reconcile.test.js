@@ -145,16 +145,17 @@ test('durable v2 state mutations automatically advance reconcile generation', ()
 
 
 test('cross-process wake file notifies the sleeping scheduler owner', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ariad-wake-file-'));
-  const wakeFile = join(root, 'reconcile.wake');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-wake-file-'));
+  const wakeFile = path.join(root, 'reconcile.wake');
   const ownerSignal = new FileReconcileWake(wakeFile);
   const externalSignal = new FileReconcileWake(wakeFile);
   let wakes = 0;
   ownerSignal.start(() => { wakes += 1; });
 
   externalSignal.emit('iterate');
+  for (let i = 0; i < 10 && wakes === 0; i += 1) await flush();
 
-  await waitFor(() => wakes > 0);
+  assert.ok(wakes > 0);
   ownerSignal.stop();
-  rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true });
 });
