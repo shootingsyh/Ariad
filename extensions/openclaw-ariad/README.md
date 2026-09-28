@@ -1,6 +1,6 @@
 # Ariad OpenClaw Plugin
 
-This package exposes one OpenClaw agent tool, `ariad_project`, for creating and managing isolated Ariad projects.
+This package exposes the `ariad_project` OpenClaw tool and hosts Ariad's V2 event-driven project runtime.
 
 ## Install for local development
 
@@ -14,18 +14,19 @@ npm run mcp:register
 openclaw gateway restart
 ```
 
-`mcp:register` writes `ariad-role-result` into OpenClaw's authoritative `mcp.servers` registry using an absolute path to the bundled stdio server, then probes it. This is required for Codex app-server runs: the plugin manifest declaration remains useful metadata, but Ariad does not rely on it as the runtime registration boundary. Re-run `npm run mcp:register` after moving/relinking the plugin so the absolute path stays current.\n\nAfter OpenClaw reloads the plugin, the model can call `ariad_project` with one of:
+`mcp:register` writes `ariad-role-result` into OpenClaw's authoritative `mcp.servers` registry using an absolute path to the bundled stdio server, then probes it. This remains required for Codex app-server compatibility. Re-run it after moving or relinking the plugin so the absolute path stays current.
 
-- `create` — create an isolated project folder
-- `list` — list Ariad projects
-- `status` — inspect one project's daemon state
-- `start` — launch that project's daemon process
-- `stop` — stop that project's daemon process
+## Runtime model
 
-## Per-role model overrides
+Ariad V2 uses one Gateway-owned event-driven scheduler. Durable execution state lives in each project's SQLite database. Ordinary mutations explicitly wake the scheduler; mutations originating in another OpenClaw process use a local file notification to wake the Gateway-owned scheduler. SQLite generation tracking prevents mutations that happen during reconcile from being lost. A 10-minute safety wake is retained as recovery insurance; there is no 250 ms polling loop.
 
-Installing or linking the plugin does **not** grant model-override authority automatically.
-Configure the Ariad plugin once in OpenClaw with the models it may dispatch:
+Ariad roles run as first-class OpenClaw agent sessions through `runEmbeddedAgent`, not through the old subagent execution path. Attempt-scoped roles receive isolated session keys. Roles with persistent session policy, such as PM, reuse a project-and-role session across attempts. Structured role-result tools are the authoritative completion signal. If a completed role misses its result submission, Ariad opens a recovery turn in the same session and asks only for the missing structured result instead of redoing the task.
+
+Runtime scheduler state is not checkpointed into Git. SQLite is the execution-history truth. Normal product source-control finalization still creates product commits when appropriate.
+
+## Per-role model policy
+
+Installing or linking the plugin does **not** grant model-override authority automatically. Configure the models Ariad may dispatch:
 
 ```json
 {
@@ -33,7 +34,7 @@ Configure the Ariad plugin once in OpenClaw with the models it may dispatch:
     "entries": {
       "ariad": {
         "enabled": true,
-        "subagent": {
+        "roleExecution": {
           "allowModelOverride": true,
           "allowedModels": [
             "llamacpp/qwen3.8-27b",
@@ -47,25 +48,18 @@ Configure the Ariad plugin once in OpenClaw with the models it may dispatch:
 }
 ```
 
-`ariad_project set_role_models` stores the project-specific role-to-model mapping.
-Every newly created Ariad project must start with a complete mapping for all Ariad roles. This applies to NEW projects, TAKEOVER creation, and direct adoption of an untracked repository. Existing projects may later change individual role mappings with `set_role_models`.
-The OpenClaw plugin policy above is separate: it is the host-level allowlist authorizing Ariad to use those model refs.
-## Isolation model
+The former `subagent.allowModelOverride` / `subagent.allowedModels` fields are still accepted as a compatibility fallback, but `roleExecution` is the current configuration name.
 
-The default root is `~/.openclaw/ariad/projects`. Each project owns a separate folder:
+`ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
-```text
-~/.openclaw/ariad/projects/<project-id>/
-  project.json
-  workspace/
-  .ariad/
-    state.db
-    daemon.pid
-    daemon.lock
-    daemon.heartbeat.json
-    daemon.log
-```
+## Project lifecycle
 
-Projects do not share workflow databases, pid files, locks, logs, or workspace paths. Running two projects concurrently is allowed. Ariad does not coordinate scheduling between projects in this version, so they may independently contend for host CPU/GPU resources.
+`ariad_project` supports:
 
-The current daemon is intentionally only a project-lifecycle shell: it owns project identity, heartbeat, process lifecycle, and the future state DB path. The next integration step is to host the durable GraphRunner/Coordinator stack inside this daemon.
+- `create`, `list`, `status`, `adopt`
+- `start`, `pause`, `resume`, `stop`
+- `iterate` for creating the next project version from an immutable completed-version snapshot
+- `set_role_models` and `models`
+- Frontdesk binding and human-decision actions
+
+Projects are isolated under `~/.openclaw/ariad/projects/<project-id>/` by default. The workspace owns its `.ariad/state.db`, project manifest, version snapshots, and product Git repository. Multiple projects may run concurrently; Ariad's resource pool and role scheduling determine dispatch rather than one daemon process per project.
