@@ -585,9 +585,6 @@ export class AriadV2Service {
       onError: (error: unknown) => this.logger?.error?.(
         `Ariad event-driven reconcile failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
       ),
-      onTrace: process.env.ARIAD_CI_RUNTIME_PROBE === '1'
-        ? (event: Record<string, unknown>) => this.logger?.warn?.(`ARIAD_SCHEDULER_TRACE ${JSON.stringify(event)}`)
-        : null,
     });
   }
 
@@ -665,34 +662,13 @@ export class AriadV2Service {
       });
       this.runtimes.set(current.id, runtime);
     }
-    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
-      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'before-begin', projectId: current.id })}`);
-    }
-    let result;
-    try {
-      result = runtime.beginIteration(request);
-      if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
-        this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'after-begin', projectId: current.id, result })}`);
-      }
-    } catch (error) {
-      this.logger?.error?.(
-        `ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'begin-error', projectId: current.id, error: error instanceof Error ? error.stack ?? error.message : String(error) })}`
-      );
-      throw error;
-    }
+    const result = runtime.beginIteration(request);
     // Do not dispatch role work synchronously from an operator/tool request.
     // OpenClaw request-scoped subagent runs inherit the caller's model-override
     // authority; Ariad role routing is plugin-owned background policy instead.
     // The background trigger will pick this durable planning intent up.
     this.wake('iterate');
-    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
-      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'after-wake', projectId: current.id })}`);
-    }
-    const response = { ...result, project: this.status(current.id) };
-    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
-      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'return', projectId: current.id, response })}`);
-    }
-    return response;
+    return { ...result, project: this.status(current.id) };
   }
 
   async ensureRunning(name: string) {
@@ -863,11 +839,7 @@ export class AriadV2Service {
     // ReconcileTrigger owns single-flight after startup. Do not add another
     // "already reconciling" guard here: a guard can turn a queued wake into a
     // successful no-op and lose durable work at the drain boundary.
-    const projects = this.manager.list();
-    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
-      this.logger?.warn?.(`ARIAD_RECONCILE_START ${JSON.stringify(projects.map(project => ({ id: project.id, desiredState: project.desiredState, executionState: project.executionState })))}`);
-    }
-    for (const project of projects) {
+    for (const project of this.manager.list()) {
         if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
@@ -913,6 +885,5 @@ export class AriadV2Service {
           }
         }
       }
-    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') this.logger?.warn?.('ARIAD_RECONCILE_END');
   }
 }
