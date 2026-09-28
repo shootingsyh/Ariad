@@ -284,6 +284,12 @@ try {
   );
 
   assert.notEqual(git(workspace, ['rev-list', '--count', 'HEAD']), '0');
+  const commitSubjects = git(workspace, ['log', '--format=%s']);
+  assert.doesNotMatch(
+    commitSubjects,
+    /^Ariad state:/m,
+    'event-driven runtime must not manufacture Git commits for scheduler state'
+  );
   assert.equal(git(workspace, ['status', '--porcelain']), '');
 
   console.log('ARIAD_OPENCLAW_V2_PRODUCTION_E2E_OK');
