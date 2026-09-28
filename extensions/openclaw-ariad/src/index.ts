@@ -260,6 +260,143 @@ const plugin = defineFeaturePlugin({
       },
     });
 
+    type ProjectGatewayInput = {
+      action?: string;
+      name?: string;
+      goal?: string;
+      request?: string;
+      mode?: 'NEW' | 'TAKEOVER';
+      sourcePath?: string;
+      decision?: string;
+      agentId?: string;
+      sessionKey?: string;
+      roleModels?: Record<string, string>;
+      requesterAgentId?: string | null;
+      requesterSessionKey?: string | null;
+    };
+
+    const executeProjectGatewayAction = async (input: ProjectGatewayInput) => {
+      const { action, name, goal, request, mode, sourcePath, decision, agentId, sessionKey, roleModels } = input;
+      if (!action) throw new Error('action is required');
+
+      if (action === 'list') return { action, projects: v2Service.list() };
+      if (!name) throw new Error(`name is required for action ${action}`);
+
+      if (action === 'create') {
+        const selectedRoleModels = requireCompleteRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
+        assertModelOverridePolicy(selectedRoleModels);
+        const project = manager.create(name, {
+          goal: goal ?? null,
+          mode: mode ?? null,
+          sourcePath: sourcePath ?? null,
+          roleModels: selectedRoleModels,
+          frontdeskBinding: input.requesterSessionKey ? {
+            host: 'openclaw',
+            agentId: input.requesterAgentId ?? null,
+            sessionKey: input.requesterSessionKey,
+          } : null,
+        });
+        // Creating durable project state can introduce bootstrap work.
+        await v2Service.ensureRunning(project.id);
+        return { action, project: v2Service.status(project.id), modelWarnings: [] };
+      }
+
+      if (action === 'set_role_models') {
+        const selectedRoleModels = normalizeRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
+        if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
+        assertModelOverridePolicy(selectedRoleModels);
+        const project = manager.setRoleModels(name, selectedRoleModels);
+        // A model-policy change may unblock previously durable work.
+        await v2Service.ensureRunning(name);
+        return { action, project, modelWarnings: [], catalogSource: 'runtime' };
+      }
+
+      if (action === 'status') return { action, project: v2Service.status(name) };
+
+      if (action === 'adopt') {
+        if (!sourcePath) throw new Error('sourcePath is required for action adopt');
+        const adoptRoleModels = roleModels == null
+          ? null
+          : requireCompleteRoleModels(roleModels as Record<string, string>);
+        if (adoptRoleModels) assertModelOverridePolicy(adoptRoleModels as Record<string, string>);
+        const project = (manager as any).adopt(name, sourcePath, { roleModels: adoptRoleModels });
+        await v2Service.ensureRunning(project.id);
+        return { action, project: v2Service.status(project.id) };
+      }
+
+      if (action === 'start' || action === 'resume') {
+        const project = manager.status(name);
+        const configuredRoleModels = requireCompleteRoleModels(
+          (project.roleModels ?? {}) as Record<string, string>
+        ) as Record<string, string>;
+        assertModelOverridePolicy(configuredRoleModels);
+        return {
+          action,
+          project: action === 'start'
+            ? await v2Service.ensureRunning(name)
+            : await v2Service.ensureResumed(name),
+          modelWarnings: [],
+        };
+      }
+
+      if (action === 'pause') return { action, project: await v2Service.ensurePaused(name) };
+      if (action === 'stop') return { action, project: await v2Service.ensureStopped(name) };
+
+      if (action === 'iterate') {
+        if (!request?.trim()) throw new Error('request is required for action iterate');
+        return { action, result: await v2Service.iterate(name, request) };
+      }
+
+      if (action === 'bind_frontdesk') {
+        const binding = {
+          host: 'openclaw',
+          agentId: agentId ?? input.requesterAgentId ?? null,
+          sessionKey: sessionKey ?? input.requesterSessionKey ?? null,
+        };
+        await projectAgentAdapter.bindProject(binding);
+        return { action, project: manager.bindFrontdesk(name, binding) };
+      }
+
+      if (action === 'unbind_frontdesk') return { action, project: manager.unbindFrontdesk(name) };
+
+      if (action === 'frontdesk_status') {
+        const project = manager.status(name);
+        return { action, projectId: project.id, frontdeskBinding: project.frontdeskBinding ?? null };
+      }
+
+      if (action === 'decide') {
+        if (!decision) throw new Error('decision is required for action decide');
+        const project = manager.status(name);
+        if (!project.frontdeskBinding) throw new Error('project has no bound Frontdesk');
+        return {
+          action,
+          result: await projectAgentAdapter.submitDecision({
+            binding: project.frontdeskBinding,
+            requester: {
+              agentId: input.requesterAgentId ?? null,
+              sessionKey: input.requesterSessionKey ?? null,
+            },
+            decision,
+            submit: (value) => v2Service.submitDecision(name, value),
+          }),
+        };
+      }
+
+      throw new Error(`unsupported Ariad action: ${action}`);
+    };
+
+    api.registerGatewayMethod('ariad.project', async ({ params, respond }) => {
+      try {
+        const result = await executeProjectGatewayAction((params ?? {}) as ProjectGatewayInput);
+        respond(true, result);
+      } catch (error) {
+        respond(false, undefined, {
+          code: 'UNAVAILABLE',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, { scope: 'operator.admin' });
+
     const terminateAcceptedAttempt = (attemptId: string) => {
       // Return the accepted tool result before aborting the exact run.
       // sessions.abort may wait for settlement, so never await it here.
@@ -479,14 +616,11 @@ const plugin = defineFeaturePlugin({
 
     return {
       async project(input, invocation) {
-        const { action, name, goal, request, mode, sourcePath, decision, agentId, sessionKey, roleModels } = input;
-        let details: unknown;
-        if (action === 'list') {
-          details = { action, projects: v2Service.list() };
-        } else if (action === 'models') {
+        const { action, name } = input;
+        if (action === 'models') {
           const models = listOpenClawModels();
           const project = name ? manager.status(name) : null;
-          details = {
+          const details = {
             action,
             requiredRoles: ARIAD_MODEL_ROLES,
             roleModels: project?.roleModels ?? null,
@@ -494,98 +628,15 @@ const plugin = defineFeaturePlugin({
             modelOverridePolicy: readModelOverridePolicy(),
             models,
           };
-        } else {
-          if (!name) throw new Error(`name is required for action ${action}`);
-          if (action === 'create') {
-            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-            const selectedRoleModels = requireCompleteRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
-            const modelValidation = validateSelectedRoleModels(selectedRoleModels, { refresh: true });
-            const project = manager.create(name, {
-              goal: goal ?? null,
-              mode: mode ?? null,
-              sourcePath: sourcePath ?? null,
-              roleModels: selectedRoleModels,
-              frontdeskBinding: {
-                host: 'openclaw',
-                agentId: toolContext?.agentId ?? null,
-                sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
-              },
-            });
-            details = { action, project: v2Service.status(project.id), modelWarnings: modelValidation.warnings };
-          } else if (action === 'set_role_models') {
-            const selectedRoleModels = normalizeRoleModels((roleModels ?? {}) as Record<string, string>) as Record<string, string>;
-            if (Object.keys(selectedRoleModels).length === 0) throw new Error('roleModels is required for set_role_models');
-            const modelValidation = validateSelectedRoleModels(selectedRoleModels, { refresh: true });
-            details = {
-              action,
-              project: manager.setRoleModels(name, selectedRoleModels),
-              modelWarnings: modelValidation.warnings,
-              catalogSource: modelValidation.catalog.source,
-            };
-          } else if (action === 'status') {
-            details = { action, project: v2Service.status(name) };
-          } else if (action === 'adopt') {
-            if (!sourcePath) throw new Error('sourcePath is required for action adopt');
-            const adoptRoleModels = roleModels == null
-              ? null
-              : requireCompleteRoleModels(roleModels as Record<string, string>);
-            if (adoptRoleModels) validateSelectedRoleModels(adoptRoleModels as Record<string, string>, { refresh: true });
-            details = { action, project: (manager as any).adopt(name, sourcePath, { roleModels: adoptRoleModels }) };
-          } else if (action === 'start' || action === 'resume') {
-            const project = manager.status(name);
-            const configuredRoleModels = requireCompleteRoleModels(
-              (project.roleModels ?? {}) as Record<string, string>
-            ) as Record<string, string>;
-            const modelValidation = validateSelectedRoleModels(configuredRoleModels);
-            details = {
-              action,
-              project: action === 'start'
-                ? await v2Service.ensureRunning(name)
-                : await v2Service.ensureResumed(name),
-              modelWarnings: modelValidation.warnings,
-            };
-          } else if (action === 'pause') {
-            details = { action, project: await v2Service.ensurePaused(name) };
-          } else if (action === 'iterate') {
-            if (!request?.trim()) throw new Error('request is required for action iterate');
-            details = { action, result: await v2Service.iterate(name, request) };
-          } else if (action === 'stop') {
-            details = { action, project: await v2Service.ensureStopped(name) };
-          } else if (action === 'bind_frontdesk') {
-            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-            const binding = {
-              host: 'openclaw',
-              agentId: agentId ?? toolContext?.agentId ?? null,
-              sessionKey: sessionKey ?? toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
-            };
-            await projectAgentAdapter.bindProject(binding);
-            details = { action, project: manager.bindFrontdesk(name, binding) };
-          } else if (action === 'unbind_frontdesk') {
-            details = { action, project: manager.unbindFrontdesk(name) };
-          } else if (action === 'frontdesk_status') {
-            const project = manager.status(name);
-            details = { action, projectId: project.id, frontdeskBinding: project.frontdeskBinding ?? null };
-          } else if (action === 'decide') {
-            if (!decision) throw new Error('decision is required for action decide');
-            const project = manager.status(name);
-            if (!project.frontdeskBinding) throw new Error('project has no bound Frontdesk');
-            const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
-            details = {
-              action,
-              result: await projectAgentAdapter.submitDecision({
-                binding: project.frontdeskBinding,
-                requester: {
-                  agentId: toolContext?.agentId ?? null,
-                  sessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
-                },
-                decision,
-                submit: (value) => v2Service.submitDecision(name, value),
-              }),
-            };
-          } else {
-            throw new Error(`unsupported Ariad action: ${action}`);
-          }
+          return { action, payloadJson: JSON.stringify(details) };
         }
+
+        const toolContext = invocation.source === 'tool' ? invocation.tool as any : null;
+        const details = await api.runtime.gateway.request('ariad.project', {
+          ...input,
+          requesterAgentId: toolContext?.agentId ?? null,
+          requesterSessionKey: toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
+        }, { timeoutMs: 35_000 });
         return { action, payloadJson: JSON.stringify(details) };
       },
     };
