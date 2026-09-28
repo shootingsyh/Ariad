@@ -649,13 +649,34 @@ export class AriadV2Service {
       });
       this.runtimes.set(current.id, runtime);
     }
-    const result = runtime.beginIteration(request);
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
+      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'before-begin', projectId: current.id })}`);
+    }
+    let result;
+    try {
+      result = runtime.beginIteration(request);
+      if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
+        this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'after-begin', projectId: current.id, result })}`);
+      }
+    } catch (error) {
+      this.logger?.error?.(
+        `ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'begin-error', projectId: current.id, error: error instanceof Error ? error.stack ?? error.message : String(error) })}`
+      );
+      throw error;
+    }
     // Do not dispatch role work synchronously from an operator/tool request.
     // OpenClaw request-scoped subagent runs inherit the caller's model-override
     // authority; Ariad role routing is plugin-owned background policy instead.
     // The background trigger will pick this durable planning intent up.
     this.wake('iterate');
-    return { ...result, project: this.status(current.id) };
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
+      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'after-wake', projectId: current.id })}`);
+    }
+    const response = { ...result, project: this.status(current.id) };
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
+      this.logger?.warn?.(`ARIAD_ITERATE_TRACE ${JSON.stringify({ phase: 'return', projectId: current.id, response })}`);
+    }
+    return response;
   }
 
   async ensureRunning(name: string) {
