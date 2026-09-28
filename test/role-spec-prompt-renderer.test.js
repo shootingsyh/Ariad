@@ -26,7 +26,9 @@ test('PromptRenderer combines role semantics with work context without substrate
   assert.equal(request.messages.length, 2);
   assert.equal(request.messages[0].role, 'system');
   assert.match(request.messages[0].content, /Ariad's reviewer role/);
+  assert.match(request.messages[0].content, /latest Tester result and its evidence artifacts/i);
   assert.match(request.messages[0].content, /Passing tests do not override a specification or contract violation/);
+  assert.match(request.messages[0].content, /FULL_MOCK/);
   assert.match(request.messages[0].content, /executionStatus=FAILED/);
   assert.match(request.messages[0].content, /PASS\|NOT_PASS/);
   assert.deepEqual(JSON.parse(request.messages[1].content), context);
@@ -55,6 +57,23 @@ test('PM prompt owns product intent and customer satisfaction review rather than
   assert.match(system, /speculative future needs/i);
   assert.match(system, /PLAN_REVISION_REQUIRED/);
   assert.doesNotMatch(system, /Developer\/Tester\/Reviewer are workflow stages, not PM tasks/);
+});
+
+test('Tester prompt requires durable evidence and explicit mock provenance', () => {
+  const system = new PromptRenderer().render('tester', {}).messages[0].content;
+  assert.match(system, /reproducible evidence artifacts/i);
+  assert.match(system, /REAL, PARTIAL_MOCK, FULL_MOCK, or STATIC/);
+  assert.match(system, /must not receive PASS solely from FULL_MOCK evidence/i);
+  assert.match(system, /recording or interaction trajectory/i);
+  assert.match(system, /evidenceArtifactRoot/);
+});
+
+test('Reviewer prompt judges Tester evidence instead of repeating the full test pass', () => {
+  const system = new PromptRenderer().render('reviewer', {}).messages[0].content;
+  assert.match(system, /latest Tester result and its evidence artifacts/i);
+  assert.match(system, /do not automatically repeat the Tester’s full verification work|do not automatically repeat the Tester's full verification work/i);
+  assert.match(system, /mocked boundary removes the behavior/i);
+  assert.match(system, /cannot be accepted solely from FULL_MOCK evidence/i);
 });
 
 test('Reviewer prompt explicitly denies source-control and mutation authority', () => {

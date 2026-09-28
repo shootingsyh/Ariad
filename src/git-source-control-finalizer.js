@@ -14,6 +14,22 @@ function failureMessage(error) {
   return stderr || stdout || error?.message || String(error);
 }
 
+function stageAriadState(workspace) {
+  try {
+    runGit(workspace, [
+      'add', '-f', '-A', '--', '.ariad',
+      ':(exclude).ariad/state.db-wal',
+      ':(exclude).ariad/state.db-shm',
+      ':(exclude).ariad/state.db-journal',
+    ]);
+    return ['.ariad'];
+  } catch (error) {
+    const message = failureMessage(error);
+    if (/pathspec .*\.ariad.* did not match/i.test(message)) return [];
+    throw error;
+  }
+}
+
 export class GitSourceControlFinalizer {
   constructor({ workspace, push = true, remote = 'origin' }) {
     if (!workspace) throw new Error('workspace is required');
@@ -22,10 +38,23 @@ export class GitSourceControlFinalizer {
     this.remote = remote;
   }
 
+  // Runtime truth lives in SQLite. Reconcile cycles must never manufacture Git
+  // history merely because durable scheduler/task state changed. Keep this
+  // compatibility method as a no-op for older callers while feature/reviewer
+  // finalization below remains the only place that creates product commits.
+  async checkpointState(_options = {}) {
+    return { ok: true, committed: false, pushed: false, commit: null, failure: null };
+  }
+
   async finalize({ taskId, strategyEpoch, devCycle }) {
     try {
       runGit(this.workspace, ['rev-parse', '--is-inside-work-tree']);
+      // Normal product staging respects repository ignore rules, including
+      // .ariad/.gitignore for transient SQLite sidecars.
       runGit(this.workspace, ['add', '-A']);
+      // Ariad durable state is first-class project data even if the product
+      // repository historically ignored .ariad/.
+      stageAriadState(this.workspace);
 
       const staged = runGit(this.workspace, ['diff', '--cached', '--name-only']);
       let committed = false;

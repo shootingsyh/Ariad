@@ -1,33 +1,258 @@
 import http from 'node:http';
 
 const port = Number(process.env.ARIAD_FAKE_PROVIDER_PORT || 18081);
+const providerLabel = process.env.ARIAD_FAKE_PROVIDER_LABEL || 'default';
+let frontdeskStartIssued = false;
+let frontdeskIterateIssued = false;
+
+function messageText(message) {
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) return message.content.map((part) => part?.text ?? '').join(' ');
+  return '';
+}
 
 function requestText(request) {
-  return (request.messages ?? []).map((message) => {
-    if (typeof message?.content === 'string') return message.content;
-    if (Array.isArray(message?.content)) return message.content.map((part) => part?.text ?? '').join(' ');
-    return '';
-  }).join('\n');
+  return (request.messages ?? []).map(messageText).join('\n');
+}
+
+function currentTurnStart(request) {
+  const messages = request.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (/ARIAD RUNTIME CONTEXT/.test(messageText(messages[i]))) return i;
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return i;
+  }
+  return 0;
+}
+
+function currentTurnMessages(request) {
+  return (request.messages ?? []).slice(currentTurnStart(request));
+}
+
+function currentPromptText(request) {
+  const messages = request.messages ?? [];
+  return messageText(messages[currentTurnStart(request)] ?? {});
 }
 
 function requestRole(request) {
-  return requestText(request).match(/Ariad(?:'s| the)?\s+(developer|tester|reviewer|project_debugger|tech_lead|pm|system_debugger|artist)\s+role/i)?.[1]?.toLowerCase() ?? null;
+  const text = currentPromptText(request);
+  if (/Ariad's Tech Lead/i.test(text) || /Tech Lead dependency pass/i.test(text) || /Tech Lead repair pass/i.test(text)) return 'tech_lead';
+  if (/delivery-plan critic/i.test(text)) return 'tech_lead_critic';
+  if (/PM reviewing a validated delivery plan/i.test(text)) return 'pm';
+  return text.match(/Ariad(?:'s| the)?\s+(developer|tester|reviewer|project_debugger|tech_lead|pm|system_debugger|artist)\s+role/i)?.[1]?.toLowerCase() ?? null;
 }
 
 function requestCycle(request) {
-  return Number(requestText(request).match(/"devCycle":(\d+)/)?.[1] ?? 0);
+  return Number(currentPromptText(request).match(/"devCycle":(\d+)/)?.[1] ?? 0);
 }
 
 function requestTaskId(request) {
-  return requestText(request).match(/"taskId":"([^"]+)"/)?.[1] ?? null;
+  return currentPromptText(request).match(/"taskId":"([^"]+)"/)?.[1] ?? null;
 }
 
 function hasWorkspace(request) {
-  return /"workspace":"[^"]+"/.test(requestText(request));
+  return /"workspace":"[^"]+"/.test(currentPromptText(request));
 }
 
 function hasToolResult(request) {
-  return (request.messages ?? []).some((message) => message?.role === 'tool');
+  return currentTurnMessages(request).some((message) => message?.role === 'tool');
+}
+
+const roleResultTools = {
+  artist: 'ariad_artist_result',
+  developer: 'ariad_developer_result',
+  tester: 'ariad_tester_result',
+  reviewer: 'ariad_reviewer_result',
+  project_debugger: 'ariad_project_debugger_result',
+  tech_lead: 'ariad_tech_lead_result',
+  tech_lead_critic: 'ariad_tech_lead_critic_result',
+  pm: 'ariad_pm_result',
+};
+
+function requestToolNames(request) {
+  return new Set((request.tools ?? []).map((tool) => tool?.function?.name).filter(Boolean));
+}
+
+function hasCalledTool(request, name) {
+  return currentTurnMessages(request).some((message) =>
+    (message?.tool_calls ?? []).some((call) => call?.function?.name === name)
+  );
+}
+
+function requestAttemptId(request) {
+  const text = currentPromptText(request);
+  return text.match(/Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT:\s*([^\n]+)/i)?.[1]?.trim()
+    ?? text.match(/"attemptId"\s*:\s*"([^"]+)"/)?.[1]
+    ?? null;
+}
+
+function requestCriterionIds(request) {
+  const text = currentPromptText(request);
+  const match = text.match(/"acceptanceCriterionIds":(\[[^\]]*\])/);
+  if (!match) return [];
+  try {
+    const ids = JSON.parse(match[1]);
+    return Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function roleResultToolCall(request) {
+  const role = requestRole(request);
+  const name = roleResultTools[role];
+  if (!name || !requestToolNames(request).has(name) || hasCalledTool(request, name)) return null;
+
+  const taskId = requestTaskId(request);
+  const cycle = requestCycle(request);
+  const hasPriorToolWork = hasToolResult(request);
+  const artifact = plannerArtifactTransport(request);
+  const v3Transport = plannerV3Transport(request);
+  const canSubmitWithoutWorkTool = ['tech_lead', 'tech_lead_critic', 'pm'].includes(role)
+    && !(role === 'tech_lead' && (artifact || v3Transport));
+  if (role === 'tech_lead' && v3Transport && !plannerV3Ready(request)) return null;
+  if (!hasPriorToolWork && !canSubmitWithoutWorkTool) return null;
+
+  let outcome = 'PASS';
+  if (role === 'tech_lead') outcome = 'PLANNED';
+  else if (role === 'tech_lead_critic') outcome = 'CLEAN';
+  else if (role === 'pm') outcome = 'PLAN_ACCEPTED';
+  else if (role === 'reviewer' && taskId === 'T1' && cycle === 1) outcome = 'NOT_PASS';
+
+  let result = { source: 'fake-provider', cycle, taskId };
+  if (role === 'tech_lead' && isV2PlanningPrompt(request)) result = fakeV2Plan();
+  if (role === 'tech_lead_critic') result = { issues: [], summary: 'No substantive issues.' };
+  if (role === 'tester') {
+    result = {
+      criteria: requestCriterionIds(request).map(criterionId => ({
+        criterionId,
+        status: 'SATISFIED',
+        evidenceType: 'runtime',
+        evidence: ['fake-provider verification'],
+        reason: 'Fake provider verified this criterion for E2E.',
+      })),
+    };
+  }
+  if (role === 'pm') result = { reason: 'Plan covers the requested outcome.', startDelivery: true, guidance: '', questions: [] };
+
+  return {
+    name,
+    arguments: {
+      attemptId: requestAttemptId(request),
+      outcome,
+      summary: `${role} submitted structured result`,
+      keyPoints: [],
+      artifacts: [],
+      result,
+    },
+  };
+}
+
+function plannerArtifactTransport(request) {
+  const text = requestText(request);
+  const path = text.match(/exact file path using the file write tool:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  const ref = text.match(/"artifactRef":"([^"]+)"/)?.[1] ?? null;
+  return path && ref ? { path, ref } : null;
+}
+
+function isIterationPlanning(request) {
+  return /"purpose"\s*:\s*"UPDATE_DELIVERY_PLAN"/.test(currentPromptText(request))
+    || /"sourceKind"\s*:\s*"iteration"/.test(currentPromptText(request));
+}
+
+function plannerV3Transport(request) {
+  if (!isIterationPlanning(request) || !/PLANNER ARTIFACT TRANSPORT/.test(currentPromptText(request))) return null;
+  const text = currentPromptText(request);
+  const diffPath = text.match(/Iteration feature-tree diff path:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  const milestoneDir = text.match(/Write milestone artifacts as flat JSON files in:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
+  if (!diffPath || !milestoneDir) return null;
+  const version = Number(text.match(/"targetVersion"\s*:\s*(\d+)/)?.[1]
+    ?? text.match(/"iteration"\s*:\s*(\d+)/)?.[1]
+    ?? 2);
+  return {
+    version,
+    files: [
+      {
+        path: diffPath,
+        content: {
+          version: 1,
+          targetVersion: version,
+          operations: [{
+            op: 'add',
+            node: {
+              id: 'health',
+              title: 'Health Product',
+              summary: 'Tiny health project with a revised follow-up iteration.',
+              parentId: null,
+            },
+            reason: 'Legacy v1 had no durable logical tree; reconstruct as the v2 living feature baseline.',
+          }],
+        },
+      },
+      {
+        path: `${milestoneDir}/M2.json`,
+        content: {
+          id: 'M2',
+          title: 'Health follow-up',
+          goal: 'Revalidate the revised health product end to end.',
+          parentId: null,
+          dependsOn: [],
+          logicalRefs: ['health'],
+          acceptanceCriteria: ['The revised health flow works end to end.'],
+          testStrategy: 'Run the health flow from the normal workspace entry point.',
+          tasks: [
+            {
+              id: 'T2',
+              title: 'Health follow-up implementation',
+              intent: 'Apply the requested follow-up improvement.',
+              dependsOn: [],
+              logicalRefs: ['health'],
+              acceptanceCriteria: ['health.txt remains healthy after the follow-up.'],
+              testStrategy: 'Read health.txt through the normal runtime flow.',
+            },
+            {
+              id: 'ROOT-V2',
+              title: 'Health v2 integrated regression',
+              intent: 'Run product-level regression for the revised health feature.',
+              dependsOn: ['T2'],
+              logicalRefs: ['health'],
+              acceptanceCriteria: ['The health product completes its end-to-end flow.'],
+              testStrategy: 'Execute the complete health E2E without bypassing steps.',
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function calledWritePaths(request) {
+  const paths = new Set();
+  for (const message of currentTurnMessages(request)) {
+    for (const call of message?.tool_calls ?? []) {
+      if (call?.function?.name !== 'write') continue;
+      try {
+        const args = JSON.parse(call.function.arguments ?? '{}');
+        if (typeof args.path === 'string') paths.add(args.path);
+      } catch {}
+    }
+  }
+  return paths;
+}
+
+function nextPlannerV3Write(request) {
+  const transport = plannerV3Transport(request);
+  if (!transport) return null;
+  const written = calledWritePaths(request);
+  return transport.files.find(file => !written.has(file.path)) ?? null;
+}
+
+function plannerV3Ready(request) {
+  const transport = plannerV3Transport(request);
+  if (!transport) return false;
+  const written = calledWritePaths(request);
+  return transport.files.every(file => written.has(file.path));
 }
 
 function isDiscovery(request) {
@@ -43,12 +268,65 @@ function isProjectExecutionRole(request) {
   return requestTaskId(request) === 'T1' && ['developer', 'tester', 'reviewer'].includes(role);
 }
 
+function frontdeskProjectToolCall(request) {
+  const text = requestText(request);
+  if (!requestToolNames(request).has('ariad_project')) return null;
+  if (text.includes('ARIAD_E2E_START_PROJECT v2-production') && !frontdeskStartIssued) {
+    frontdeskStartIssued = true;
+    console.log('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=start project=v2-production');
+    return { name: 'ariad_project', arguments: { action: 'start', name: 'v2-production' } };
+  }
+  if (text.includes('ARIAD_E2E_ITERATE_PROJECT v2-production') && !frontdeskIterateIssued) {
+    frontdeskIterateIssued = true;
+    console.log('ARIAD_FAKE_FRONTDESK_TOOL_CALL action=iterate project=v2-production');
+    return {
+      name: 'ariad_project',
+      arguments: {
+        action: 'iterate',
+        name: 'v2-production',
+        request: 'Add a small follow-up improvement and revalidate the completed project.',
+      },
+    };
+  }
+  return null;
+}
+
 function toolCallFor(request) {
-  if (!hasWorkspace(request) || hasToolResult(request)) return null;
+  const frontdesk = frontdeskProjectToolCall(request);
+  if (frontdesk) return frontdesk;
+  const roleResult = roleResultToolCall(request);
+  if (roleResult) return roleResult;
+  const v3Write = nextPlannerV3Write(request);
+  if (v3Write) {
+    return {
+      name: 'write',
+      arguments: {
+        path: v3Write.path,
+        content: JSON.stringify(v3Write.content, null, 2),
+      },
+    };
+  }
+  if (hasToolResult(request)) return null;
+  const artifact = plannerArtifactTransport(request);
+  if (artifact) {
+    return {
+      name: 'write',
+      arguments: {
+        path: artifact.path,
+        content: JSON.stringify(fakeV2Plan(), null, 2),
+      },
+    };
+  }
+  if (!hasWorkspace(request)) return null;
   const role = requestRole(request);
   const cycle = requestCycle(request);
   if (isDiscovery(request)) return { name: 'read', arguments: { path: 'README.md' } };
-  if (requestTaskId(request) !== 'T1') return null;
+  if (requestTaskId(request) !== 'T1') {
+    if (['developer', 'tester', 'reviewer'].includes(role)) {
+      return { name: 'read', arguments: { path: 'health.txt' } };
+    }
+    return null;
+  }
   if (role === 'developer') {
     return {
       name: 'write',
@@ -93,10 +371,98 @@ function fakeProjectModel({ existingProject }) {
   };
 }
 
+
+function fakeV2Plan() {
+  return {
+    version: 2,
+    projectSummary: 'Tiny health project',
+    rootTaskId: 'ROOT',
+    tasks: [
+      {
+        id: 'ROOT',
+        title: 'Health project complete',
+        intent: 'Integrate and verify the complete health project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['The health project is complete.'],
+        testStrategy: 'Run final integration verification.',
+      },
+      {
+        id: 'T1',
+        title: 'Health endpoint fixture',
+        intent: 'Create health.txt with a healthy status.',
+        parentId: 'ROOT',
+        dependsOn: [],
+        acceptanceCriteria: ['health.txt status=healthy'],
+        testStrategy: 'Read health.txt.',
+      },
+    ],
+    milestones: [
+      {
+        id: 'M1',
+        title: 'Healthy endpoint usable',
+        goal: 'The health endpoint fixture works as an integrated slice.',
+        parentId: null,
+        dependsOn: [],
+        logicalTaskIds: ['T1'],
+        acceptanceCriteria: ['The health slice is usable.'],
+        testStrategy: 'Read health.txt after T1 passes its normal test/review flow.',
+      },
+    ],
+  };
+}
+
+function isV2PlanningPrompt(request) {
+  const text = requestText(request);
+  return /delivery tree|dependency pass|repair pass|PLANNER ARTIFACT TRANSPORT/i.test(text)
+    && (/"version"\s*:\s*\{\s*"const"\s*:\s*2/.test(text) || /PLANNER ARTIFACT TRANSPORT/i.test(text));
+}
+
+function isV2CriticPrompt(request) {
+  return /delivery-plan critic/i.test(requestText(request));
+}
+
+function isV2PmPrompt(request) {
+  return /PM reviewing a validated delivery plan/i.test(requestText(request));
+}
+
+function logRoleResultToolResponse(request) {
+  const role = requestRole(request);
+  const name = roleResultTools[role];
+  if (!name || !hasCalledTool(request, name)) return;
+  const toolMessages = (request.messages ?? []).filter(message => message?.role === 'tool');
+  const latest = toolMessages.at(-1);
+  if (latest) {
+    console.log(`ARIAD_FAKE_ROLE_TOOL_RESULT role=${role} tool=${name} content=${JSON.stringify(latest.content)}`);
+  }
+}
+
 function roleReply(request) {
+  logRoleResultToolResponse(request);
   const cycle = requestCycle(request);
   const role = requestRole(request);
   const taskId = requestTaskId(request);
+
+  if (isV2PlanningPrompt(request)) {
+    const artifact = plannerArtifactTransport(request);
+    if (artifact) {
+      if (!hasToolResult(request)) {
+        return { executionStatus: 'FAILED', failure: 'FAKE_E2E_PLANNER_ARTIFACT_NOT_WRITTEN' };
+      }
+      return {
+        executionStatus: 'COMPLETED',
+        outcome: 'PLANNED',
+        result: { artifactRef: artifact.ref, summary: 'v2 delivery plan written' },
+      };
+    }
+    return { executionStatus: 'COMPLETED', outcome: 'PLANNED', result: fakeV2Plan() };
+  }
+  if (isV2CriticPrompt(request)) {
+    return { executionStatus: 'COMPLETED', outcome: 'CLEAN', result: { issues: [], summary: 'No substantive issues.' } };
+  }
+  if (isV2PmPrompt(request)) {
+    return { executionStatus: 'COMPLETED', outcome: 'PLAN_ACCEPTED', result: { reason: 'Plan covers the requested outcome.', startDelivery: true, guidance: '', questions: [] } };
+  }
 
   if (isDiscovery(request) && (!hasWorkspace(request) || !hasToolResult(request))) {
     return { executionStatus: 'FAILED', failure: !hasWorkspace(request) ? 'FAKE_E2E_WORKSPACE_MISSING' : 'FAKE_E2E_DISCOVERY_TOOL_RESULT_MISSING' };
@@ -113,11 +479,28 @@ function roleReply(request) {
     return {
       executionStatus: 'COMPLETED',
       outcome: isCurrentStateReview(request) ? 'CURRENT_STATE_ACKNOWLEDGED' : 'PLAN_ACCEPTED',
-      result: { source: 'fake-provider', reason: 'plan covers requested outcome', guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
+      result: { source: 'fake-provider', reason: 'plan covers requested outcome', startDelivery: true, guidance: '', customerOutcomeSummary: 'TL design is materialized into tasks.', questions: [] },
     };
   }
+  if (role === 'artist') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId } };
   if (role === 'developer') return { executionStatus: 'COMPLETED', outcome: 'IMPLEMENTATION_READY', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
-  if (role === 'tester') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
+  if (role === 'tester') return {
+    executionStatus: 'COMPLETED',
+    outcome: 'PASS',
+    result: {
+      criteria: requestCriterionIds(request).map(criterionId => ({
+        criterionId,
+        status: 'SATISFIED',
+        evidenceType: 'runtime',
+        evidence: ['fake-provider verification'],
+        reason: 'Fake provider verified this criterion for E2E.',
+      })),
+      source: 'fake-provider',
+      cycle,
+      taskId,
+      toolExecuted: hasToolResult(request),
+    },
+  };
   if (role === 'reviewer' && taskId === 'T1' && cycle === 1) return { executionStatus: 'COMPLETED', outcome: 'NOT_PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request), findings: ['needs semantic fix'] } };
   if (role === 'reviewer') return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider', cycle, taskId, toolExecuted: hasToolResult(request) } };
   return { executionStatus: 'COMPLETED', outcome: 'PASS', result: { source: 'fake-provider' } };
@@ -134,19 +517,26 @@ function streamChunk(res, value) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/v1/models') {
-    json(res, { object: 'list', data: [{ id: 'fake', object: 'model', owned_by: 'ariad-ci' }] });
+    json(res, {
+      object: 'list',
+      data: [
+        { id: 'default', object: 'model', owned_by: 'ariad-ci' },
+        { id: 'role', object: 'model', owned_by: 'ariad-ci' },
+      ],
+    });
     return;
   }
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
     let body = '';
     for await (const chunk of req) body += chunk;
     const request = JSON.parse(body || '{}');
+    console.log(`ARIAD_FAKE_MODEL provider=${providerLabel} model=${request.model ?? 'unknown'} role=${requestRole(request) ?? 'unknown'}`);
     const toolCall = toolCallFor(request);
     const id = `chatcmpl-${Date.now()}`;
 
     if (toolCall) {
       const callId = `call-${requestRole(request)}-${requestCycle(request)}-${Date.now()}`;
-      console.log(`ARIAD_FAKE_TOOL_CALL role=${requestRole(request)} cycle=${requestCycle(request)} tool=${toolCall.name}`);
+      console.log(`ARIAD_FAKE_TOOL_CALL provider=${providerLabel} role=${requestRole(request)} cycle=${requestCycle(request)} tool=${toolCall.name}`);
       const call = { index: 0, id: callId, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } };
       if (request.stream) {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -160,7 +550,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const reply = JSON.stringify(roleReply(request));
+    const role = requestRole(request);
+    const resultToolName = roleResultTools[role];
+    const reply = resultToolName && hasCalledTool(request, resultToolName)
+      ? '结构化结果已经通过 Ariad result tool 提交；这段自然语言只是结束语。'
+      : JSON.stringify(roleReply(request));
     if (request.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       streamChunk(res, { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'fake', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] });
@@ -176,5 +570,5 @@ const server = http.createServer(async (req, res) => {
   res.end('not found');
 });
 
-server.listen(port, '127.0.0.1', () => console.log(`ARIAD_FAKE_PROVIDER_READY ${port}`));
+server.listen(port, '127.0.0.1', () => console.log(`ARIAD_FAKE_PROVIDER_READY ${providerLabel} ${port}`));
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));
