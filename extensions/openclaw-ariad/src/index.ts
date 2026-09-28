@@ -19,7 +19,7 @@ import {
 } from '../runtime/role-models.js';
 import { contract } from './contract.js';
 import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
-import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
+import { OpenClawAgentSessionRuntimeAdapter } from './openclaw-agent-session-runtime-adapter.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
 import { detectExecutionCapabilities } from '../runtime/execution-capabilities.js';
@@ -87,13 +87,12 @@ const plugin = defineFeaturePlugin({
       models: any[];
       error: string | null;
     } = { refreshedAt: null, source: 'none', models: [], error: null };
-    const runtimeAdapter = new OpenClawRuntimeAdapter({
-      subagent: api.runtime.subagent,
+    const runtimeAdapter = new OpenClawAgentSessionRuntimeAdapter({
+      agent: api.runtime.agent,
+      config: () => (api.runtime as any)?.config?.current?.() ?? {},
+      pluginId: 'ariad',
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
-      cancelRun: async (runId) => {
-        await api.runtime.gateway.request('sessions.abort', { runId });
-      },
     });
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
