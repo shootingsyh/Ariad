@@ -37,6 +37,7 @@ export class ReconcileTrigger {
   }
 
   stop() {
+    this.onTrace?.({ type: 'stop', running: this.running, scheduled: this.scheduled, wakeGeneration: this.wakeGeneration, processedWakeGeneration: this.processedWakeGeneration });
     this.stopped = true;
     if (this.safetyTimer) clearInterval(this.safetyTimer);
     this.safetyTimer = null;
