@@ -330,7 +330,11 @@ export class OpenClawAgentSessionRuntimeAdapter {
     if (!active) return { requested: false, reason: 'RUN_NOT_BOUND' };
     this.attempts.delete(attemptId);
     active.controller.abort(new Error('ARIAD_ROLE_RESULT_ACCEPTED'));
-    return { requested: true, externalId };
+    const recoveryExternalId = this.recoveryRuns.get(externalId);
+    if (recoveryExternalId) {
+      this.runs.get(recoveryExternalId)?.controller.abort(new Error('ARIAD_ROLE_RESULT_ACCEPTED'));
+    }
+    return { requested: true, externalId, recoveryExternalId: recoveryExternalId ?? null };
   }
 
   async cancel(handle: { externalId: string }) {
