@@ -55,10 +55,11 @@ export class ReconcileTrigger {
   }
 
   wake(_reason = 'event') {
-    if (this.stopped) return;
+    if (this.stopped) return false;
     this.wakeGeneration += 1;
     this.onTrace?.({ type: 'wake', reason: _reason, wakeGeneration: this.wakeGeneration, processedWakeGeneration: this.processedWakeGeneration, running: this.running, scheduled: this.scheduled });
     this.#scheduleDrain();
+    return true;
   }
 
   async #drain() {
