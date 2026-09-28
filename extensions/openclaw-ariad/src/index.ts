@@ -235,6 +235,7 @@ const plugin = defineFeaturePlugin({
       logger: api.logger,
       executionCapabilities,
       executionProvenance,
+      reconcileWakePath: join(projectsRoot, '.runtime', 'reconcile.wake'),
       onProjectEvent: async (project, type) => {
         if (!project.frontdeskBinding) return;
         try {
