@@ -46,7 +46,7 @@ const config = {
     entries: {
       ariad: {
         enabled: true,
-        subagent: {
+        roleExecution: {
           allowModelOverride: true,
           allowedModels: ['fakeb/role'],
         },
