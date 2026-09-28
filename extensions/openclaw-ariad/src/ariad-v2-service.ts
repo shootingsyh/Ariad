@@ -41,6 +41,7 @@ class ProjectRuntime {
   private readonly executionProvenance: Record<string, unknown>;
   private readonly workspace: string;
   private readonly artifactRoot: string;
+  private readonly wakeScheduler: (reason: string) => void;
   private ticking = false;
   private requestSequence = 0;
 
@@ -52,6 +53,7 @@ class ProjectRuntime {
     logger,
     executionCapabilities = [],
     executionProvenance = {},
+    wakeScheduler = () => {},
   }: {
     manager: ProjectManager;
     project: any;
@@ -60,11 +62,13 @@ class ProjectRuntime {
     logger?: any;
     executionCapabilities?: string[];
     executionProvenance?: Record<string, unknown>;
+    wakeScheduler?: (reason: string) => void;
   }) {
     this.manager = manager;
     this.logger = logger;
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
+    this.wakeScheduler = wakeScheduler;
     this.projectId = project.id;
     this.workspace = project.workspace;
     this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
@@ -135,6 +139,10 @@ class ProjectRuntime {
           projectId: project.id,
           request,
         });
+        // A replan can be created by a transition inside the current reconcile.
+        // Durable generation protects races; this explicit wake ensures the
+        // sleeping process immediately runs the newly-created planning batch.
+        this.wakeScheduler('planning-enqueued');
       },
     });
     for (const [name, definition] of Object.entries(roleDefinitions)) {
@@ -635,6 +643,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(current.id, runtime);
     }
@@ -687,6 +696,7 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(current.id, runtime);
       }
@@ -738,6 +748,7 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(project.id, runtime);
       }
@@ -775,6 +786,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
     }
@@ -800,6 +812,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
     }
