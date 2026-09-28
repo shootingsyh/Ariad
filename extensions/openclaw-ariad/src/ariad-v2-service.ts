@@ -574,6 +574,9 @@ export class AriadV2Service {
       onError: (error: unknown) => this.logger?.error?.(
         `Ariad event-driven reconcile failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
       ),
+      onTrace: process.env.ARIAD_CI_RUNTIME_PROBE === '1'
+        ? (event: Record<string, unknown>) => this.logger?.warn?.(`ARIAD_SCHEDULER_TRACE ${JSON.stringify(event)}`)
+        : null,
     });
   }
 
@@ -823,7 +826,11 @@ export class AriadV2Service {
     // ReconcileTrigger owns single-flight after startup. Do not add another
     // "already reconciling" guard here: a guard can turn a queued wake into a
     // successful no-op and lose durable work at the drain boundary.
-    for (const project of this.manager.list()) {
+    const projects = this.manager.list();
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') {
+      this.logger?.warn?.(`ARIAD_RECONCILE_START ${JSON.stringify(projects.map(project => ({ id: project.id, desiredState: project.desiredState, executionState: project.executionState })))}`);
+    }
+    for (const project of projects) {
         if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
@@ -869,5 +876,6 @@ export class AriadV2Service {
           }
         }
       }
+    if (process.env.ARIAD_CI_RUNTIME_PROBE === '1') this.logger?.warn?.('ARIAD_RECONCILE_END');
   }
 }
