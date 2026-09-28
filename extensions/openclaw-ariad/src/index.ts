@@ -19,7 +19,7 @@ import {
 } from '../runtime/role-models.js';
 import { contract } from './contract.js';
 import { OpenClawProjectAgentAdapter } from './openclaw-project-agent-adapter.js';
-import { OpenClawRuntimeAdapter } from './openclaw-runtime-adapter.js';
+import { OpenClawAgentSessionRuntimeAdapter } from './openclaw-agent-session-runtime-adapter.js';
 import { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { AriadV2Service } from './ariad-v2-service.js';
 import { detectExecutionCapabilities } from '../runtime/execution-capabilities.js';
@@ -87,25 +87,31 @@ const plugin = defineFeaturePlugin({
       models: any[];
       error: string | null;
     } = { refreshedAt: null, source: 'none', models: [], error: null };
-    const runtimeAdapter = new OpenClawRuntimeAdapter({
-      subagent: api.runtime.subagent,
+    const runtimeAdapter = new OpenClawAgentSessionRuntimeAdapter({
+      agent: api.runtime.agent,
+      config: () => (api.runtime as any)?.config?.current?.() ?? {},
+      pluginId: 'ariad',
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
-      cancelRun: async (runId) => {
-        await api.runtime.gateway.request('sessions.abort', { runId });
-      },
+      onSessionBound: process.env.ARIAD_CI_RUNTIME_PROBE === '1'
+        ? (binding) => api.logger?.info?.(
+            `Ariad agent-session bound sessionKey=${binding.sessionKey} role=${binding.role} attemptId=${binding.attemptId}`
+          )
+        : undefined,
     });
+    api.logger?.info?.(`Ariad execution mode: agent-session (host agent ${process.env.ARIAD_OPENCLAW_AGENT_ID || 'main'})`);
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
       resolveModelRef: (projectId, role) => (manager.status(projectId).roleModels as Record<string, string | undefined>)?.[role] ?? null,
     });
     const readModelOverridePolicy = () => {
       const cfg = (api.runtime as any)?.config?.current?.() ?? {};
-      const subagent = cfg?.plugins?.entries?.ariad?.subagent ?? {};
+      const pluginConfig = cfg?.plugins?.entries?.ariad ?? {};
+      const policy = pluginConfig.subagent ?? {};
       return {
-        allowModelOverride: subagent.allowModelOverride === true,
-        allowedModels: Array.isArray(subagent.allowedModels)
-          ? subagent.allowedModels.filter((value: unknown) => typeof value === 'string' && value.trim()).map((value: string) => value.trim())
+        allowModelOverride: policy.allowModelOverride === true,
+        allowedModels: Array.isArray(policy.allowedModels)
+          ? policy.allowedModels.filter((value: unknown) => typeof value === 'string' && value.trim()).map((value: string) => value.trim())
           : [],
       };
     };
@@ -235,6 +241,7 @@ const plugin = defineFeaturePlugin({
       logger: api.logger,
       executionCapabilities,
       executionProvenance,
+      reconcileWakePath: join(projectsRoot, '.runtime', 'reconcile.wake'),
       onProjectEvent: async (project, type) => {
         if (!project.frontdeskBinding) return;
         try {

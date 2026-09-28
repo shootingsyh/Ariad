@@ -30,7 +30,6 @@ function stageAriadState(workspace) {
   }
 }
 
-
 export class GitSourceControlFinalizer {
   constructor({ workspace, push = true, remote = 'origin' }) {
     if (!workspace) throw new Error('workspace is required');
@@ -39,29 +38,12 @@ export class GitSourceControlFinalizer {
     this.remote = remote;
   }
 
-  async checkpointState({ label = 'runtime' } = {}) {
-    try {
-      runGit(this.workspace, ['rev-parse', '--is-inside-work-tree']);
-      const paths = stageAriadState(this.workspace);
-      if (paths.length === 0) return { ok: true, committed: false, pushed: false, commit: null };
-
-      const staged = runGit(this.workspace, ['diff', '--cached', '--name-only', '--', ...paths]);
-      let committed = false;
-      if (staged) {
-        runGit(this.workspace, [
-          '-c', 'user.name=Ariad',
-          '-c', 'user.email=ariad@localhost',
-          'commit', '--only', '-m', `Ariad state: ${label}`, '--', ...paths,
-        ]);
-        committed = true;
-      }
-
-      const commit = runGit(this.workspace, ['rev-parse', 'HEAD']);
-      if (this.push && committed) runGit(this.workspace, ['push', this.remote, 'HEAD']);
-      return { ok: true, commit, committed, pushed: this.push && committed };
-    } catch (error) {
-      return { ok: false, failure: failureMessage(error), pushed: false };
-    }
+  // Runtime truth lives in SQLite. Reconcile cycles must never manufacture Git
+  // history merely because durable scheduler/task state changed. Keep this
+  // compatibility method as a no-op for older callers while feature/reviewer
+  // finalization below remains the only place that creates product commits.
+  async checkpointState(_options = {}) {
+    return { ok: true, committed: false, pushed: false, commit: null, failure: null };
   }
 
   async finalize({ taskId, strategyEpoch, devCycle }) {

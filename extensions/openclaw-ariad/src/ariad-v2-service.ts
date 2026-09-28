@@ -13,6 +13,9 @@ import { aggregateTesterSubmission } from '../../../src/v2/acceptance.js';
 import { bootstrapProject } from '../../../src/v2/project-bootstrap.js';
 import type { OpenClawV2Provider } from './openclaw-v2-provider.js';
 import { requireCompleteRoleModels } from '../runtime/role-models.js';
+import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
+import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
+import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 
 type ProjectManager = {
   list(): any[];
@@ -39,6 +42,7 @@ class ProjectRuntime {
   private readonly executionProvenance: Record<string, unknown>;
   private readonly workspace: string;
   private readonly artifactRoot: string;
+  private readonly wakeScheduler: (reason: string) => void;
   private ticking = false;
   private requestSequence = 0;
 
@@ -50,6 +54,7 @@ class ProjectRuntime {
     logger,
     executionCapabilities = [],
     executionProvenance = {},
+    wakeScheduler = () => {},
   }: {
     manager: ProjectManager;
     project: any;
@@ -58,11 +63,13 @@ class ProjectRuntime {
     logger?: any;
     executionCapabilities?: string[];
     executionProvenance?: Record<string, unknown>;
+    wakeScheduler?: (reason: string) => void;
   }) {
     this.manager = manager;
     this.logger = logger;
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
+    this.wakeScheduler = wakeScheduler;
     this.projectId = project.id;
     this.workspace = project.workspace;
     this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
@@ -133,6 +140,10 @@ class ProjectRuntime {
           projectId: project.id,
           request,
         });
+        // A replan can be created by a transition inside the current reconcile.
+        // Durable generation protects races; this explicit wake ensures the
+        // sleeping process immediately runs the newly-created planning batch.
+        this.wakeScheduler('planning-enqueued');
       },
     });
     for (const [name, definition] of Object.entries(roleDefinitions)) {
@@ -352,17 +363,9 @@ class ProjectRuntime {
 
       this.manager.setExecutionState(this.projectId, state);
 
-      // Persist runtime truth as a Git snapshot without touching unfinished product changes.
-      // Reviewer PASS performs the full-repository finalize separately.
+      // SQLite is the durable runtime source of truth. Keep its DB checkpoint,
+      // but never manufacture Git commits from scheduler/task-state churn.
       this.store.checkpoint();
-      const checkpoint = await this.sourceControl.checkpointState({
-        label: `${this.projectId} ${state.toLowerCase()}`,
-      });
-      if (!checkpoint.ok) {
-        this.logger?.warn?.(
-          `Ariad state checkpoint for ${this.projectId} was committed locally but not fully replicated: ${checkpoint.failure ?? 'unknown Git failure'}`
-        );
-      }
     } catch (error) {
       this.manager.setExecutionState(this.projectId, 'FAILED');
       throw error;
@@ -538,8 +541,9 @@ export class AriadV2Service {
   private readonly executionProvenance: Record<string, unknown>;
   private readonly onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
-  private timer: NodeJS.Timeout | null = null;
-  private reconciling = false;
+  private readonly signals = new Map<string, SQLiteReconcileSignal>();
+  private readonly trigger: ReconcileTrigger;
+  private readonly externalWake: FileReconcileWake | null;
 
   constructor({
     manager,
@@ -549,6 +553,7 @@ export class AriadV2Service {
     executionCapabilities = [],
     executionProvenance = {},
     onProjectEvent,
+    reconcileWakePath = null,
   }: {
     manager: ProjectManager;
     provider: OpenClawV2Provider;
@@ -557,6 +562,7 @@ export class AriadV2Service {
     executionCapabilities?: string[];
     executionProvenance?: Record<string, unknown>;
     onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
+    reconcileWakePath?: string | null;
   }) {
     this.manager = manager;
     this.provider = provider;
@@ -565,18 +571,57 @@ export class AriadV2Service {
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
     this.onProjectEvent = onProjectEvent;
+    this.externalWake = reconcileWakePath
+      ? new FileReconcileWake(reconcileWakePath, {
+          onError: (error: unknown) => this.logger?.warn?.(
+            `Ariad cross-process wake signal failed: ${error instanceof Error ? error.message : String(error)}`
+          ),
+        })
+      : null;
+    this.trigger = new ReconcileTrigger({
+      reconcile: () => this.reconcile(),
+      readGeneration: () => this.readGeneration(),
+      safetyIntervalMs: 10 * 60 * 1000,
+      onError: (error: unknown) => this.logger?.error?.(
+        `Ariad event-driven reconcile failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+      ),
+    });
+  }
+
+  private signalFor(project: any) {
+    if (!project?.stateDb) return null;
+    let signal = this.signals.get(project.id);
+    if (!signal) {
+      signal = new SQLiteReconcileSignal(project.stateDb);
+      this.signals.set(project.id, signal);
+    }
+    return signal;
+  }
+
+  private readGeneration() {
+    let generation = 0;
+    for (const project of this.manager.list()) generation += this.signalFor(project)?.read() ?? 0;
+    return generation;
+  }
+
+  private wake(reason: string) {
+    const acceptedLocally = this.trigger.wake(reason);
+    if (!acceptedLocally) this.externalWake?.emit(reason);
   }
 
   async start() {
+    this.externalWake?.start(() => {
+      this.trigger.wake('external-process');
+    });
     await this.reconcile();
-    this.timer = setInterval(() => {
-      void this.reconcile();
-    }, 250);
+    this.trigger.start();
   }
 
   async stop() {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.externalWake?.stop();
+    this.trigger.stop();
+    for (const signal of this.signals.values()) signal.close();
+    this.signals.clear();
     for (const runtime of this.runtimes.values()) runtime.close();
     this.runtimes.clear();
   }
@@ -613,6 +658,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(current.id, runtime);
     }
@@ -620,7 +666,8 @@ export class AriadV2Service {
     // Do not dispatch role work synchronously from an operator/tool request.
     // OpenClaw request-scoped subagent runs inherit the caller's model-override
     // authority; Ariad role routing is plugin-owned background policy instead.
-    // The service reconcile loop will pick this durable planning intent up.
+    // The background trigger will pick this durable planning intent up.
+    this.wake('iterate');
     return { ...result, project: this.status(current.id) };
   }
 
@@ -631,9 +678,8 @@ export class AriadV2Service {
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
     }
-    // Scheduling is intentionally deferred to the service reconcile loop so
-    // role runs are admitted under Ariad's plugin subagent policy, not under
-    // the transient caller scope of ariad_project.
+    // Scheduling is deferred to the background trigger, outside the caller scope.
+    this.wake('running');
     return this.status(name);
   }
 
@@ -643,7 +689,7 @@ export class AriadV2Service {
       throw new Error(`project ${current.id} is STOPPED; start or resume it before pausing`);
     }
     this.manager.setDesiredState(name, 'PAUSED');
-    await this.reconcile();
+    this.wake('paused');
     return this.status(name);
   }
 
@@ -664,6 +710,7 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(current.id, runtime);
       }
@@ -671,8 +718,8 @@ export class AriadV2Service {
       this.manager.setExecutionState(name, 'IDLE');
     }
 
-    // Resume records durable intent and recovery only. The service reconcile
-    // loop dispatches retries outside the request-scoped ariad_project caller.
+    // Resume records durable intent/recovery and wakes the background scheduler.
+    this.wake('resumed');
     return { ...this.status(name), recoveredTasks };
   }
 
@@ -683,6 +730,7 @@ export class AriadV2Service {
       runtime.close();
       this.runtimes.delete(name);
     }
+    this.wake('stopped');
     return this.status(name);
   }
 
@@ -695,7 +743,11 @@ export class AriadV2Service {
   }) {
     for (const runtime of this.runtimes.values()) {
       const binding = runtime.findAttempt(attemptId, role);
-      if (binding) return runtime.submitRoleResult({ ...binding, payload });
+      if (binding) {
+        const result = runtime.submitRoleResult({ ...binding, payload });
+        this.wake('role-result');
+        return result;
+      }
     }
 
     for (const project of this.manager.list()) {
@@ -710,11 +762,16 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(project.id, runtime);
       }
       const binding = runtime.findAttempt(attemptId, role);
-      if (binding) return runtime.submitRoleResult({ ...binding, payload });
+      if (binding) {
+        const result = runtime.submitRoleResult({ ...binding, payload });
+        this.wake('role-result');
+        return result;
+      }
     }
     throw new Error(`No durable Ariad role execution matches attemptId ${attemptId}.`);
   }
@@ -743,15 +800,18 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
     }
-    return runtime.submitRoleResult({
+    const result = runtime.submitRoleResult({
       taskId: binding.taskId,
       role: binding.role,
       attemptId: binding.attemptId,
       payload,
     });
+    this.wake('role-result');
+    return result;
   }
 
   async submitDecision(name: string, decision: string) {
@@ -766,18 +826,20 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
     }
     const resumed = runtime.submitDecision(decision);
+    this.wake('human-decision');
     return { resumed, project: this.status(project.id) };
   }
 
   async reconcile() {
-    if (this.reconciling) return;
-    this.reconciling = true;
-    try {
-      for (const project of this.manager.list()) {
+    // ReconcileTrigger owns single-flight after startup. Do not add another
+    // "already reconciling" guard here: a guard can turn a queued wake into a
+    // successful no-op and lose durable work at the drain boundary.
+    for (const project of this.manager.list()) {
         if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
@@ -799,6 +861,7 @@ export class AriadV2Service {
             logger: this.logger,
             executionCapabilities: this.executionCapabilities,
             executionProvenance: this.executionProvenance,
+            wakeScheduler: (reason: string) => this.wake(reason),
           });
           this.runtimes.set(project.id, runtime);
         }
@@ -822,8 +885,5 @@ export class AriadV2Service {
           }
         }
       }
-    } finally {
-      this.reconciling = false;
-    }
   }
 }
