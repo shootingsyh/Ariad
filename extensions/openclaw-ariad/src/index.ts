@@ -93,7 +93,13 @@ const plugin = defineFeaturePlugin({
       pluginId: 'ariad',
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
       renderMessage: renderRoleMessage,
+      onSessionBound: process.env.ARIAD_CI_RUNTIME_PROBE === '1'
+        ? (binding) => api.logger?.info?.(
+            `Ariad agent-session bound sessionKey=${binding.sessionKey} role=${binding.role} attemptId=${binding.attemptId}`
+          )
+        : undefined,
     });
+    api.logger?.info?.(`Ariad execution mode: agent-session (host agent ${process.env.ARIAD_OPENCLAW_AGENT_ID || 'main'})`);
     const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
       resolveModelRef: (projectId, role) => (manager.status(projectId).roleModels as Record<string, string | undefined>)?.[role] ?? null,
