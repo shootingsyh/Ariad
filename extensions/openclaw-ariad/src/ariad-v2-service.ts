@@ -847,6 +847,7 @@ export class AriadV2Service {
             logger: this.logger,
             executionCapabilities: this.executionCapabilities,
             executionProvenance: this.executionProvenance,
+            wakeScheduler: (reason: string) => this.wake(reason),
           });
           this.runtimes.set(project.id, runtime);
         }
