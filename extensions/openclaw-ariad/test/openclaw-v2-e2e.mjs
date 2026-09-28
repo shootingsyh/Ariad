@@ -314,6 +314,13 @@ try {
   gateway.kill('SIGTERM');
   providerA.kill('SIGTERM');
   providerB.kill('SIGTERM');
-  await new Promise(resolveWait => setTimeout(resolveWait, 250));
-  rmSync(root, { recursive: true, force: true });
+
+  const waitForExit = (child) => child.exitCode != null
+    ? Promise.resolve()
+    : Promise.race([
+        new Promise(resolveExit => child.once('exit', resolveExit)),
+        new Promise(resolveTimeout => setTimeout(resolveTimeout, 3_000)),
+      ]);
+  await Promise.all([waitForExit(gateway), waitForExit(providerA), waitForExit(providerB)]);
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
