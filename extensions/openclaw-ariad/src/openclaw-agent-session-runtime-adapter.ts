@@ -7,8 +7,6 @@ type AgentRuntime = {
   resolveAgentTimeoutMs?(cfg: any): number;
   session?: {
     getSessionEntry?(input: { agentId: string; sessionKey: string }): any;
-    createSessionEntry?(input: Record<string, unknown>): Promise<any>;
-    resolveStorePath?(store: unknown, input: { agentId: string }): string;
   };
 };
 
@@ -109,28 +107,14 @@ export class OpenClawAgentSessionRuntimeAdapter {
     return `attempt-${safe(runId)}`;
   }
 
-  private async ensureSession(sessionKey: string, requestedSessionId: string, workspace?: string | null) {
+  private resolveSession(sessionKey: string, requestedSessionId: string) {
     const cfg = this.config();
-    const sessionApi = this.agent.session;
-    const existing = sessionApi?.getSessionEntry?.({ agentId: this.agentId, sessionKey });
-    if (existing) {
-      return {
-        sessionId: typeof existing.sessionId === 'string' && existing.sessionId ? existing.sessionId : requestedSessionId,
-        storePath: sessionApi?.resolveStorePath?.(cfg?.session?.store, { agentId: this.agentId }),
-      };
-    }
-    if (!sessionApi?.createSessionEntry) return { sessionId: requestedSessionId, storePath: undefined };
-    const created = await sessionApi.createSessionEntry({
-      cfg,
-      key: sessionKey,
-      agentId: this.agentId,
-      ...(workspace ? { spawnedCwd: workspace } : {}),
-      displayName: `Ariad ${sessionKey.split(':').at(-1) ?? 'worker'}`,
-    });
-    const entry = created?.entry ?? created;
+    const existing = this.agent.session?.getSessionEntry?.({ agentId: this.agentId, sessionKey });
     return {
-      sessionId: typeof entry?.sessionId === 'string' && entry.sessionId ? entry.sessionId : requestedSessionId,
-      storePath: sessionApi.resolveStorePath?.(cfg?.session?.store, { agentId: this.agentId }),
+      sessionId: typeof existing?.sessionId === 'string' && existing.sessionId
+        ? existing.sessionId
+        : requestedSessionId,
+      cfg,
     };
   }
 
@@ -146,8 +130,8 @@ export class OpenClawAgentSessionRuntimeAdapter {
     const selectedProvider = typeof context.provider === 'string' && context.provider.trim() ? context.provider.trim() : this.provider;
     const selectedModel = typeof context.model === 'string' && context.model.trim() ? context.model.trim() : this.model;
     const resultToolName = typeof context.resultToolName === 'string' && context.resultToolName.trim() ? context.resultToolName.trim() : undefined;
-    const cfg = this.config();
-    const session = await this.ensureSession(sessionKey, requestedSessionId, workspace);
+    const session = this.resolveSession(sessionKey, requestedSessionId);
+    const cfg = session.cfg;
     const externalId = randomUUID();
     const controller = new AbortController();
     const active: ActiveRun = {
@@ -176,7 +160,6 @@ export class OpenClawAgentSessionRuntimeAdapter {
       sessionId: session.sessionId,
       sessionKey,
       agentId: this.agentId,
-      ...(session.storePath ? { sessionTarget: { agentId: this.agentId, sessionId: session.sessionId, sessionKey, storePath: session.storePath } } : {}),
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
       config: cfg,
