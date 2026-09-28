@@ -542,7 +542,6 @@ export class AriadV2Service {
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private readonly signals = new Map<string, SQLiteReconcileSignal>();
   private readonly trigger: ReconcileTrigger;
-  private reconciling = false;
 
   constructor({
     manager,
@@ -674,7 +673,6 @@ export class AriadV2Service {
       throw new Error(`project ${current.id} is STOPPED; start or resume it before pausing`);
     }
     this.manager.setDesiredState(name, 'PAUSED');
-    await this.reconcile();
     this.wake('paused');
     return this.status(name);
   }
@@ -822,10 +820,10 @@ export class AriadV2Service {
   }
 
   async reconcile() {
-    if (this.reconciling) return;
-    this.reconciling = true;
-    try {
-      for (const project of this.manager.list()) {
+    // ReconcileTrigger owns single-flight after startup. Do not add another
+    // "already reconciling" guard here: a guard can turn a queued wake into a
+    // successful no-op and lose durable work at the drain boundary.
+    for (const project of this.manager.list()) {
         if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
@@ -871,8 +869,6 @@ export class AriadV2Service {
           }
         }
       }
-    } finally {
-      this.reconciling = false;
     }
   }
 }
