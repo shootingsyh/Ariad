@@ -444,6 +444,37 @@ class ProjectRuntime {
     return recovered;
   }
 
+  recoverLegacyHumanGates(reason = 'MANUAL_RESUME_LEGACY_HUMAN_GATE') {
+    const recovered: string[] = [];
+    const executionRoles = new Set(['artist', 'developer', 'tester', 'reviewer']);
+    const planningRoles = new Set(['pm', 'plan_validator', 'tech_lead_critic']);
+
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'NEEDS_HUMAN') continue;
+      let targetStage: string | null = null;
+      if (executionRoles.has(task.stage)) targetStage = 'project_debugger';
+      else if (planningRoles.has(task.stage)) targetStage = 'tech_lead';
+      else continue;
+
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'SYSTEM_RECOVERY',
+        role: task.stage,
+        reason,
+        previousStage: task.stage,
+        targetStage,
+        at: new Date().toISOString(),
+      }, {
+        stage: targetStage,
+        state: 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+      recovered.push(task.id);
+    }
+    return recovered;
+  }
+
+
   findAttempt(attemptId: string, role?: string) {
     const task = this.store.listTasks(this.projectId).find((item: any) =>
       item?.execution?.attemptId === attemptId
@@ -837,7 +868,9 @@ export class AriadV2Service {
       if (current.executionState === 'FAILED') {
         recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
       } else {
-        recoveredTasks = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
+        const restartRecovered = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
+        const legacyRecovered = runtime.recoverLegacyHumanGates('MANUAL_RESUME_LEGACY_HUMAN_GATE');
+        recoveredTasks = [...new Set([...restartRecovered, ...legacyRecovered])];
       }
       if (recoveredTasks.length > 0 || current.executionState === 'FAILED') {
         this.manager.setExecutionState(name, 'IDLE');
