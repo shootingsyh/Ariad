@@ -145,7 +145,7 @@ export class OpenClawProjectAgentAdapter {
     return binding;
   }
 
-  async notify(input: { binding: FrontdeskBinding; event: ProjectAgentEvent }) {
+  async inspectBinding(input: { binding: FrontdeskBinding }) {
     const binding = await this.bindProject(input.binding);
     const agentId = binding.agentId?.trim() || this.defaultAgentId;
     const sessionKey = binding.sessionKey!;
@@ -155,10 +155,66 @@ export class OpenClawProjectAgentAdapter {
       readConsistency: 'latest',
     });
     if (!sessionEntry?.sessionId) {
+      return {
+        deliverable: false,
+        agentId,
+        sessionKey,
+        sessionId: null,
+        delivery: null,
+        error: `bound Frontdesk session is unavailable: ${sessionKey}`,
+      };
+    }
+    try {
+      const delivery = resolveExternalDelivery(sessionEntry);
+      const outbound = await this.channel.outbound!.loadAdapter!(delivery.channel);
+      if (!outbound?.sendText) {
+        return {
+          deliverable: false,
+          agentId,
+          sessionKey,
+          sessionId: sessionEntry.sessionId,
+          delivery,
+          error: `channel ${delivery.channel} has no direct text outbound adapter`,
+        };
+      }
+      return {
+        deliverable: true,
+        agentId,
+        sessionKey,
+        sessionId: sessionEntry.sessionId,
+        delivery,
+        error: null,
+      };
+    } catch (error) {
+      return {
+        deliverable: false,
+        agentId,
+        sessionKey,
+        sessionId: sessionEntry.sessionId,
+        delivery: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async notify(input: { binding: FrontdeskBinding; event: ProjectAgentEvent }) {
+    const inspection = await this.inspectBinding({ binding: input.binding });
+    if (!inspection.deliverable || !inspection.sessionId || !inspection.delivery) {
+      throw new Error(inspection.error ?? 'bound Frontdesk session is not deliverable');
+    }
+    const binding = await this.bindProject(input.binding);
+    const agentId = inspection.agentId;
+    const sessionKey = inspection.sessionKey;
+    const sessionEntry = this.agent.session!.getSessionEntry!({
+      agentId,
+      sessionKey,
+      readConsistency: 'latest',
+    });
+    if (!sessionEntry?.sessionId) {
       throw new Error(`bound Frontdesk session is unavailable: ${sessionKey}`);
     }
 
-    const delivery = resolveExternalDelivery(sessionEntry);
+    const delivery = inspection.delivery;
     const cfg = this.config();
     const workspaceDir = this.agent.resolveAgentWorkspaceDir?.(cfg, agentId) ?? process.cwd();
     const agentDir = this.agent.resolveAgentDir?.(cfg, agentId);
