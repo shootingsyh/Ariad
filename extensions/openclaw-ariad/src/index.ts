@@ -267,7 +267,7 @@ const plugin = defineFeaturePlugin({
             },
           });
           api.logger?.info?.(
-            `Ariad Frontdesk notification delivered for ${project.id}: channel=${delivery.channel} to=${delivery.to}`
+            `Ariad Frontdesk notification delivered for ${project.id}: channel=${delivery.channel} to=${delivery.to} renderedBy=${delivery.renderedBy}${delivery.renderError ? ` renderError=${delivery.renderError}` : ''}`
           );
         } catch (error) {
           api.logger?.warn?.(
@@ -591,6 +591,36 @@ const plugin = defineFeaturePlugin({
               ? await projectAgentAdapter.inspectBinding({ binding: frontdeskBinding })
               : null;
             details = { action, projectId: project.id, frontdeskBinding, delivery };
+          } else if (action === 'renotify') {
+            const project = v2Service.status(name);
+            if (project.executionState !== 'NEEDS_HUMAN' || !(project.humanDecisions ?? []).length) {
+              throw new Error(`project ${project.id} has no pending human decision to re-notify`);
+            }
+            if (!project.frontdeskBinding) throw new Error('project has no bound Frontdesk');
+            const delivery = await projectAgentAdapter.notify({
+              binding: project.frontdeskBinding,
+              event: {
+                version: 1,
+                id: `frontdesk:${project.id}:NEEDS_HUMAN:renotify:${Date.now()}`,
+                projectId: project.id,
+                type: 'NEEDS_HUMAN',
+                createdAt: new Date().toISOString(),
+                payload: {
+                  executionState: project.executionState,
+                  desiredState: project.desiredState,
+                  activeTasks: project.activeTasks ?? [],
+                  humanDecisions: project.humanDecisions ?? [],
+                  renotify: true,
+                },
+              },
+            });
+            details = {
+              action,
+              projectId: project.id,
+              delivered: true,
+              delivery,
+              humanDecisions: project.humanDecisions,
+            };
           } else if (action === 'decide') {
             if (!decision) throw new Error('decision is required for action decide');
             const project = manager.status(name);
