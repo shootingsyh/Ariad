@@ -16,6 +16,7 @@ import { requireCompleteRoleModels } from '../runtime/role-models.js';
 import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
+import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
 
 type ProjectManager = {
   list(): any[];
@@ -401,31 +402,15 @@ class ProjectRuntime {
     const recovered: string[] = [];
     for (const task of this.store.listTasks(this.projectId)) {
       if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'project_debugger') continue;
-      const history = task.history ?? [];
-      const latestRoleResult = [...history]
-        .reverse()
-        .find((entry: any) => entry?.type === 'ROLE_RESULT');
-      const restartOrphan = [...history]
-        .reverse()
-        .find((entry: any) =>
-          entry?.type === 'SYSTEM_INTERRUPTION'
-          && (
-            entry?.failure === 'AGENT_SESSION_RUN_NOT_FOUND'
-            || entry?.restartOrphan === true
-          )
-        );
-      if (
-        latestRoleResult?.role !== 'project_debugger'
-        || latestRoleResult?.outcome !== 'UNKNOWN_PROJECT_CAUSE'
-        || !restartOrphan
-      ) continue;
+      const evidence = restartOrphanEvidence(task);
+      if (!evidence) continue;
 
       this.store.appendTaskHistory(task.id, task.version, {
         type: 'SYSTEM_RECOVERY',
         role: 'project_debugger',
         reason,
-        previousFailure: restartOrphan.failure ?? 'AGENT_SESSION_RUN_NOT_FOUND',
-        previousDebuggerOutcome: latestRoleResult.outcome,
+        previousFailure: evidence.restartOrphan.failure ?? 'AGENT_SESSION_RUN_NOT_FOUND',
+        previousDebuggerOutcome: evidence.latestRoleResult.outcome,
         at: new Date().toISOString(),
       }, {
         stage: 'developer',
