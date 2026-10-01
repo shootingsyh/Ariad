@@ -457,10 +457,33 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
+        if (result.outcome === 'NEEDS_HUMAN') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'TECH_LEAD_HUMAN_DECISION',
+              role: 'tech_lead',
+              summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a human decision.',
+              questions: result.result?.questions ?? [],
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (task.scope === 'control') return { state: 'DONE' };
         return result.outcome === 'PLANNED' || result.outcome === 'REPLANNED'
           ? { stage: 'developer', state: 'WAITING_REPLAN' }
-          : { state: 'NEEDS_HUMAN' };
+          : {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'TECH_LEAD_HUMAN_DECISION',
+                role: 'tech_lead',
+                summary: result.summary ?? 'Tech Lead could not produce a valid repair plan.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
       },
     },
 
@@ -551,7 +574,17 @@ export function createDefaultV2Roles({
             });
             return { state: 'DONE' };
           }
-          return { state: 'NEEDS_HUMAN' };
+          return {
+            stage: 'tech_lead',
+            state: 'READY',
+            transitionHistory: {
+              type: 'PLANNER_VALIDATION_ESCALATION',
+              role: 'plan_validator',
+              summary: result.result?.error ?? 'Planner validation failed after deterministic repair paths.',
+              errorCode: result.result?.errorCode ?? null,
+              at: new Date().toISOString(),
+            },
+          };
         }
         return { state: 'DONE' };
       },
@@ -605,12 +638,14 @@ export function createDefaultV2Roles({
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
-              state: 'NEEDS_HUMAN',
+              stage: 'tech_lead',
+              state: 'READY',
               transitionHistory: {
-                type: 'TAKEOVER_REVIEW',
+                type: 'TAKEOVER_REVIEW_ESCALATION',
                 role: 'pm',
                 summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
                 guidance: result.result?.guidance ?? null,
+                questions: result.result?.questions ?? [],
                 at: new Date().toISOString(),
               },
             };
@@ -636,7 +671,18 @@ export function createDefaultV2Roles({
           });
           return { state: 'DONE' };
         }
-        return { state: 'NEEDS_HUMAN' };
+        return {
+          stage: 'tech_lead',
+          state: 'READY',
+          transitionHistory: {
+            type: 'PM_ESCALATED_TO_TECH_LEAD',
+            role: 'pm',
+            summary: result.summary ?? result.result?.reason ?? 'PM requires planning-level escalation.',
+            guidance: result.result?.guidance ?? null,
+            questions: result.result?.questions ?? [],
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
   };
