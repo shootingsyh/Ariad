@@ -207,7 +207,14 @@ export class OpenClawAgentSessionRuntimeAdapter {
 
   async poll(handle: { externalId: string }) {
     const active = this.runs.get(handle.externalId);
-    if (!active) return { state: 'FAILED', failure: 'AGENT_SESSION_RUN_NOT_FOUND' };
+    if (!active) {
+      return {
+        state: 'LOST',
+        failure: 'AGENT_SESSION_RUN_NOT_FOUND',
+        consumeAttempt: false,
+        restartOrphan: true,
+      };
+    }
     if (active.state === 'RUNNING') return { state: 'RUNNING' };
     if (active.state === 'CANCELLED') return { state: 'FAILED', failure: 'AGENT_SESSION_RUN_CANCELLED' };
     if (active.state === 'FAILED') {
