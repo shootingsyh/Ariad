@@ -17,6 +17,8 @@ import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import { isRestartOrphanHumanGate } from '../src/v2/restart-orphan-recovery.js';
+import { legacyHumanGateTarget } from '../src/v2/legacy-human-gate-recovery.js';
+import { buildDurableRuntimeStatus } from '../src/v2/durable-runtime-status.js';
 import {
   ensurePlannerArtifactLayout,
   applyFeatureTreeDiff,
@@ -2114,4 +2116,61 @@ test('only project debugger and tech lead may create human-decision gates', () =
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('durable runtime status exposes human decisions without a live runtime', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-cold-human' });
+    store.createTask({
+      id: 'legacy-artist-gate',
+      projectId: 'P-cold-human',
+      stage: 'artist',
+      state: 'NEEDS_HUMAN',
+      title: 'Progression UI persistence',
+      history: [{
+        type: 'ROLE_RESULT',
+        role: 'artist',
+        outcome: 'NOT_PASS',
+        summary: 'This is a code/data problem, not an art problem.',
+        result: {
+          questions: ['Send this back to implementation repair.'],
+          guidance: 'Fix roster naming, remove the test label, and add button E2E.',
+        },
+      }],
+    });
+
+    const status = buildDurableRuntimeStatus(store, 'P-cold-human');
+    assert.equal(status.tasks.needsHuman, 1);
+    assert.equal(status.humanDecisions.length, 1);
+    assert.deepEqual(status.humanDecisions[0], {
+      taskId: 'legacy-artist-gate',
+      stage: 'artist',
+      title: 'Progression UI persistence',
+      summary: 'This is a code/data problem, not an art problem.',
+      questions: ['Send this back to implementation repair.'],
+      guidance: 'Fix roster naming, remove the test label, and add button E2E.',
+      outcome: 'NOT_PASS',
+      result: {
+        questions: ['Send this back to implementation repair.'],
+        guidance: 'Fix roster naming, remove the test label, and add button E2E.',
+      },
+    });
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy invalid human gates migrate only to the authorized decision role', () => {
+  for (const stage of ['artist', 'developer', 'tester', 'reviewer']) {
+    assert.equal(legacyHumanGateTarget(stage), 'project_debugger');
+  }
+  for (const stage of ['pm', 'plan_validator', 'tech_lead_critic']) {
+    assert.equal(legacyHumanGateTarget(stage), 'tech_lead');
+  }
+  assert.equal(legacyHumanGateTarget('project_debugger'), null);
+  assert.equal(legacyHumanGateTarget('tech_lead'), null);
 });
