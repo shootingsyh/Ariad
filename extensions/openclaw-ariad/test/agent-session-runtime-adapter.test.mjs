@@ -106,3 +106,27 @@ test('persistent role policy reuses the same session key across attempts', async
   assert.equal(calls[0].sessionKey, calls[1].sessionKey);
   assert.match(calls[0].sessionKey, /persistent-p-pm$/);
 });
+
+
+test('missing in-memory run handle is reported as a non-consuming restart orphan', async () => {
+  const agent = {
+    session: { getSessionEntry: () => null },
+    resolveAgentWorkspaceDir: () => '/workspace',
+    runEmbeddedAgent() {
+      return new Promise(() => {});
+    },
+  };
+  const adapter = new OpenClawAgentSessionRuntimeAdapter({
+    agent,
+    config: () => ({}),
+    agentId: 'main',
+  });
+
+  const status = await adapter.poll({ externalId: 'lost-after-gateway-restart' });
+  assert.deepEqual(status, {
+    state: 'LOST',
+    failure: 'AGENT_SESSION_RUN_NOT_FOUND',
+    consumeAttempt: false,
+    restartOrphan: true,
+  });
+});
