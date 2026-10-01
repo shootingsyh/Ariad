@@ -100,7 +100,12 @@ const plugin = defineFeaturePlugin({
         : undefined,
     });
     api.logger?.info?.(`Ariad execution mode: agent-session (host agent ${process.env.ARIAD_OPENCLAW_AGENT_ID || 'main'})`);
-    const projectAgentAdapter = new OpenClawProjectAgentAdapter({ gateway: api.runtime.gateway });
+    const projectAgentAdapter = new OpenClawProjectAgentAdapter({
+      agent: api.runtime.agent,
+      channel: api.runtime.channel,
+      config: () => (api.runtime as any)?.config?.current?.() ?? {},
+      agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
+    });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
       resolveModelRef: (projectId, role) => (manager.status(projectId).roleModels as Record<string, string | undefined>)?.[role] ?? null,
     });
