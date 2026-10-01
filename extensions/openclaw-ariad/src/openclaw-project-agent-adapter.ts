@@ -1,7 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import { validateProjectAgentAdapter } from '../../../src/project-agent-adapter.js';
 
-type GatewayRuntime = {
-  request<T = unknown>(method: string, params?: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<T>;
+type AgentRuntime = {
+  runEmbeddedAgent(input: Record<string, unknown>): Promise<any>;
+  resolveAgentWorkspaceDir?(cfg: any, agentId: string): string;
+  resolveAgentDir?(cfg: any, agentId: string): string;
+  resolveAgentTimeoutMs?(cfg: any): number;
+  session?: {
+    getSessionEntry?(input: { agentId: string; sessionKey: string; readConsistency?: 'latest' }): any;
+  };
+};
+
+type ChannelRuntime = {
+  outbound?: {
+    loadAdapter?(channelId: string): Promise<any> | any;
+  };
 };
 
 type FrontdeskBinding = {
@@ -24,6 +37,13 @@ type DecisionSubmission = {
   requester: { agentId?: string | null; sessionKey?: string | null };
   decision: string;
   submit: (decision: string) => Promise<unknown> | unknown;
+};
+
+type ProjectAgentAdapterOptions = {
+  agent: AgentRuntime;
+  channel: ChannelRuntime;
+  config: () => any;
+  agentId?: string;
 };
 
 function renderEvent(event: ProjectAgentEvent) {
@@ -49,13 +69,73 @@ function renderEvent(event: ProjectAgentEvent) {
   ].join('\n\n');
 }
 
+function extractText(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i -= 1) {
+      const found = extractText(value[i]);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ['terminalReply', 'text', 'content', 'message', 'reply']) {
+    const found = extractText(record[key]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function resolveExternalDelivery(entry: any) {
+  const delivery = entry?.delivery;
+  if (!delivery || delivery.kind !== 'external') {
+    throw new Error('bound Frontdesk session has no external delivery route');
+  }
+  const channel = delivery.route?.channel ?? delivery.context?.channel;
+  const to = delivery.route?.target?.to ?? delivery.context?.to;
+  const accountId = delivery.route?.accountId ?? delivery.context?.accountId;
+  const threadId = delivery.route?.thread?.id ?? delivery.context?.threadId;
+  if (typeof channel !== 'string' || !channel.trim()) {
+    throw new Error('bound Frontdesk session external delivery route has no channel');
+  }
+  if (typeof to !== 'string' || !to.trim()) {
+    throw new Error('bound Frontdesk session external delivery route has no target');
+  }
+  return {
+    channel: channel.trim(),
+    to: to.trim(),
+    ...(typeof accountId === 'string' && accountId.trim() ? { accountId: accountId.trim() } : {}),
+    ...(typeof threadId === 'string' || typeof threadId === 'number' ? { threadId } : {}),
+  };
+}
+
+/**
+ * Delivers durable Ariad project events through ordinary OpenClaw plugin
+ * runtime surfaces. Third-party plugins are intentionally not allowed to call
+ * privileged Gateway methods such as sessions.send.
+ *
+ * We first run the bound Frontdesk agent in its existing session so it can
+ * interpret the durable event with the conversation context. The resulting
+ * assistant text is then sent through the session's canonical external channel
+ * route using the channel outbound adapter.
+ */
 export class OpenClawProjectAgentAdapter {
   readonly id = 'openclaw-project-agent';
-  private readonly gateway: GatewayRuntime;
+  private readonly agent: AgentRuntime;
+  private readonly channel: ChannelRuntime;
+  private readonly config: () => any;
+  private readonly defaultAgentId: string;
 
-  constructor({ gateway }: { gateway: GatewayRuntime }) {
-    if (!gateway || typeof gateway.request !== 'function') throw new Error('OpenClaw project agent adapter requires gateway.request()');
-    this.gateway = gateway;
+  constructor(options: ProjectAgentAdapterOptions) {
+    if (!options?.agent?.runEmbeddedAgent) throw new Error('OpenClaw project agent adapter requires agent.runEmbeddedAgent()');
+    if (!options?.agent?.session?.getSessionEntry) throw new Error('OpenClaw project agent adapter requires agent.session.getSessionEntry()');
+    if (!options?.channel?.outbound?.loadAdapter) throw new Error('OpenClaw project agent adapter requires channel.outbound.loadAdapter()');
+    if (typeof options.config !== 'function') throw new Error('OpenClaw project agent adapter requires config()');
+    this.agent = options.agent;
+    this.channel = options.channel;
+    this.config = options.config;
+    this.defaultAgentId = options.agentId ?? 'main';
     validateProjectAgentAdapter(this);
   }
 
@@ -67,13 +147,67 @@ export class OpenClawProjectAgentAdapter {
 
   async notify(input: { binding: FrontdeskBinding; event: ProjectAgentEvent }) {
     const binding = await this.bindProject(input.binding);
-    return await this.gateway.request('sessions.send', {
-      key: binding.sessionKey,
-      ...(binding.agentId ? { agentId: binding.agentId } : {}),
-      message: renderEvent(input.event),
-      timeoutMs: 30_000,
-      idempotencyKey: `ariad:${input.event.id}`,
-    }, { timeoutMs: 35_000 });
+    const agentId = binding.agentId?.trim() || this.defaultAgentId;
+    const sessionKey = binding.sessionKey!;
+    const sessionEntry = this.agent.session!.getSessionEntry!({
+      agentId,
+      sessionKey,
+      readConsistency: 'latest',
+    });
+    if (!sessionEntry?.sessionId) {
+      throw new Error(`bound Frontdesk session is unavailable: ${sessionKey}`);
+    }
+
+    const delivery = resolveExternalDelivery(sessionEntry);
+    const cfg = this.config();
+    const workspaceDir = this.agent.resolveAgentWorkspaceDir?.(cfg, agentId) ?? process.cwd();
+    const agentDir = this.agent.resolveAgentDir?.(cfg, agentId);
+    const timeoutMs = this.agent.resolveAgentTimeoutMs?.(cfg);
+    const runId = `ariad-frontdesk-${input.event.id}-${randomUUID().slice(0, 8)}`;
+
+    const result = await this.agent.runEmbeddedAgent({
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      agentId,
+      workspaceDir,
+      ...(agentDir ? { agentDir } : {}),
+      config: cfg,
+      prompt: renderEvent(input.event),
+      ...(typeof sessionEntry.modelProvider === 'string' && sessionEntry.modelProvider
+        ? { provider: sessionEntry.modelProvider }
+        : {}),
+      ...(typeof sessionEntry.model === 'string' && sessionEntry.model
+        ? { model: sessionEntry.model }
+        : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
+      runId,
+      trigger: 'manual',
+      terminalReplyExpectation: 'required',
+    });
+
+    const text = extractText(result?.terminalReply ?? result);
+    if (!text) throw new Error('Frontdesk agent produced no deliverable reply');
+
+    const outbound = await this.channel.outbound!.loadAdapter!(delivery.channel);
+    if (!outbound?.sendText) {
+      throw new Error(`channel ${delivery.channel} has no direct text outbound adapter`);
+    }
+
+    const sent = await outbound.sendText({
+      cfg,
+      to: delivery.to,
+      text,
+      ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
+      ...(delivery.threadId != null ? { threadId: delivery.threadId } : {}),
+    });
+    return {
+      delivered: true,
+      runId,
+      sessionKey,
+      channel: delivery.channel,
+      to: delivery.to,
+      result: sent,
+    };
   }
 
   async submitDecision(input: DecisionSubmission) {
