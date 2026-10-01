@@ -68,6 +68,34 @@ function renderEvent(event: ProjectAgentEvent) {
     JSON.stringify(event),
   ].join('\n\n');
 }
+function renderDeterministicEvent(event: ProjectAgentEvent) {
+  const decisions = Array.isArray((event.payload as any)?.humanDecisions)
+    ? (event.payload as any).humanDecisions
+    : [];
+  if (event.type === 'NEEDS_HUMAN') {
+    const primary = decisions[0] ?? {};
+    const questions = Array.isArray(primary.questions) ? primary.questions.filter(Boolean) : [];
+    const lines = [
+      `Ariad needs your decision for ${event.projectId}.`,
+      primary.taskId ? `Task: ${primary.taskId}` : null,
+      primary.stage ? `Role: ${primary.stage}` : null,
+      primary.outcome ? `Reason: ${primary.outcome}` : null,
+      primary.summary ? `Summary: ${primary.summary}` : null,
+      primary.guidance ? `Guidance: ${primary.guidance}` : null,
+      ...questions.map((question: unknown, index: number) => `Question ${index + 1}: ${String(question)}`),
+      'Reply in this bound project conversation with your decision so Ariad can continue.',
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+  if (event.type === 'FAILED') {
+    return `Ariad project ${event.projectId} failed. Check the project status for the latest durable failure details.`;
+  }
+  if (event.type === 'SUCCEEDED') {
+    return `Ariad project ${event.projectId} completed successfully.`;
+  }
+  return `Ariad project ${event.projectId} has a new durable state update.`;
+}
+
 
 function extractText(value: unknown): string | null {
   if (typeof value === 'string') return value.trim() || null;
@@ -221,28 +249,40 @@ export class OpenClawProjectAgentAdapter {
     const timeoutMs = this.agent.resolveAgentTimeoutMs?.(cfg);
     const runId = `ariad-frontdesk-${input.event.id}-${randomUUID().slice(0, 8)}`;
 
-    const result = await this.agent.runEmbeddedAgent({
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      agentId,
-      workspaceDir,
-      ...(agentDir ? { agentDir } : {}),
-      config: cfg,
-      prompt: renderEvent(input.event),
-      ...(typeof sessionEntry.modelProvider === 'string' && sessionEntry.modelProvider
-        ? { provider: sessionEntry.modelProvider }
-        : {}),
-      ...(typeof sessionEntry.model === 'string' && sessionEntry.model
-        ? { model: sessionEntry.model }
-        : {}),
-      ...(timeoutMs ? { timeoutMs } : {}),
-      runId,
-      trigger: 'manual',
-      terminalReplyExpectation: 'required',
-    });
-
-    const text = extractText(result?.terminalReply ?? result);
-    if (!text) throw new Error('Frontdesk agent produced no deliverable reply');
+    const fallbackText = renderDeterministicEvent(input.event);
+    let text = fallbackText;
+    let renderedBy: 'agent' | 'deterministic-fallback' = 'deterministic-fallback';
+    let renderError: string | null = null;
+    try {
+      const result = await this.agent.runEmbeddedAgent({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        agentId,
+        workspaceDir,
+        ...(agentDir ? { agentDir } : {}),
+        config: cfg,
+        prompt: renderEvent(input.event),
+        ...(typeof sessionEntry.modelProvider === 'string' && sessionEntry.modelProvider
+          ? { provider: sessionEntry.modelProvider }
+          : {}),
+        ...(typeof sessionEntry.model === 'string' && sessionEntry.model
+          ? { model: sessionEntry.model }
+          : {}),
+        ...(timeoutMs ? { timeoutMs } : {}),
+        runId,
+        trigger: 'manual',
+        terminalReplyExpectation: 'optional',
+      });
+      const rendered = extractText(result?.terminalReply ?? result);
+      if (rendered) {
+        text = rendered;
+        renderedBy = 'agent';
+      } else {
+        renderError = 'Frontdesk agent produced no deliverable reply';
+      }
+    } catch (error) {
+      renderError = error instanceof Error ? error.message : String(error);
+    }
 
     const outbound = await this.channel.outbound!.loadAdapter!(delivery.channel);
     if (!outbound?.sendText) {
@@ -262,6 +302,9 @@ export class OpenClawProjectAgentAdapter {
       sessionKey,
       channel: delivery.channel,
       to: delivery.to,
+      renderedBy,
+      renderError,
+      text,
       result: sent,
     };
   }
@@ -280,4 +323,7 @@ export class OpenClawProjectAgentAdapter {
   }
 }
 
-export { renderEvent as renderProjectAgentEvent };
+export {
+  renderEvent as renderProjectAgentEvent,
+  renderDeterministicEvent as renderDeterministicProjectEvent,
+};
