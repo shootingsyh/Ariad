@@ -31,7 +31,7 @@ function event(type = 'NEEDS_HUMAN') {
   };
 }
 
-test('Frontdesk notification reuses bound session and sends through canonical channel route', async () => {
+test('NEEDS_HUMAN notification bypasses embedded agent and sends deterministic text through canonical channel route', async () => {
   const runs = [];
   const sends = [];
   const gateway = {
@@ -110,30 +110,29 @@ test('Frontdesk notification reuses bound session and sends through canonical ch
 
   const result = await adapter.notify({ binding: binding(), event: event() });
 
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].sessionId, 'frontdesk-session-id');
-  assert.equal(runs[0].sessionKey, binding().sessionKey);
-  assert.equal(runs[0].agentId, 'main');
-  assert.equal(runs[0].workspaceDir, '/workspace');
-  assert.equal(runs[0].agentDir, '/agent');
-  assert.equal(runs[0].provider, 'fakea');
-  assert.equal(runs[0].model, 'default');
-  assert.equal(runs[0].timeoutMs, 4321);
-  assert.match(runs[0].prompt, /Ariad needs a user decision/);
-  assert.match(runs[0].prompt, /ariad_project action="decide"/);
-  assert.match(runs[0].prompt, /v2-entry-lifecycle-gap/);
-  assert.match(runs[0].prompt, /preserve the old save format or migrate it/);
-
-  assert.deepEqual(sends, [{
+  assert.equal(runs.length, 0, 'human-decision alert must not depend on an embedded agent run');
+  assert.equal(sends.length, 1);
+  assert.deepEqual({
+    cfg: sends[0].cfg,
+    to: sends[0].to,
+    accountId: sends[0].accountId,
+    threadId: sends[0].threadId,
+  }, {
     cfg: { marker: 'cfg' },
     to: '1548769611409793074',
-    text: 'Please choose the recovery direction.',
     accountId: 'default',
     threadId: 'thread-7',
-  }]);
+  });
+  assert.match(sends[0].text, /Ariad needs your decision for srpg/);
+  assert.match(sends[0].text, /Task: v2-entry-lifecycle-gap/);
+  assert.match(sends[0].text, /Role: project_debugger/);
+  assert.match(sends[0].text, /Reason: UNKNOWN_PROJECT_CAUSE/);
+  assert.match(sends[0].text, /preserve the old save format or migrate it/);
   assert.equal(result.delivered, true);
   assert.equal(result.channel, 'discord');
   assert.equal(result.to, '1548769611409793074');
+  assert.equal(result.renderedBy, 'deterministic-fallback');
+  assert.equal(result.renderError, null);
 });
 
 test('Frontdesk notification refuses to infer a channel target from the session key', async () => {
@@ -234,4 +233,102 @@ test('Frontdesk binding inspection reports an undeliverable internal session', a
   assert.equal(inspection.deliverable, false);
   assert.equal(inspection.sessionKey, binding().sessionKey);
   assert.match(inspection.error, /no external delivery route/);
+});
+
+
+test('non-human Frontdesk event falls back deterministically when embedded agent returns no text', async () => {
+  const sends = [];
+  const agent = {
+    session: {
+      getSessionEntry() {
+        return {
+          sessionId: 'frontdesk-session-id',
+          delivery: {
+            kind: 'external',
+            route: { channel: 'discord', target: { to: '1548769611409793074' } },
+            context: { channel: 'discord', to: '1548769611409793074' },
+            origin: {},
+          },
+        };
+      },
+    },
+    resolveAgentWorkspaceDir: () => '/workspace',
+    async runEmbeddedAgent() {
+      return { terminalReply: '' };
+    },
+  };
+  const channel = {
+    outbound: {
+      async loadAdapter() {
+        return {
+          async sendText(input) {
+            sends.push(input);
+            return { messageId: 'fallback-message' };
+          },
+        };
+      },
+    },
+  };
+  const adapter = new OpenClawProjectAgentAdapter({
+    agent,
+    channel,
+    config: () => ({}),
+  });
+
+  const result = await adapter.notify({
+    binding: binding(),
+    event: event('FAILED'),
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.renderedBy, 'deterministic-fallback');
+  assert.match(result.renderError, /no deliverable reply/);
+  assert.match(sends[0].text, /Ariad project srpg failed/);
+});
+
+test('non-human Frontdesk event falls back deterministically when embedded agent throws', async () => {
+  const sends = [];
+  const adapter = new OpenClawProjectAgentAdapter({
+    agent: {
+      session: {
+        getSessionEntry() {
+          return {
+            sessionId: 'frontdesk-session-id',
+            delivery: {
+              kind: 'external',
+              route: { channel: 'discord', target: { to: '1548769611409793074' } },
+              context: { channel: 'discord', to: '1548769611409793074' },
+              origin: {},
+            },
+          };
+        },
+      },
+      async runEmbeddedAgent() {
+        throw new Error('utility model unavailable');
+      },
+    },
+    channel: {
+      outbound: {
+        async loadAdapter() {
+          return {
+            async sendText(input) {
+              sends.push(input);
+              return { messageId: 'fallback-message-2' };
+            },
+          };
+        },
+      },
+    },
+    config: () => ({}),
+  });
+
+  const result = await adapter.notify({
+    binding: binding(),
+    event: event('SUCCEEDED'),
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.renderedBy, 'deterministic-fallback');
+  assert.equal(result.renderError, 'utility model unavailable');
+  assert.match(sends[0].text, /completed successfully/);
 });
