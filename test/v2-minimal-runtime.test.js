@@ -16,6 +16,7 @@ import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import { validatePlanAutonomy } from '../src/v2/autonomy.js';
+import { isRestartOrphanHumanGate } from '../src/v2/restart-orphan-recovery.js';
 import {
   ensurePlannerArtifactLayout,
   applyFeatureTreeDiff,
@@ -1995,4 +1996,48 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('restart-orphan human-gate recovery only matches the known debugger misclassification', () => {
+  const base = {
+    id: 'T-gate',
+    stage: 'project_debugger',
+    state: 'NEEDS_HUMAN',
+    history: [
+      {
+        type: 'SYSTEM_INTERRUPTION',
+        role: 'developer',
+        failure: 'AGENT_SESSION_RUN_NOT_FOUND',
+        consumeAttempt: false,
+        restartOrphan: true,
+      },
+      {
+        type: 'ROLE_RESULT',
+        role: 'project_debugger',
+        outcome: 'UNKNOWN_PROJECT_CAUSE',
+      },
+    ],
+  };
+  assert.equal(isRestartOrphanHumanGate(base), true);
+  assert.equal(isRestartOrphanHumanGate({
+    ...base,
+    history: [...base.history.slice(0, 1), {
+      type: 'ROLE_RESULT',
+      role: 'project_debugger',
+      outcome: 'TASK_TOO_LARGE',
+    }],
+  }), false);
+  assert.equal(isRestartOrphanHumanGate({
+    ...base,
+    history: [{
+      type: 'ROLE_RESULT',
+      role: 'project_debugger',
+      outcome: 'UNKNOWN_PROJECT_CAUSE',
+    }],
+  }), false);
+  assert.equal(isRestartOrphanHumanGate({
+    ...base,
+    stage: 'tester',
+  }), false);
 });
