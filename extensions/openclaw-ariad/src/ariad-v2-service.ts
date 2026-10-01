@@ -17,6 +17,7 @@ import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
+import { legacyHumanGateTarget } from '../../../src/v2/legacy-human-gate-recovery.js';
 
 type ProjectManager = {
   list(): any[];
@@ -446,15 +447,10 @@ class ProjectRuntime {
 
   recoverLegacyHumanGates(reason = 'MANUAL_RESUME_LEGACY_HUMAN_GATE') {
     const recovered: string[] = [];
-    const executionRoles = new Set(['artist', 'developer', 'tester', 'reviewer']);
-    const planningRoles = new Set(['pm', 'plan_validator', 'tech_lead_critic']);
-
     for (const task of this.store.listTasks(this.projectId)) {
       if (task.state !== 'NEEDS_HUMAN') continue;
-      let targetStage: string | null = null;
-      if (executionRoles.has(task.stage)) targetStage = 'project_debugger';
-      else if (planningRoles.has(task.stage)) targetStage = 'tech_lead';
-      else continue;
+      const targetStage = legacyHumanGateTarget(task.stage);
+      if (!targetStage) continue;
 
       this.store.appendTaskHistory(task.id, task.version, {
         type: 'SYSTEM_RECOVERY',
