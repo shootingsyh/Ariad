@@ -17,6 +17,8 @@ import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
+import { legacyHumanGateTarget } from '../../../src/v2/legacy-human-gate-recovery.js';
+import { buildDurableRuntimeStatus } from '../../../src/v2/durable-runtime-status.js';
 
 type ProjectManager = {
   list(): any[];
@@ -444,6 +446,32 @@ class ProjectRuntime {
     return recovered;
   }
 
+  recoverLegacyHumanGates(reason = 'MANUAL_RESUME_LEGACY_HUMAN_GATE') {
+    const recovered: string[] = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'NEEDS_HUMAN') continue;
+      const targetStage = legacyHumanGateTarget(task.stage);
+      if (!targetStage) continue;
+
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'SYSTEM_RECOVERY',
+        role: task.stage,
+        reason,
+        previousStage: task.stage,
+        targetStage,
+        at: new Date().toISOString(),
+      }, {
+        stage: targetStage,
+        state: 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+      recovered.push(task.id);
+    }
+    return recovered;
+  }
+
+
   findAttempt(attemptId: string, role?: string) {
     const task = this.store.listTasks(this.projectId).find((item: any) =>
       item?.execution?.attemptId === attemptId
@@ -680,10 +708,33 @@ export class AriadV2Service {
   status(name: string) {
     const project = this.manager.status(name);
     const runtime = this.runtimes.get(project.id);
+    if (runtime) {
+      return {
+        ...project,
+        runtime: 'v2',
+        ...runtime.status(),
+      };
+    }
+
+    // Cold-start status must still expose durable task/human-decision state.
+    // NEEDS_HUMAN projects are intentionally not auto-instantiated by reconcile,
+    // so reading only manager metadata would hide the very gate operators need.
+    if (project.stateDb && existsSync(project.stateDb)) {
+      const store = new SQLiteV2Store(project.stateDb);
+      try {
+        return {
+          ...project,
+          runtime: 'v2',
+          ...buildDurableRuntimeStatus(store, project.id),
+        };
+      } finally {
+        store.close();
+      }
+    }
+
     return {
       ...project,
       runtime: 'v2',
-      ...(runtime ? runtime.status() : {}),
     };
   }
 
@@ -764,7 +815,9 @@ export class AriadV2Service {
       if (current.executionState === 'FAILED') {
         recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
       } else {
-        recoveredTasks = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
+        const restartRecovered = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
+        const legacyRecovered = runtime.recoverLegacyHumanGates('MANUAL_RESUME_LEGACY_HUMAN_GATE');
+        recoveredTasks = [...new Set([...restartRecovered, ...legacyRecovered])];
       }
       if (recoveredTasks.length > 0 || current.executionState === 'FAILED') {
         this.manager.setExecutionState(name, 'IDLE');
