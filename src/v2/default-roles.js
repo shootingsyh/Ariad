@@ -193,7 +193,7 @@ const DEVELOPER_REUSE_PROMPT = [
 
 const TESTER_REUSE_PROMPT = [
   "You are Ariad's tester role.",
-  'When media assets or prior Artist work are involved, capture suitable evidence such as screenshots, rendered frames, clips, or audio metadata/checks. If the asset itself is wrong rather than its integration, return NOT_PASS with result.routeTo="artist".',
+  'When media assets or prior Artist work are involved, capture suitable evidence such as screenshots, rendered frames, clips, or audio metadata/checks. If the asset itself appears wrong rather than its integration, describe that diagnosis in the result, but do not route work to another role; Ariad owns repair routing.',
   'Inspect task history and the existing test code before creating new tests.',
   'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
   'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
@@ -203,7 +203,7 @@ const TESTER_REUSE_PROMPT = [
 
 const REVIEWER_FRESH_EVIDENCE_PROMPT = [
   "You are Ariad's reviewer role.",
-  'When media/art is involved, inspect Tester evidence and judge overall artistic coherence and normal aesthetic quality in addition to correctness. Reject uncanny/broken people, malformed assets, strange presentation caused by assets, mismatched music/audio, and disguised placeholders. If the resource itself needs repair, return NOT_PASS with result.routeTo="artist".',
+  'When media/art is involved, inspect Tester evidence and judge overall artistic coherence and normal aesthetic quality in addition to correctness. Reject uncanny/broken people, malformed assets, strange presentation caused by assets, mismatched music/audio, and disguised placeholders. If the resource itself appears to need repair, describe that diagnosis in the result, but do not route work to another role; Ariad owns repair routing.',
   'Treat TAKEOVER_NOTE and all historical implementation/test/review claims as context only.',
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
@@ -343,20 +343,22 @@ export function createDefaultV2Roles({
       },
       transition: ({ result }) => {
         if (result.outcome === 'PASS') return { stage: 'developer', state: 'READY' };
-        if (result.outcome === 'NEEDS_CAPABILITY') {
-          return {
-            state: 'NEEDS_HUMAN',
-            transitionHistory: {
-              type: 'CAPABILITY_REQUIRED',
-              role: 'artist',
-              summary: result.summary ?? 'Artist capability is missing.',
-              missingCapabilities: result.result?.missingCapabilities ?? [],
-              recommendations: result.result?.recommendations ?? [],
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        return { state: 'NEEDS_HUMAN' };
+        return {
+          stage: 'project_debugger',
+          state: 'READY',
+          transitionHistory: {
+            type: result.outcome === 'NEEDS_CAPABILITY' ? 'CAPABILITY_REQUIRED' : 'ARTIST_REPAIR_FAILED',
+            role: 'artist',
+            summary: result.summary ?? 'Artist could not complete the required repair.',
+            ...(result.outcome === 'NEEDS_CAPABILITY'
+              ? {
+                  missingCapabilities: result.result?.missingCapabilities ?? [],
+                  recommendations: result.result?.recommendations ?? [],
+                }
+              : {}),
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
 
@@ -372,12 +374,11 @@ export function createDefaultV2Roles({
       transition: ({ task, result }) => {
         if (result.outcome === 'PASS') return { stage: 'reviewer', state: 'READY' };
         if (result.outcome === 'NOT_PASS') {
-          if (result.result?.routeTo === 'artist') return { stage: 'artist', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
         }
-        return { state: 'NEEDS_HUMAN' };
+        return { stage: 'project_debugger', state: 'READY' };
       },
     },
 
@@ -387,12 +388,11 @@ export function createDefaultV2Roles({
       }),
       transition({ task, result }) {
         if (result.outcome === 'NOT_PASS') {
-          if (result.result?.routeTo === 'artist') return { stage: 'artist', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
         }
-        if (result.outcome !== 'PASS') return { state: 'NEEDS_HUMAN' };
+        if (result.outcome !== 'PASS') return { stage: 'project_debugger', state: 'READY' };
         return { state: 'DONE' };
       },
       async afterPersist({ task }) {
@@ -457,10 +457,33 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
+        if (result.outcome === 'NEEDS_HUMAN') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'TECH_LEAD_HUMAN_DECISION',
+              role: 'tech_lead',
+              summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a human decision.',
+              questions: result.result?.questions ?? [],
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (task.scope === 'control') return { state: 'DONE' };
         return result.outcome === 'PLANNED' || result.outcome === 'REPLANNED'
           ? { stage: 'developer', state: 'WAITING_REPLAN' }
-          : { state: 'NEEDS_HUMAN' };
+          : {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'TECH_LEAD_HUMAN_DECISION',
+                role: 'tech_lead',
+                summary: result.summary ?? 'Tech Lead could not produce a valid repair plan.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
       },
     },
 
@@ -551,7 +574,17 @@ export function createDefaultV2Roles({
             });
             return { state: 'DONE' };
           }
-          return { state: 'NEEDS_HUMAN' };
+          return {
+            stage: 'tech_lead',
+            state: 'READY',
+            transitionHistory: {
+              type: 'PLANNER_VALIDATION_ESCALATION',
+              role: 'plan_validator',
+              summary: result.result?.error ?? 'Planner validation failed after deterministic repair paths.',
+              errorCode: result.result?.errorCode ?? null,
+              at: new Date().toISOString(),
+            },
+          };
         }
         return { state: 'DONE' };
       },
@@ -605,12 +638,14 @@ export function createDefaultV2Roles({
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
-              state: 'NEEDS_HUMAN',
+              stage: 'tech_lead',
+              state: 'READY',
               transitionHistory: {
-                type: 'TAKEOVER_REVIEW',
+                type: 'TAKEOVER_REVIEW_ESCALATION',
                 role: 'pm',
                 summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
                 guidance: result.result?.guidance ?? null,
+                questions: result.result?.questions ?? [],
                 at: new Date().toISOString(),
               },
             };
@@ -636,7 +671,18 @@ export function createDefaultV2Roles({
           });
           return { state: 'DONE' };
         }
-        return { state: 'NEEDS_HUMAN' };
+        return {
+          stage: 'tech_lead',
+          state: 'READY',
+          transitionHistory: {
+            type: 'PM_ESCALATED_TO_TECH_LEAD',
+            role: 'pm',
+            summary: result.summary ?? result.result?.reason ?? 'PM requires planning-level escalation.',
+            guidance: result.result?.guidance ?? null,
+            questions: result.result?.questions ?? [],
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
   };

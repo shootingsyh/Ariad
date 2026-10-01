@@ -20,6 +20,13 @@ function event(type = 'NEEDS_HUMAN') {
     payload: {
       executionState: 'NEEDS_HUMAN',
       desiredState: 'RUNNING',
+      humanDecisions: [{
+        taskId: 'v2-entry-lifecycle-gap',
+        stage: 'project_debugger',
+        summary: 'Debugger cannot choose safely.',
+        questions: ['Should Ariad preserve the old save format or migrate it?'],
+        outcome: 'UNKNOWN_PROJECT_CAUSE',
+      }],
     },
   };
 }
@@ -92,6 +99,15 @@ test('Frontdesk notification reuses bound session and sends through canonical ch
     gateway,
   });
 
+  const inspection = await adapter.inspectBinding({ binding: binding() });
+  assert.equal(inspection.deliverable, true);
+  assert.deepEqual(inspection.delivery, {
+    channel: 'discord',
+    to: '1548769611409793074',
+    accountId: 'default',
+    threadId: 'thread-7',
+  });
+
   const result = await adapter.notify({ binding: binding(), event: event() });
 
   assert.equal(runs.length, 1);
@@ -105,6 +121,8 @@ test('Frontdesk notification reuses bound session and sends through canonical ch
   assert.equal(runs[0].timeoutMs, 4321);
   assert.match(runs[0].prompt, /Ariad needs a user decision/);
   assert.match(runs[0].prompt, /ariad_project action="decide"/);
+  assert.match(runs[0].prompt, /v2-entry-lifecycle-gap/);
+  assert.match(runs[0].prompt, /preserve the old save format or migrate it/);
 
   assert.deepEqual(sends, [{
     cfg: { marker: 'cfg' },
@@ -187,4 +205,33 @@ test('Frontdesk notification fails closed when the channel cannot directly send 
     () => adapter.notify({ binding: binding(), event: event() }),
     /has no direct text outbound adapter/
   );
+});
+
+
+test('Frontdesk binding inspection reports an undeliverable internal session', async () => {
+  const adapter = new OpenClawProjectAgentAdapter({
+    agent: {
+      session: {
+        getSessionEntry() {
+          return { sessionId: 'internal-only', delivery: { kind: 'internal' } };
+        },
+      },
+      async runEmbeddedAgent() {
+        throw new Error('not used');
+      },
+    },
+    channel: {
+      outbound: {
+        async loadAdapter() {
+          throw new Error('not used');
+        },
+      },
+    },
+    config: () => ({}),
+  });
+
+  const inspection = await adapter.inspectBinding({ binding: binding() });
+  assert.equal(inspection.deliverable, false);
+  assert.equal(inspection.sessionKey, binding().sessionKey);
+  assert.match(inspection.error, /no external delivery route/);
 });

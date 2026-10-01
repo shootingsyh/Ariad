@@ -1723,8 +1723,9 @@ test('accepted takeover plan pauses at human review until a human decision is re
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },
     });
-    assert.equal(first.state, 'NEEDS_HUMAN');
-    assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW');
+    assert.equal(first.state, 'READY');
+    assert.equal(first.stage, 'tech_lead');
+    assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW_ESCALATION');
     assert.equal(store.getProject('P-take-gate').deliveryEnabled, false, 'takeover human gate must override PM start request');
     assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
 
@@ -2040,4 +2041,77 @@ test('restart-orphan human-gate recovery only matches the known debugger misclas
     ...base,
     stage: 'tester',
   }), false);
+});
+
+
+test('only project debugger and tech lead may create human-decision gates', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-routing' });
+    store.createTask({ id: 'T-routing', projectId: 'P-routing', stage: 'tester' });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('T-routing');
+
+    const testerAsset = definitions.tester.transition({
+      task,
+      result: { outcome: 'NOT_PASS', result: { routeTo: 'artist' } },
+    });
+    assert.deepEqual(testerAsset, { stage: 'developer', state: 'READY' });
+
+    const testerUnknown = definitions.tester.transition({
+      task,
+      result: { outcome: 'BLOCKED' },
+    });
+    assert.deepEqual(testerUnknown, { stage: 'project_debugger', state: 'READY' });
+
+    const reviewerAsset = definitions.reviewer.transition({
+      task,
+      result: { outcome: 'NOT_PASS', result: { routeTo: 'artist' } },
+    });
+    assert.deepEqual(reviewerAsset, { stage: 'developer', state: 'READY' });
+
+    const reviewerUnknown = definitions.reviewer.transition({
+      task,
+      result: { outcome: 'BLOCKED' },
+    });
+    assert.deepEqual(reviewerUnknown, { stage: 'project_debugger', state: 'READY' });
+
+    const artistFailure = definitions.artist.transition({
+      task,
+      result: { outcome: 'NEEDS_CAPABILITY', summary: 'missing image runtime', result: { missingCapabilities: ['image'] } },
+    });
+    assert.equal(artistFailure.stage, 'project_debugger');
+    assert.equal(artistFailure.state, 'READY');
+    assert.equal(artistFailure.transitionHistory.type, 'CAPABILITY_REQUIRED');
+
+    const pmEscalation = definitions.pm.transition({
+      task,
+      result: { outcome: 'NEEDS_HUMAN', summary: 'ambiguous product intent', result: { questions: ['Which behavior?'] } },
+    });
+    assert.equal(pmEscalation.stage, 'tech_lead');
+    assert.equal(pmEscalation.state, 'READY');
+
+    const debuggerGate = definitions.project_debugger.transition({
+      task,
+      result: { outcome: 'UNKNOWN_PROJECT_CAUSE', summary: 'cannot resolve safely' },
+    });
+    assert.equal(debuggerGate.state, 'NEEDS_HUMAN');
+
+    const techLeadGate = definitions.tech_lead.transition({
+      task: { ...task, scope: 'control' },
+      result: { outcome: 'NEEDS_HUMAN', summary: 'requirements conflict', result: { questions: ['A or B?'] } },
+    });
+    assert.equal(techLeadGate.state, 'NEEDS_HUMAN');
+    assert.equal(techLeadGate.transitionHistory.role, 'tech_lead');
+
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

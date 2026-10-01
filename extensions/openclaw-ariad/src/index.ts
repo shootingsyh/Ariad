@@ -250,7 +250,7 @@ const plugin = defineFeaturePlugin({
       onProjectEvent: async (project, type) => {
         if (!project.frontdeskBinding) return;
         try {
-          await projectAgentAdapter.notify({
+          const delivery = await projectAgentAdapter.notify({
             binding: project.frontdeskBinding,
             event: {
               version: 1,
@@ -261,9 +261,14 @@ const plugin = defineFeaturePlugin({
               payload: {
                 executionState: project.executionState,
                 desiredState: project.desiredState,
+                activeTasks: project.activeTasks ?? [],
+                humanDecisions: project.humanDecisions ?? [],
               },
             },
           });
+          api.logger?.info?.(
+            `Ariad Frontdesk notification delivered for ${project.id}: channel=${delivery.channel} to=${delivery.to}`
+          );
         } catch (error) {
           api.logger?.warn?.(
             `Ariad Frontdesk notification for ${project.id} failed: ${error instanceof Error ? error.message : String(error)}`
@@ -571,12 +576,21 @@ const plugin = defineFeaturePlugin({
               sessionKey: sessionKey ?? toolContext?.sessionKey ?? toolContext?.session?.key ?? null,
             };
             await projectAgentAdapter.bindProject(binding);
-            details = { action, project: manager.bindFrontdesk(name, binding) };
+            const inspection = await projectAgentAdapter.inspectBinding({ binding });
+            details = {
+              action,
+              project: manager.bindFrontdesk(name, binding),
+              delivery: inspection,
+            };
           } else if (action === 'unbind_frontdesk') {
             details = { action, project: manager.unbindFrontdesk(name) };
           } else if (action === 'frontdesk_status') {
             const project = manager.status(name);
-            details = { action, projectId: project.id, frontdeskBinding: project.frontdeskBinding ?? null };
+            const frontdeskBinding = project.frontdeskBinding ?? null;
+            const delivery = frontdeskBinding
+              ? await projectAgentAdapter.inspectBinding({ binding: frontdeskBinding })
+              : null;
+            details = { action, projectId: project.id, frontdeskBinding, delivery };
           } else if (action === 'decide') {
             if (!decision) throw new Error('decision is required for action decide');
             const project = manager.status(name);

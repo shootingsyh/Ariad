@@ -237,6 +237,27 @@ class ProjectRuntime {
             ...(interruption?.failure ? { lastSystemFailure: interruption.failure } : {}),
           };
         }),
+      humanDecisions: tasks
+        .filter(task => task.state === 'NEEDS_HUMAN')
+        .map(task => {
+          const history = task.history ?? [];
+          const roleResult = [...history].reverse().find(entry => entry?.type === 'ROLE_RESULT');
+          const decisionContext = [...history].reverse().find(entry =>
+            entry?.type !== 'ROLE_RESULT'
+            && entry?.type !== 'SYSTEM_INTERRUPTION'
+            && entry?.type !== 'SYSTEM_RECOVERY'
+          );
+          return {
+            taskId: task.id,
+            stage: task.stage,
+            title: task.title ?? task.input?.title ?? null,
+            summary: decisionContext?.summary ?? roleResult?.summary ?? null,
+            questions: decisionContext?.questions ?? roleResult?.result?.questions ?? [],
+            guidance: decisionContext?.guidance ?? roleResult?.result?.guidance ?? null,
+            outcome: roleResult?.outcome ?? null,
+            result: roleResult?.result ?? null,
+          };
+        }),
     };
   }
 
@@ -905,7 +926,7 @@ export class AriadV2Service {
             updated.executionState !== project.executionState &&
             ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(updated.executionState)
           ) {
-            await this.onProjectEvent?.(updated, updated.executionState);
+            await this.onProjectEvent?.(this.status(project.id), updated.executionState);
           }
         } catch (error) {
           this.logger?.error?.(
