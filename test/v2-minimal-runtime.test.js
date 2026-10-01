@@ -1939,3 +1939,60 @@ test('applyDeliveryPlan persists milestone metadata and ordinary task milestoneI
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('restart-orphan provider loss requeues without consuming or escalating attempts', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-restart-orphan' });
+    store.createTask({
+      id: 'T-restart-orphan',
+      projectId: 'P-restart-orphan',
+      stage: 'developer',
+      state: 'WORKING',
+      execution: {
+        provider: 'fake',
+        externalId: 'lost-memory-handle',
+        attemptId: 'P-restart-orphan:T-restart-orphan:developer:7',
+        resources: ['gpu'],
+      },
+      history: [
+        { type: 'SYSTEM_INTERRUPTION', role: 'developer', failure: 'AGENT_SESSION_RUN_NOT_FOUND', consumeAttempt: false, restartOrphan: true },
+        { type: 'SYSTEM_INTERRUPTION', role: 'developer', failure: 'AGENT_SESSION_RUN_NOT_FOUND', consumeAttempt: false, restartOrphan: true },
+        { type: 'SYSTEM_INTERRUPTION', role: 'developer', failure: 'AGENT_SESSION_RUN_NOT_FOUND', consumeAttempt: false, restartOrphan: true },
+      ],
+    });
+
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start() { throw new Error('not used'); },
+      async poll() {
+        return {
+          state: 'LOST',
+          failure: 'AGENT_SESSION_RUN_NOT_FOUND',
+          consumeAttempt: false,
+          restartOrphan: true,
+        };
+      },
+      async cancel() {},
+    });
+    const resources = new ResourcePool({ gpu: 1 });
+    resources.recover(store.listTasks('P-restart-orphan'));
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-restart-orphan');
+    const task = store.getTask('T-restart-orphan');
+    assert.equal(task.state, 'READY');
+    assert.equal(task.stage, 'developer');
+    assert.equal(task.execution, null);
+    assert.equal(task.history.at(-1)?.failure, 'AGENT_SESSION_RUN_NOT_FOUND');
+    assert.equal(task.history.at(-1)?.consumeAttempt, false);
+    assert.equal(task.history.at(-1)?.restartOrphan, true);
+    assert.deepEqual(resources.snapshot(), []);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
