@@ -16,6 +16,7 @@ import { requireCompleteRoleModels } from '../runtime/role-models.js';
 import { ReconcileTrigger } from '../../../src/v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../../../src/v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
+import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
 
 type ProjectManager = {
   list(): any[];
@@ -397,6 +398,31 @@ class ProjectRuntime {
     return recovered;
   }
 
+  recoverRestartOrphanHumanGates(reason = 'MANUAL_RESUME_AFTER_RUNTIME_RESTART') {
+    const recovered: string[] = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'project_debugger') continue;
+      const evidence = restartOrphanEvidence(task);
+      if (!evidence) continue;
+
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'SYSTEM_RECOVERY',
+        role: 'project_debugger',
+        reason,
+        previousFailure: evidence.restartOrphan.failure ?? 'AGENT_SESSION_RUN_NOT_FOUND',
+        previousDebuggerOutcome: evidence.latestRoleResult.outcome,
+        at: new Date().toISOString(),
+      }, {
+        stage: 'developer',
+        state: 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+      recovered.push(task.id);
+    }
+    return recovered;
+  }
+
   findAttempt(attemptId: string, role?: string) {
     const task = this.store.listTasks(this.projectId).find((item: any) =>
       item?.execution?.attemptId === attemptId
@@ -699,7 +725,7 @@ export class AriadV2Service {
     this.manager.setDesiredState(name, 'RUNNING');
 
     let recoveredTasks: string[] = [];
-    if (current.executionState === 'FAILED') {
+    if (['FAILED', 'NEEDS_HUMAN'].includes(current.executionState)) {
       let runtime = this.runtimes.get(current.id);
       if (!runtime) {
         runtime = new ProjectRuntime({
@@ -714,8 +740,14 @@ export class AriadV2Service {
         });
         this.runtimes.set(current.id, runtime);
       }
-      recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
-      this.manager.setExecutionState(name, 'IDLE');
+      if (current.executionState === 'FAILED') {
+        recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
+      } else {
+        recoveredTasks = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
+      }
+      if (recoveredTasks.length > 0 || current.executionState === 'FAILED') {
+        this.manager.setExecutionState(name, 'IDLE');
+      }
     }
 
     // Resume records durable intent/recovery and wakes the background scheduler.
