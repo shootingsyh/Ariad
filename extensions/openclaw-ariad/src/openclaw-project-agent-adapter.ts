@@ -253,35 +253,41 @@ export class OpenClawProjectAgentAdapter {
     let text = fallbackText;
     let renderedBy: 'agent' | 'deterministic-fallback' = 'deterministic-fallback';
     let renderError: string | null = null;
-    try {
-      const result = await this.agent.runEmbeddedAgent({
-        sessionId: sessionEntry.sessionId,
-        sessionKey,
-        agentId,
-        workspaceDir,
-        ...(agentDir ? { agentDir } : {}),
-        config: cfg,
-        prompt: renderEvent(input.event),
-        ...(typeof sessionEntry.modelProvider === 'string' && sessionEntry.modelProvider
-          ? { provider: sessionEntry.modelProvider }
-          : {}),
-        ...(typeof sessionEntry.model === 'string' && sessionEntry.model
-          ? { model: sessionEntry.model }
-          : {}),
-        ...(timeoutMs ? { timeoutMs } : {}),
-        runId,
-        trigger: 'manual',
-        terminalReplyExpectation: 'optional',
-      });
-      const rendered = extractText(result?.terminalReply ?? result);
-      if (rendered) {
-        text = rendered;
-        renderedBy = 'agent';
-      } else {
-        renderError = 'Frontdesk agent produced no deliverable reply';
+
+    // NEEDS_HUMAN is a control-plane notification. Never make its delivery
+    // depend on an embedded agent turn or session observer/utility-model health.
+    // Other event types may use the agent as a best-effort presentation layer.
+    if (input.event.type !== 'NEEDS_HUMAN') {
+      try {
+        const result = await this.agent.runEmbeddedAgent({
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          agentId,
+          workspaceDir,
+          ...(agentDir ? { agentDir } : {}),
+          config: cfg,
+          prompt: renderEvent(input.event),
+          ...(typeof sessionEntry.modelProvider === 'string' && sessionEntry.modelProvider
+            ? { provider: sessionEntry.modelProvider }
+            : {}),
+          ...(typeof sessionEntry.model === 'string' && sessionEntry.model
+            ? { model: sessionEntry.model }
+            : {}),
+          ...(timeoutMs ? { timeoutMs } : {}),
+          runId,
+          trigger: 'manual',
+          terminalReplyExpectation: 'optional',
+        });
+        const rendered = extractText(result?.terminalReply ?? result);
+        if (rendered) {
+          text = rendered;
+          renderedBy = 'agent';
+        } else {
+          renderError = 'Frontdesk agent produced no deliverable reply';
+        }
+      } catch (error) {
+        renderError = error instanceof Error ? error.message : String(error);
       }
-    } catch (error) {
-      renderError = error instanceof Error ? error.message : String(error);
     }
 
     const outbound = await this.channel.outbound!.loadAdapter!(delivery.channel);
