@@ -14,7 +14,7 @@ function systemFailureCount(task) {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i];
     if (entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_RECOVERY') break;
-    if (entry?.type === 'SYSTEM_INTERRUPTION') count += 1;
+    if (entry?.type === 'SYSTEM_INTERRUPTION' && entry.consumeAttempt !== false) count += 1;
   }
   return count;
 }
@@ -211,6 +211,7 @@ export class V2Supervisor {
       const failure = status?.failure ?? status?.state ?? 'EXECUTION_LOST';
       const incident = await this.#incident(task, failure);
       incidents.push(incident);
+      const consumeAttempt = status?.consumeAttempt !== false;
       this.store.appendTaskHistory(task.id, current.version, {
         type: 'SYSTEM_INTERRUPTION',
         role: task.stage,
@@ -218,9 +219,11 @@ export class V2Supervisor {
         provenance: structuredClone(execution?.provenance ?? null),
         protocolVersion: execution?.protocolVersion ?? null,
         projectVersion: execution?.projectVersion ?? null,
+        consumeAttempt,
+        ...(status?.restartOrphan === true ? { restartOrphan: true } : {}),
         at: incident.at,
       }, {
-        state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
+        state: consumeAttempt && systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
         execution: null,
       });
       this.resources.release(task.id);
