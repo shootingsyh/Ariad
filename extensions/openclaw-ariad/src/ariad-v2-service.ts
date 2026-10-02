@@ -450,7 +450,7 @@ class ProjectRuntime {
     const recovered: string[] = [];
     for (const task of this.store.listTasks(this.projectId)) {
       if (task.state !== 'NEEDS_HUMAN') continue;
-      const targetStage = legacyHumanGateTarget(task.stage);
+      const targetStage = legacyHumanGateTarget(task.stage, task);
       if (!targetStage) continue;
 
       this.store.appendTaskHistory(task.id, task.version, {
