@@ -297,38 +297,48 @@ export function createDefaultV2Roles({
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
 
-  const executionProvenanceFor = (task) => ({
-    ...structuredClone(executionProvenance),
-    ...(typeof resolveRoleExecutionMetadata === 'function'
+  const executionMetadataFor = (task) => (
+    typeof resolveRoleExecutionMetadata === 'function'
       ? structuredClone(resolveRoleExecutionMetadata(task.stage) ?? {})
-      : {}),
-  });
+      : {}
+  );
 
-  const prepareLlm = (task, v2Prompt, extra = {}) => ({
-    provider: providerId,
-    completionProtocol: 'role_result_tool',
-    executionCapabilities: [...executionCapabilities],
-    executionProvenance: executionProvenanceFor(task),
-    workspace,
-    context: {
+  const prepareLlm = (task, v2Prompt, extra = {}) => {
+    const executionMetadata = executionMetadataFor(task);
+    const modelRef = typeof executionMetadata.modelRef === 'string'
+      ? executionMetadata.modelRef.trim()
+      : '';
+    return {
+      provider: providerId,
+      completionProtocol: 'role_result_tool',
+      resources: modelRef.startsWith('llamacpp/') ? ['local-llm'] : [],
       executionCapabilities: [...executionCapabilities],
-      ...extra,
-      v2Prompt,
-      task: {
-        id: task.id,
-        title: task.title ?? null,
-        intent: task.intent ?? task.input?.intent ?? null,
-        acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
-        acceptanceCriterionIds: acceptanceCriterionIds(task),
-        verification: task.verification ?? task.input?.verification ?? [],
-        testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
-        art: task.art ?? task.input?.art ?? null,
-        history: task.history ?? [],
+      executionProvenance: {
+        ...structuredClone(executionProvenance),
+        ...executionMetadata,
       },
-      devCycle: 1 + failureCount(task),
-      strategyEpoch: strategyEpoch(task),
-    },
-  });
+      workspace,
+      context: {
+        executionCapabilities: [...executionCapabilities],
+        ...(modelRef ? { roleModelRef: modelRef } : {}),
+        ...extra,
+        v2Prompt,
+        task: {
+          id: task.id,
+          title: task.title ?? null,
+          intent: task.intent ?? task.input?.intent ?? null,
+          acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+          acceptanceCriterionIds: acceptanceCriterionIds(task),
+          verification: task.verification ?? task.input?.verification ?? [],
+          testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
+          art: task.art ?? task.input?.art ?? null,
+          history: task.history ?? [],
+        },
+        devCycle: 1 + failureCount(task),
+        strategyEpoch: strategyEpoch(task),
+      },
+    };
+  };
 
   return {
     artist: {
