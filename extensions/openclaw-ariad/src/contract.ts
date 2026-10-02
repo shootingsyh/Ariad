@@ -7,7 +7,6 @@ const RoleModelsSchema = Type.Object({
   tester: Type.Optional(Type.String()),
   reviewer: Type.Optional(Type.String()),
   project_debugger: Type.Optional(Type.String()),
-  system_debugger: Type.Optional(Type.String()),
   tech_lead: Type.Optional(Type.String()),
   tech_lead_critic: Type.Optional(Type.String()),
   pm: Type.Optional(Type.String()),
