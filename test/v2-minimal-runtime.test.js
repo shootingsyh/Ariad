@@ -2046,29 +2046,97 @@ test('restart-orphan human-gate recovery only matches the known debugger misclas
 });
 
 
-test('System Debugger only diagnoses and hands repair to a human', () => {
+test('unified Project Debugger routes a system-blocked oversized task to Tech Lead', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-system-debug' });
     store.createTask({
-      id: 'system-debug:T-blocked:1',
+      id: 'T-blocked',
+      projectId: 'P-system-debug',
+      scope: 'delivery',
+      stage: 'developer',
+      state: 'SYSTEM_BLOCKED',
+      history: [{ type: 'SYSTEM_INTERRUPTION', failure: 'STALLED_AGENT_RUN' }],
+    });
+    store.createTask({
+      id: 'debug:T-blocked:1',
       projectId: 'P-system-debug',
       scope: 'control',
-      flowId: 'system-debug:T-blocked:1',
-      stage: 'system_debugger',
+      flowId: 'debug:T-blocked:1',
+      stage: 'project_debugger',
       state: 'READY',
       input: {
         blockedTaskId: 'T-blocked',
         systemIncident: {
           blockedTask: {
             id: 'T-blocked',
-            stage: 'tester',
+            stage: 'developer',
             state: 'SYSTEM_BLOCKED',
-            recentHistory: [{ type: 'SYSTEM_INTERRUPTION', failure: 'ROLE_RESULT_RECOVERY_FAILED' }],
+            recentHistory: [{ type: 'SYSTEM_INTERRUPTION', failure: 'STALLED_AGENT_RUN' }],
           },
         },
       },
+    });
+    const planning = [];
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+      enqueuePlanning: request => planning.push(request),
+    });
+    const task = store.getTask('debug:T-blocked:1');
+    const prepared = definitions.project_debugger.prepare({ task });
+    assert.match(prepared.context.v2Prompt, /root cause across BOTH project\/task causes and execution\/runtime\/model causes/i);
+    assert.match(prepared.context.v2Prompt, /STALLED_AGENT_RUN/);
+
+    const next = definitions.project_debugger.transition({
+      task,
+      result: {
+        outcome: 'TASK_TOO_LARGE',
+        summary: 'The task shape is causing repeated model stalls.',
+        result: {
+          reason: 'The developer must inspect and validate too much in one attempt.',
+          guidance: 'Split the end-to-end campaign work into smaller independently executable slices.',
+          evidence: ['Repeated STALLED_AGENT_RUN with expanding inspection scope.'],
+          affectedComponent: 'delivery-plan',
+        },
+      },
+    });
+    assert.equal(next.state, 'DONE');
+    const blocked = store.getTask('T-blocked');
+    assert.equal(blocked.state, 'WAITING_REPLAN');
+    assert.equal(blocked.stage, 'developer');
+    assert.equal(planning.length, 1);
+    assert.equal(planning[0].request.purpose, 'REPLAN_TASK');
+    assert.equal(planning[0].request.taskId, 'T-blocked');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unified Project Debugger hands true runtime failures to a human without reclassifying the business task', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-runtime-debug' });
+    store.createTask({
+      id: 'T-runtime',
+      projectId: 'P-runtime-debug',
+      scope: 'delivery',
+      stage: 'tester',
+      state: 'SYSTEM_BLOCKED',
+    });
+    store.createTask({
+      id: 'debug:T-runtime:1',
+      projectId: 'P-runtime-debug',
+      scope: 'control',
+      flowId: 'debug:T-runtime:1',
+      stage: 'project_debugger',
+      state: 'READY',
+      input: { blockedTaskId: 'T-runtime', systemIncident: { incidents: [{ failure: 'TOOL_PERMISSION_DENIED' }] } },
     });
     const definitions = createDefaultV2Roles({
       store,
@@ -2076,33 +2144,25 @@ test('System Debugger only diagnoses and hands repair to a human', () => {
       providerId: 'fake',
       codeProviderId: 'ariad-code',
     });
-    const task = store.getTask('system-debug:T-blocked:1');
-    const prepared = definitions.system_debugger.prepare({ task });
-    assert.match(prepared.context.v2Prompt, /Diagnose only/i);
-    assert.match(prepared.context.v2Prompt, /do not repair anything/i);
-    assert.match(prepared.context.v2Prompt, /ROLE_RESULT_RECOVERY_FAILED/);
-
-    const next = definitions.system_debugger.transition({
+    const task = store.getTask('debug:T-runtime:1');
+    const next = definitions.project_debugger.transition({
       task,
       result: {
-        outcome: 'DIAGNOSED',
-        summary: 'Result tool recovery repeatedly failed.',
+        outcome: 'SYSTEM_RUNTIME_FAILURE',
+        summary: 'Host tool permission is broken.',
         result: {
-          cause: 'The result tool is not being provisioned into the recovery run.',
-          evidence: ['Three recovery attempts ended with ROLE_RESULT_RECOVERY_TOOL_UNAVAILABLE.'],
-          recommendedActions: ['Inspect OpenClaw runtimePluginToolGrant provisioning.'],
-          affectedComponent: 'openclaw-agent-session-runtime-adapter',
-          summaryForHuman: 'Ariad cannot provision the result tool into the recovery run.',
+          reason: 'The runtime denied the required tool before business verification could run.',
+          guidance: 'Repair the host tool permission.',
+          evidence: ['TOOL_PERMISSION_DENIED'],
+          affectedComponent: 'openclaw-runtime',
         },
       },
     });
     assert.equal(next.state, 'NEEDS_HUMAN');
     assert.equal(next.transitionHistory.type, 'SYSTEM_DIAGNOSIS');
-    assert.equal(next.transitionHistory.role, 'system_debugger');
-    assert.equal(next.transitionHistory.blockedTaskId, 'T-blocked');
-    assert.deepEqual(next.transitionHistory.recommendedActions, [
-      'Inspect OpenClaw runtimePluginToolGrant provisioning.',
-    ]);
+    assert.equal(next.transitionHistory.role, 'project_debugger');
+    assert.equal(next.transitionHistory.blockedTaskId, 'T-runtime');
+    assert.equal(store.getTask('T-runtime').state, 'SYSTEM_BLOCKED');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
