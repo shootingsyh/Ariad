@@ -650,6 +650,7 @@ export function createDefaultV2Roles({
             'You own product intent and are the only role allowed to request a human decision.',
             'First decide the product question yourself from the durable project brief/spec, explicit prior user decisions, task acceptance criteria, and task history whenever that evidence is sufficient.',
             'Return PRODUCT_DECISION when you can determine the intended behavior. State the concrete product decision in result.decision and give Tech Lead actionable result.guidance. Do not ask the user merely to approve a repair route.',
+            'If task history contains HUMAN_DECISION, treat that explicit user answer as authoritative product input. Convert it into PRODUCT_DECISION unless another genuinely unresolved product question remains.',
             'Return NEEDS_HUMAN only when existing product evidence is genuinely insufficient and a new user/product choice is required. Ask the minimum concrete questions needed.',
             'Do not modify implementation files and do not perform engineering decomposition yourself; Tech Lead will translate your product decision into task/plan changes.',
             JSON.stringify({
