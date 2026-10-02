@@ -272,7 +272,6 @@ test('OpenClaw plugin manifest declares project and role-result tools and starts
     'ariad_tester_result',
     'ariad_reviewer_result',
     'ariad_project_debugger_result',
-    'ariad_system_debugger_result',
     'ariad_tech_lead_result',
     'ariad_tech_lead_critic_result',
     'ariad_pm_result',

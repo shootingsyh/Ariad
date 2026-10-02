@@ -4,7 +4,6 @@ export const ARIAD_MODEL_ROLES = Object.freeze([
   'tester',
   'reviewer',
   'project_debugger',
-  'system_debugger',
   'tech_lead',
   'tech_lead_critic',
   'pm',
@@ -17,6 +16,9 @@ export function normalizeRoleModels(value = {}) {
   const allowed = new Set(ARIAD_MODEL_ROLES);
   const result = {};
   for (const [role, raw] of Object.entries(value)) {
+    // 0.7.9/0.8.0 persisted this now-removed role. Ignore it during migration;
+    // unified debugging always uses project_debugger.
+    if (role === 'system_debugger') continue;
     if (!allowed.has(role)) throw new Error(`unknown Ariad model role: ${role}`);
     const model = String(raw ?? '').trim();
     if (!model || !model.includes('/')) {
@@ -28,9 +30,7 @@ export function normalizeRoleModels(value = {}) {
 }
 
 export function missingRoleModels(roleModels = {}) {
-  return ARIAD_MODEL_ROLES
-    .filter(role => role !== 'system_debugger')
-    .filter(role => !String(roleModels?.[role] ?? '').trim());
+  return ARIAD_MODEL_ROLES.filter(role => !String(roleModels?.[role] ?? '').trim());
 }
 
 export function requireCompleteRoleModels(roleModels = {}) {
