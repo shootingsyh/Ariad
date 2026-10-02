@@ -132,3 +132,42 @@ test('missing in-memory run handle is reported as a non-consuming restart orphan
     restartOrphan: true,
   });
 });
+
+
+test('cancel is not confirmed until runEmbeddedAgent actually settles', async () => {
+  const pending = deferred();
+  let call = null;
+  const agent = {
+    session: { getSessionEntry: () => null },
+    resolveAgentWorkspaceDir: () => '/workspace',
+    runEmbeddedAgent(input) {
+      call = input;
+      return pending.promise;
+    },
+  };
+  const adapter = new OpenClawAgentSessionRuntimeAdapter({
+    agent,
+    config: () => ({}),
+    agentId: 'main',
+  });
+
+  const handle = await adapter.start({
+    runId: 'cancel-attempt',
+    role: 'developer',
+    context: { projectId: 'p', taskId: 't', attemptId: 'cancel-attempt' },
+  });
+
+  const requested = await adapter.cancel(handle);
+  assert.equal(requested.state, 'CANCELLING');
+  assert.equal(requested.confirmed, false);
+  assert.equal(call.abortSignal.aborted, true);
+
+  pending.reject(call.abortSignal.reason);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const confirmed = await adapter.cancel(handle);
+  assert.equal(confirmed.state, 'CANCELLED');
+  assert.equal(confirmed.confirmed, true);
+  assert.equal(confirmed.terminalState, 'CANCELLED');
+});
