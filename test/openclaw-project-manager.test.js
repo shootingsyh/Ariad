@@ -10,6 +10,7 @@ import {
   requireCompleteRoleModels,
 } from '../extensions/openclaw-ariad/runtime/role-models.js';
 import { AriadDashboardService } from '../extensions/openclaw-ariad/src/dashboard-service.ts';
+import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { OpenClawRuntimeAdapter } from '../extensions/openclaw-ariad/src/openclaw-runtime-adapter.ts';
 
 const testRoleModels = () => Object.fromEntries(
@@ -300,24 +301,87 @@ test('legacy projectAgent binding is read as Frontdesk without migration', () =>
 });
 
 
-test('Ariad dashboard starts and serves project JSON without owning project state', async () => {
+test('Ariad dashboard serves responsive versioned feature and milestone trees without owning project state', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-dashboard-'));
   const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
-  manager.create('Dashboard Project', { goal: 'observe me', roleModels: testRoleModels() });
+  const project = manager.create('Dashboard Project', { goal: 'observe me', roleModels: testRoleModels() });
+
+  const store = new SQLiteV2Store(project.stateDb);
+  store.createProject({
+    id: project.id,
+    spec: project.goal,
+    projectVersion: 1,
+    activeVersion: 2,
+    logicalRootId: 'product',
+    logicalNodes: [
+      { id: 'product', title: 'Product', summary: 'The whole product.', parentId: null, revision: { version: 2, kind: 'unchanged', reason: 'stable' } },
+      { id: 'product.login', title: 'Login', summary: 'Sign in flow.', parentId: 'product', revision: { version: 2, kind: 'revised', reason: 'new UX' } },
+    ],
+    milestones: [
+      { id: 'M1', title: 'Login slice', goal: 'Ship login.', parentId: null, dependsOn: [], logicalRefs: ['product.login'], acceptanceCriteria: ['Login works'], testStrategy: 'E2E' },
+    ],
+  });
+  store.createTask({
+    id: 'login-task',
+    projectId: project.id,
+    scope: 'delivery',
+    stage: 'tester',
+    state: 'READY',
+    title: 'Verify login',
+    milestoneId: 'M1',
+    logicalRefs: ['product.login'],
+  });
+  store.close();
+
+  const snapshotDir = join(project.workspace, '.ariad', 'versions', 'v1');
+  mkdirSync(snapshotDir, { recursive: true });
+  writeFileSync(join(snapshotDir, 'snapshot.json'), JSON.stringify({
+    snapshotVersion: 1,
+    projectId: project.id,
+    projectVersion: 1,
+    capturedAt: '2026-09-30T00:00:00.000Z',
+    logicalRootId: 'product',
+    logicalNodes: [{ id: 'product', title: 'Product v1', summary: 'First version.', parentId: null }],
+    milestones: [{ id: 'M0', title: 'Baseline', goal: 'Ship baseline.', parentId: null, dependsOn: [] }],
+    deliveryPlanVersion: 1,
+    deliveryRootTaskId: 'baseline-task',
+    deliveryTasks: [{ id: 'baseline-task', scope: 'delivery', stage: 'reviewer', state: 'DONE', milestoneId: 'M0', logicalRefs: ['product'] }],
+  }, null, 2));
+
   const dashboard = new AriadDashboardService({ manager, host: '127.0.0.1', port: 0 });
 
   try {
     await dashboard.start();
     const address = dashboard.address;
     assert.ok(address && typeof address.port === 'number' && address.port > 0);
-    const projects = await fetch(`http://127.0.0.1:${address.port}/api/projects`).then(r => r.json());
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const projects = await fetch(base + '/api/projects').then(r => r.json());
     assert.equal(projects.length, 1);
     assert.equal(projects[0].project.id, 'dashboard-project');
-    assert.equal(projects[0].summary.total, 0);
+    assert.equal(projects[0].summary.total, 1);
 
-    const page = await fetch(`http://127.0.0.1:${address.port}/`).then(r => r.text());
-    assert.match(page, /Ariad Dashboard/);
-    assert.match(page, /Read-only live view/);
+    const versions = await fetch(base + '/api/projects/dashboard-project/versions').then(r => r.json());
+    assert.deepEqual(versions.map(v => [v.version, v.current]), [[1, false], [2, true]]);
+
+    const v1 = await fetch(base + '/api/projects/dashboard-project/versions/1').then(r => r.json());
+    assert.equal(v1.sourceLabel, 'Immutable completed-version snapshot');
+    assert.equal(v1.logicalNodes[0].title, 'Product v1');
+    assert.equal(v1.milestones[0].id, 'M0');
+    assert.equal(v1.tasks[0].state, 'DONE');
+
+    const v2 = await fetch(base + '/api/projects/dashboard-project/versions/2').then(r => r.json());
+    assert.equal(v2.current, true);
+    assert.equal(v2.logicalNodes.find(node => node.id === 'product.login').revision.kind, 'revised');
+    assert.equal(v2.milestones[0].id, 'M1');
+    assert.equal(v2.tasks[0].id, 'login-task');
+
+    const page = await fetch(base + '/').then(r => r.text());
+    assert.match(page, /Ariad Project Explorer/);
+    assert.match(page, /Feature Tree/);
+    assert.match(page, /Milestone Tree/);
+    assert.match(page, /@media\(max-width:900px\)/);
+    assert.match(page, /mobile-detail-close/);
   } finally {
     await dashboard.stop();
     rmSync(dir, { recursive: true, force: true });
