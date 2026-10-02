@@ -2,7 +2,7 @@
   "id": "ariad",
   "name": "Ariad",
   "description": "Create and manage isolated Ariad autonomous engineering projects.",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "activation": {
     "onStartup": true
   },
