@@ -425,11 +425,33 @@ export function createDefaultV2Roles({
     project_debugger: {
       prepare: ({ task }) => prepareLlm(task, null),
       transition: ({ task, result }) => {
-        if (result.outcome === 'ASSET_ISSUE') return { stage: 'artist', state: 'READY' };
         if (result.outcome === 'WRONG_IMPLEMENTATION_APPROACH') {
-          return strategyEpoch(task) >= 3
-            ? { state: 'NEEDS_HUMAN' }
-            : { stage: 'developer', state: 'READY' };
+          return {
+            stage: 'developer',
+            state: 'READY',
+            transitionHistory: {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'developer',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        if (result.outcome === 'ASSET_ISSUE') {
+          return {
+            stage: 'artist',
+            state: 'READY',
+            transitionHistory: {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'artist',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
         }
         if (result.outcome === 'TASK_TOO_LARGE') {
           enqueuePlanning?.({
@@ -439,9 +461,46 @@ export function createDefaultV2Roles({
               diagnosis: result.result ?? result,
             },
           });
-          return { stage: 'developer', state: 'WAITING_REPLAN' };
+          return {
+            stage: 'developer',
+            state: 'WAITING_REPLAN',
+            transitionHistory: {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'tech_lead',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
         }
-        return { state: 'NEEDS_HUMAN' };
+        if (result.outcome === 'REQUIREMENT_DECISION_REQUIRED' || result.outcome === 'UNKNOWN_PROJECT_CAUSE') {
+          return {
+            stage: 'pm',
+            state: 'READY',
+            transitionHistory: {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'pm',
+              diagnosis: result.outcome,
+              summary: result.summary ?? result.result?.reason ?? null,
+              guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        return {
+          stage: 'pm',
+          state: 'READY',
+          transitionHistory: {
+            type: 'DEBUGGER_ROUTE',
+            role: 'project_debugger',
+            route: 'pm',
+            diagnosis: result.outcome ?? 'UNKNOWN',
+            summary: result.summary ?? null,
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
 
@@ -457,33 +516,22 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
-        if (result.outcome === 'NEEDS_HUMAN') {
-          return {
-            state: 'NEEDS_HUMAN',
-            transitionHistory: {
-              type: 'TECH_LEAD_HUMAN_DECISION',
-              role: 'tech_lead',
-              summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a human decision.',
-              questions: result.result?.questions ?? [],
-              guidance: result.result?.guidance ?? null,
-              at: new Date().toISOString(),
-            },
-          };
+        if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          return task.scope === 'control'
+            ? { state: 'DONE' }
+            : { stage: 'developer', state: 'WAITING_REPLAN' };
         }
-        if (task.scope === 'control') return { state: 'DONE' };
-        return result.outcome === 'PLANNED' || result.outcome === 'REPLANNED'
-          ? { stage: 'developer', state: 'WAITING_REPLAN' }
-          : {
-              state: 'NEEDS_HUMAN',
-              transitionHistory: {
-                type: 'TECH_LEAD_HUMAN_DECISION',
-                role: 'tech_lead',
-                summary: result.summary ?? 'Tech Lead could not produce a valid repair plan.',
-                questions: result.result?.questions ?? [],
-                guidance: result.result?.guidance ?? null,
-                at: new Date().toISOString(),
-              },
-            };
+        return {
+          stage: 'pm',
+          state: 'READY',
+          transitionHistory: {
+            type: 'TECH_LEAD_ESCALATED_TO_PM',
+            role: 'tech_lead',
+            summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a product-level decision before planning can continue.',
+            guidance: result.result?.guidance ?? null,
+            at: new Date().toISOString(),
+          },
+        };
       },
     },
 
@@ -593,6 +641,31 @@ export function createDefaultV2Roles({
     pm: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.scope === 'delivery') {
+          const debuggerResult = [...(task.history ?? [])].reverse().find(
+            entry => entry?.type === 'ROLE_RESULT' && entry?.role === 'project_debugger'
+          ) ?? null;
+          const prompt = [
+            'You are Ariad\'s PM resolving a product/requirement escalation from Project Debugger.',
+            'You own product intent and are the only role allowed to request a human decision.',
+            'First decide the product question yourself from the durable project brief/spec, explicit prior user decisions, task acceptance criteria, and task history whenever that evidence is sufficient.',
+            'Return PRODUCT_DECISION when you can determine the intended behavior. State the concrete product decision in result.decision and give Tech Lead actionable result.guidance. Do not ask the user merely to approve a repair route.',
+            'Return NEEDS_HUMAN only when existing product evidence is genuinely insufficient and a new user/product choice is required. Ask the minimum concrete questions needed.',
+            'Do not modify implementation files and do not perform engineering decomposition yourself; Tech Lead will translate your product decision into task/plan changes.',
+            JSON.stringify({
+              project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW' },
+              task: {
+                id: task.id,
+                title: task.title ?? null,
+                input: task.input ?? null,
+                stage: task.stage,
+                history: task.history ?? [],
+              },
+              debuggerDiagnosis: debuggerResult,
+            }, null, 2),
+          ].join('\n\n');
+          return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
+        }
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
         const iteration = iterationRequest(store, task);
@@ -621,6 +694,54 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
       },
       transition: ({ task, result }) => {
+        if (task.scope === 'delivery') {
+          if (result.outcome === 'PRODUCT_DECISION') {
+            const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
+            enqueuePlanning?.({
+              request: {
+                purpose: 'PRODUCT_DECISION_REPLAN',
+                taskId: task.id,
+                decision,
+                guidance: result.result?.guidance ?? null,
+                instruction: 'Translate the PM product decision into the smallest correct engineering change. Amend the current task when local, replan the affected subtree when cross-task, or replan the project only when product scope truly requires it.',
+              },
+            });
+            return {
+              stage: 'developer',
+              state: 'WAITING_REPLAN',
+              transitionHistory: {
+                type: 'PRODUCT_DECISION',
+                role: 'pm',
+                decision,
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'NEEDS_HUMAN') {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION',
+                role: 'pm',
+                summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          return {
+            stage: 'pm',
+            state: 'READY',
+            transitionHistory: {
+              type: 'PM_DECISION_RETRY',
+              role: 'pm',
+              summary: `Unexpected PM delivery-escalation outcome: ${result.outcome}`,
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (result.outcome === 'PLAN_ACCEPTED') {
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
@@ -671,15 +792,27 @@ export function createDefaultV2Roles({
           });
           return { state: 'DONE' };
         }
+        if (result.outcome === 'NEEDS_HUMAN') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'PM_HUMAN_DECISION',
+              role: 'pm',
+              summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
+              guidance: result.result?.guidance ?? null,
+              questions: result.result?.questions ?? [],
+              at: new Date().toISOString(),
+            },
+          };
+        }
         return {
           stage: 'tech_lead',
           state: 'READY',
           transitionHistory: {
             type: 'PM_ESCALATED_TO_TECH_LEAD',
             role: 'pm',
-            summary: result.summary ?? result.result?.reason ?? 'PM requires planning-level escalation.',
+            summary: result.summary ?? result.result?.reason ?? 'PM requires planning revision.',
             guidance: result.result?.guidance ?? null,
-            questions: result.result?.questions ?? [],
             at: new Date().toISOString(),
           },
         };
