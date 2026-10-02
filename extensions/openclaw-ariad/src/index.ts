@@ -110,9 +110,7 @@ const plugin = defineFeaturePlugin({
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
       resolveModelRef: (projectId, role) => {
         const roleModels = manager.status(projectId).roleModels as Record<string, string | undefined>;
-        return role === 'system_debugger'
-          ? (roleModels?.system_debugger ?? roleModels?.project_debugger ?? null)
-          : (roleModels?.[role] ?? null);
+        return roleModels?.[role] ?? null;
       },
     });
     const readModelOverridePolicy = () => {
