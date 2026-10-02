@@ -97,10 +97,12 @@ export class V2Scheduler {
     const allTasks = this.store.listTasks(projectId);
     const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
     const deliveryEnabled = project.deliveryEnabled !== false;
+    const isUnifiedDiagnostic = task =>
+      task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
     const schedulableTasks = planningBlocked
-      ? allTasks.filter(task => isPlannerTask(task) || task.stage === 'system_debugger')
+      ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
       : allTasks.filter(task =>
-          (!isPlannerTask(task) || task.stage === 'system_debugger')
+          (!isPlannerTask(task) || isUnifiedDiagnostic(task))
           && (task.scope !== 'delivery' || deliveryEnabled)
         );
     const candidates = [];
