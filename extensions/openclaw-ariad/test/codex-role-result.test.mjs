@@ -4,6 +4,7 @@ import {
   CODEX_ROLE_RESULT_TOOL_NAME,
   registerCodexRoleResultTool,
   roleResultToolMetadata,
+  roleResultPromptGuidance,
 } from '../dist/role-result-tools.js';
 import { OpenClawRuntimeAdapter } from '../dist/openclaw-runtime-adapter.js';
 
@@ -178,4 +179,24 @@ test('tester result schema has no routing field and rejects extra result propert
     ['criterionId', 'status', 'evidenceType', 'evidence', 'reason'],
   );
   assert.equal('routeTo' in resultSchema.properties, false);
+});
+
+
+test('tester role-result guidance includes strict schema rules and a minimal legal example', () => {
+  const guidance = roleResultPromptGuidance('tester', 'ariad_tester_result', 'attempt-tester-1');
+  assert.match(guidance, /strict schema/i);
+  assert.match(guidance, /Do not add extra fields/i);
+  assert.match(guidance, /correct only the result-tool arguments/i);
+  assert.match(guidance, /"attemptId": "attempt-tester-1"/);
+  assert.match(guidance, /"criterionId": "AC-1"/);
+  assert.match(guidance, /"status": "SATISFIED"/);
+  assert.match(guidance, /requirement, verification, description, proof, criterion, or routeTo/);
+});
+
+test('non-tester role-result guidance remains strict without tester-specific schema example', () => {
+  const guidance = roleResultPromptGuidance('developer', 'ariad_developer_result', 'attempt-dev-1');
+  assert.match(guidance, /strict schema/i);
+  assert.match(guidance, /Do not add extra fields/i);
+  assert.doesNotMatch(guidance, /TESTER RESULT SHAPE/);
+  assert.doesNotMatch(guidance, /criterionId/);
 });
