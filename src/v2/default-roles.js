@@ -760,14 +760,15 @@ export function createDefaultV2Roles({
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
-              stage: 'tech_lead',
-              state: 'READY',
+              state: 'NEEDS_HUMAN',
               transitionHistory: {
-                type: 'TAKEOVER_REVIEW_ESCALATION',
+                type: 'PM_HUMAN_DECISION',
                 role: 'pm',
                 summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
                 guidance: result.result?.guidance ?? null,
-                questions: result.result?.questions ?? [],
+                questions: result.result?.questions?.length
+                  ? result.result.questions
+                  : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
                 at: new Date().toISOString(),
               },
             };
