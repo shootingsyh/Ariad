@@ -98,9 +98,9 @@ export class V2Scheduler {
     const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
     const deliveryEnabled = project.deliveryEnabled !== false;
     const schedulableTasks = planningBlocked
-      ? allTasks.filter(isPlannerTask)
+      ? allTasks.filter(task => isPlannerTask(task) || task.stage === 'system_debugger')
       : allTasks.filter(task =>
-          !isPlannerTask(task)
+          (!isPlannerTask(task) || task.stage === 'system_debugger')
           && (task.scope !== 'delivery' || deliveryEnabled)
         );
     const candidates = [];
