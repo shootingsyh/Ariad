@@ -503,6 +503,24 @@ class ProjectRuntime {
     return recovered;
   }
 
+  acknowledgeSystemDiagnosisOnResume(reason = 'MANUAL_RESUME_AFTER_SYSTEM_REPAIR') {
+    const acknowledged: string[] = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'system_debugger') continue;
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'HUMAN_DECISION',
+        decision: reason,
+        systemRepairConfirmed: true,
+        at: new Date().toISOString(),
+      }, {
+        state: 'DONE',
+        execution: null,
+      });
+      acknowledged.push(task.id);
+    }
+    return acknowledged;
+  }
+
   recoverRestartOrphanHumanGates(reason = 'MANUAL_RESUME_AFTER_RUNTIME_RESTART') {
     const recovered: string[] = [];
     for (const task of this.store.listTasks(this.projectId)) {
@@ -906,9 +924,13 @@ export class AriadV2Service {
       if (current.executionState === 'FAILED') {
         recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
       } else {
+        const systemDiagnosisAcknowledged = runtime.acknowledgeSystemDiagnosisOnResume('MANUAL_RESUME_AFTER_SYSTEM_REPAIR');
+        const systemRecovered = systemDiagnosisAcknowledged.length > 0
+          ? runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_SYSTEM_REPAIR')
+          : [];
         const restartRecovered = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
         const legacyRecovered = runtime.recoverLegacyHumanGates('MANUAL_RESUME_LEGACY_HUMAN_GATE');
-        recoveredTasks = [...new Set([...restartRecovered, ...legacyRecovered])];
+        recoveredTasks = [...new Set([...systemRecovered, ...restartRecovered, ...legacyRecovered])];
       }
       if (recoveredTasks.length > 0 || current.executionState === 'FAILED') {
         this.manager.setExecutionState(name, 'IDLE');
