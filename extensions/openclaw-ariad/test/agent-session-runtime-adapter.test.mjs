@@ -61,6 +61,8 @@ test('result recovery reuses the same normal agent session and only asks for str
     toolNames: ['ariad_developer_result'],
   });
   assert.match(calls[1].prompt, /Do not redo the task/);
+  assert.match(calls[1].prompt, /STRICT RESULT TOOL SCHEMA/);
+  assert.match(calls[1].prompt, /correcting\/submitting the structured result/i);
   assert.match(calls[1].prompt, /attempt-1/);
 
   const terminated = await adapter.terminateAttempt('attempt-1');
