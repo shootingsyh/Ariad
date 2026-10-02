@@ -504,6 +504,33 @@ export function createDefaultV2Roles({
       },
     },
 
+    system_debugger: {
+      prepare: ({ task }) => prepareLlm(task, [
+        "You are Ariad's system debugger.",
+        'The business task is already SYSTEM_BLOCKED after automatic retry/recovery was exhausted.',
+        'Diagnose only. Do not repair anything, do not modify files/config/state, do not restart services, do not retry the blocked role, and do not apply workarounds.',
+        'Use the supplied blocked-task snapshot, system interruption history, execution metadata, and any read-only runtime/log inspection available to determine the likely system cause.',
+        'Separate observed evidence from hypotheses. Return DIAGNOSED with cause, evidence, recommendedActions, affectedComponent, and summaryForHuman.',
+        'The human operator will decide and perform any repair.',
+        JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
+      ].join('\n\n')),
+      transition: ({ task, result }) => ({
+        state: 'NEEDS_HUMAN',
+        transitionHistory: {
+          type: 'SYSTEM_DIAGNOSIS',
+          role: 'system_debugger',
+          blockedTaskId: task.input?.blockedTaskId ?? null,
+          summary: result.result?.summaryForHuman ?? result.summary ?? 'System diagnosis requires human action.',
+          cause: result.result?.cause ?? null,
+          evidence: result.result?.evidence ?? [],
+          recommendedActions: result.result?.recommendedActions ?? [],
+          affectedComponent: result.result?.affectedComponent ?? null,
+          questions: ['Review the system diagnosis, repair Ariad/OpenClaw/environment as appropriate, then explicitly resume the project.'],
+          at: new Date().toISOString(),
+        },
+      }),
+    },
+
     tech_lead: {
       prepare: ({ project, task }) => {
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);

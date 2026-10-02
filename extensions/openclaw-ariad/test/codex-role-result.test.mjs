@@ -200,3 +200,16 @@ test('non-tester role-result guidance remains strict without tester-specific sch
   assert.doesNotMatch(guidance, /TESTER RESULT SHAPE/);
   assert.doesNotMatch(guidance, /criterionId/);
 });
+
+
+test('system debugger result schema is diagnosis-only', () => {
+  const diagnostic = roleResultToolMetadata().find(item => item.name === 'ariad_system_debugger_result');
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.parameters.properties.outcome.const, 'DIAGNOSED');
+  const resultSchema = diagnostic.parameters.properties.result;
+  assert.equal(resultSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(resultSchema.properties),
+    ['cause', 'evidence', 'recommendedActions', 'affectedComponent', 'summaryForHuman'],
+  );
+});

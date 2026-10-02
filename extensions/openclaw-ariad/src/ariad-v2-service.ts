@@ -133,9 +133,14 @@ class ProjectRuntime {
       artifactRoot: this.artifactRoot,
       executionCapabilities: this.executionCapabilities,
       executionProvenance: this.executionProvenance,
-      resolveRoleExecutionMetadata: (role: string) => ({
-        modelRef: (this.manager.status(project.id).roleModels as Record<string, string | undefined>)?.[role] ?? null,
-      }),
+      resolveRoleExecutionMetadata: (role: string) => {
+        const roleModels = this.manager.status(project.id).roleModels as Record<string, string | undefined>;
+        return {
+          modelRef: role === 'system_debugger'
+            ? (roleModels?.system_debugger ?? roleModels?.project_debugger ?? null)
+            : (roleModels?.[role] ?? null),
+        };
+      },
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
         this.store.enqueuePlanningRequest({
@@ -337,21 +342,100 @@ class ProjectRuntime {
     return { planningRequest, snapshot, project: this.status() };
   }
 
+  ensureSystemDebuggerTasks() {
+    const tasks = this.store.listTasks(this.projectId);
+
+    for (const diagnostic of tasks.filter((task: any) => task.stage === 'system_debugger' && task.state === 'SYSTEM_BLOCKED')) {
+      this.store.appendTaskHistory(diagnostic.id, diagnostic.version, {
+        type: 'SYSTEM_DIAGNOSIS_FAILED',
+        role: 'system_debugger',
+        blockedTaskId: diagnostic.input?.blockedTaskId ?? null,
+        summary: 'System Debugger itself could not run after automatic retries. Human inspection is required.',
+        questions: ['Inspect the Ariad/OpenClaw/system failure manually. The diagnostic role itself could not complete.'],
+        at: new Date().toISOString(),
+      }, {
+        state: 'NEEDS_HUMAN',
+        execution: null,
+      });
+    }
+
+    const refreshed = this.store.listTasks(this.projectId);
+    for (const blocked of refreshed.filter((task: any) => task.state === 'SYSTEM_BLOCKED' && task.stage !== 'system_debugger')) {
+      const blockedHistoryLength = (blocked.history ?? []).length;
+      const existing = refreshed.find((task: any) =>
+        task.stage === 'system_debugger'
+        && task.input?.blockedTaskId === blocked.id
+        && task.input?.blockedHistoryLength === blockedHistoryLength
+      );
+      if (existing) continue;
+
+      const recentHistory = structuredClone((blocked.history ?? []).slice(-20));
+      const incidents = this.store.listIncidents(this.projectId)
+        .filter((incident: any) => incident?.taskId === blocked.id)
+        .slice(-10);
+      const sequence = refreshed.filter((task: any) =>
+        task.stage === 'system_debugger' && task.input?.blockedTaskId === blocked.id
+      ).length + 1;
+      const diagnosticId = `system-debug:${blocked.id}:${sequence}`;
+      this.store.createTask({
+        id: diagnosticId,
+        projectId: this.projectId,
+        scope: 'control',
+        flowId: diagnosticId,
+        parentId: null,
+        dependsOn: [],
+        stage: 'system_debugger',
+        state: 'READY',
+        title: `Diagnose system block: ${blocked.id}`,
+        intent: 'Diagnose the Ariad/OpenClaw execution-system failure for human inspection without repairing it.',
+        acceptanceCriteria: [],
+        verification: [],
+        history: [],
+        artifacts: [],
+        execution: null,
+        input: {
+          blockedTaskId: blocked.id,
+          blockedHistoryLength,
+          systemIncident: {
+            blockedTask: {
+              id: blocked.id,
+              scope: blocked.scope ?? null,
+              stage: blocked.stage,
+              state: blocked.state,
+              title: blocked.title ?? null,
+              execution: structuredClone(blocked.execution ?? null),
+              recentHistory,
+            },
+            incidents: structuredClone(incidents),
+          },
+        },
+      });
+      this.wakeScheduler('system-debugger-enqueued');
+    }
+  }
+
   async tick({ schedule = true }: { schedule?: boolean } = {}) {
     if (this.ticking) return;
     this.ticking = true;
     try {
       await this.supervisor.audit(this.projectId);
+      this.ensureSystemDebuggerTasks();
       if (schedule) await this.scheduler.tick(this.projectId);
+      this.ensureSystemDebuggerTasks();
 
       const tasks = this.store.listTasks(this.projectId);
       const delivery = tasks.filter(task => task.scope === 'delivery');
       let state = 'IDLE';
 
-      if (tasks.some(task => task.state === 'SYSTEM_BLOCKED')) {
-        state = 'FAILED';
-      } else if (tasks.some(task => task.state === 'NEEDS_HUMAN')) {
+      if (tasks.some(task => task.state === 'NEEDS_HUMAN')) {
         state = 'NEEDS_HUMAN';
+      } else if (
+        tasks.some(task => task.state === 'SYSTEM_BLOCKED')
+        && tasks.some(task => task.stage === 'system_debugger' && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state))
+      ) {
+        state = 'RUNNING';
+      } else if (tasks.some(task => task.state === 'SYSTEM_BLOCKED')) {
+        state = 'FAILED';
       } else if (this.store.hasUnplannedPlanningRequests(this.projectId)) {
         state = 'PLANNING';
       } else if (delivery.length > 0 && delivery.every(task => ['DONE', 'OBSOLETE'].includes(task.state))) {
@@ -419,6 +503,24 @@ class ProjectRuntime {
       recovered.push(task.id);
     }
     return recovered;
+  }
+
+  acknowledgeSystemDiagnosisOnResume(reason = 'MANUAL_RESUME_AFTER_SYSTEM_REPAIR') {
+    const acknowledged: string[] = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'system_debugger') continue;
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'HUMAN_DECISION',
+        decision: reason,
+        systemRepairConfirmed: true,
+        at: new Date().toISOString(),
+      }, {
+        state: 'DONE',
+        execution: null,
+      });
+      acknowledged.push(task.id);
+    }
+    return acknowledged;
   }
 
   recoverRestartOrphanHumanGates(reason = 'MANUAL_RESUME_AFTER_RUNTIME_RESTART') {
@@ -591,15 +693,24 @@ class ProjectRuntime {
   submitDecision(decision: string) {
     const task = this.store.listTasks(this.projectId).find(item => item.state === 'NEEDS_HUMAN');
     if (!task) throw new Error('project has no pending human decision');
+    const systemDiagnosis = task.stage === 'system_debugger';
     this.store.appendTaskHistory(task.id, task.version, {
       type: 'HUMAN_DECISION',
       decision,
       at: new Date().toISOString(),
     }, {
-      state: 'READY',
+      state: systemDiagnosis ? 'DONE' : 'READY',
     });
-    this.manager.setExecutionState(this.projectId, 'IDLE');
-    return { taskId: task.id, decision };
+    this.manager.setExecutionState(this.projectId, systemDiagnosis ? 'FAILED' : 'IDLE');
+    return {
+      taskId: task.id,
+      decision,
+      ...(systemDiagnosis ? {
+        systemDiagnosis: true,
+        blockedTaskId: task.input?.blockedTaskId ?? null,
+        nextStep: 'Repair the system manually, then explicitly resume the project.',
+      } : {}),
+    };
   }
 
   close() {
@@ -815,9 +926,13 @@ export class AriadV2Service {
       if (current.executionState === 'FAILED') {
         recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
       } else {
+        const systemDiagnosisAcknowledged = runtime.acknowledgeSystemDiagnosisOnResume('MANUAL_RESUME_AFTER_SYSTEM_REPAIR');
+        const systemRecovered = systemDiagnosisAcknowledged.length > 0
+          ? runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_SYSTEM_REPAIR')
+          : [];
         const restartRecovered = runtime.recoverRestartOrphanHumanGates('MANUAL_RESUME_AFTER_RUNTIME_RESTART');
         const legacyRecovered = runtime.recoverLegacyHumanGates('MANUAL_RESUME_LEGACY_HUMAN_GATE');
-        recoveredTasks = [...new Set([...restartRecovered, ...legacyRecovered])];
+        recoveredTasks = [...new Set([...systemRecovered, ...restartRecovered, ...legacyRecovered])];
       }
       if (recoveredTasks.length > 0 || current.executionState === 'FAILED') {
         this.manager.setExecutionState(name, 'IDLE');

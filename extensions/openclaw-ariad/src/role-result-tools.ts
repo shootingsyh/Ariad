@@ -61,6 +61,7 @@ export const ROLE_RESULT_OUTCOMES: Record<string, ReadonlySet<string>> = {
   tester: new Set(['PASS', 'NOT_PASS']),
   reviewer: new Set(['PASS', 'NOT_PASS']),
   project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE']),
+  system_debugger: new Set(['DIAGNOSED']),
   tech_lead: new Set(['PLANNED', 'REPLANNED']),
   tech_lead_critic: new Set(['CLEAN', 'MINOR_ONLY', 'ISSUES']),
   pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN']),
@@ -72,6 +73,7 @@ export const ROLE_RESULT_TOOL_NAMES: Record<string, string> = {
   tester: 'ariad_tester_result',
   reviewer: 'ariad_reviewer_result',
   project_debugger: 'ariad_project_debugger_result',
+  system_debugger: 'ariad_system_debugger_result',
   tech_lead: 'ariad_tech_lead_result',
   tech_lead_critic: 'ariad_tech_lead_critic_result',
   pm: 'ariad_pm_result',
@@ -143,6 +145,17 @@ const schemas: Record<string, any> = {
     ]),
     ...commonFields,
     result: Type.Optional(Type.Any()),
+  }, { additionalProperties: false }),
+  system_debugger: Type.Object({
+    outcome: Type.Literal('DIAGNOSED'),
+    ...commonFields,
+    result: Type.Object({
+      cause: Type.String({ minLength: 1 }),
+      evidence: Type.Array(Type.String()),
+      recommendedActions: Type.Array(Type.String()),
+      affectedComponent: Type.String({ minLength: 1 }),
+      summaryForHuman: Type.String({ minLength: 1 }),
+    }, { additionalProperties: false }),
   }, { additionalProperties: false }),
   tech_lead: Type.Object({
     outcome: Type.Union([Type.Literal('PLANNED'), Type.Literal('REPLANNED')]),

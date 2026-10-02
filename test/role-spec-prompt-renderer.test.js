@@ -81,11 +81,21 @@ test('Reviewer prompt explicitly denies source-control and mutation authority', 
   assert.match(system, /Do not modify code, commit, merge, or push/);
 });
 
-test('Project Debugger prompt keeps infrastructure recovery outside project diagnosis', () => {
+test('Project Debugger prompt keeps execution-system recovery outside project diagnosis', () => {
   const system = new PromptRenderer().render('project_debugger', {}).messages[0].content;
-  assert.match(system, /infrastructure recovery belongs to Reliability/i);
+  assert.match(system, /execution-system retry\/recovery belongs to the Supervisor/i);
+  assert.match(system, /System Debugger/i);
   assert.match(system, /TASK_TOO_LARGE/);
   assert.match(system, /WRONG_IMPLEMENTATION_APPROACH/);
+});
+
+test('System Debugger is diagnosis-only and always hands repair to the human', () => {
+  const system = new PromptRenderer().render('system_debugger', {}).messages[0].content;
+  assert.match(system, /never repair the system yourself/i);
+  assert.match(system, /Do not modify product files, Ariad files, configuration, task state, databases, services, processes, model selection, or external systems/i);
+  assert.match(system, /Do not restart services, retry the blocked role, apply a workaround/i);
+  assert.match(system, /Always finish with DIAGNOSED/i);
+  assert.match(system, /human operator/i);
 });
 
 test('workflow role executor delegates prompt construction to injected renderer', async () => {

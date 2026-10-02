@@ -11,6 +11,17 @@ function partitionGraphs(tasks) {
   return partitionExecutionGraphs(tasks).map(({ key, graph }) => ({ key, tasks: graph.tasks }));
 }
 
+function systemFailureCount(task) {
+  let count = 0;
+  const history = task.history ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.type === 'ROLE_RESULT' || entry?.type === 'SYSTEM_RECOVERY') break;
+    if (entry?.type === 'SYSTEM_INTERRUPTION' && entry?.consumeAttempt !== false) count += 1;
+  }
+  return count;
+}
+
 function latestResult(task) {
   const history = task.history ?? [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -87,9 +98,9 @@ export class V2Scheduler {
     const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
     const deliveryEnabled = project.deliveryEnabled !== false;
     const schedulableTasks = planningBlocked
-      ? allTasks.filter(isPlannerTask)
+      ? allTasks.filter(task => isPlannerTask(task) || task.stage === 'system_debugger')
       : allTasks.filter(task =>
-          !isPlannerTask(task)
+          (!isPlannerTask(task) || task.stage === 'system_debugger')
           && (task.scope !== 'delivery' || deliveryEnabled)
         );
     const candidates = [];
@@ -191,9 +202,10 @@ export class V2Scheduler {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure: error?.message ?? String(error),
+          consumeAttempt: true,
           at: new Date().toISOString(),
         }, {
-          state: 'READY',
+          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
           execution: null,
         });
         this.resources.release(task.id);

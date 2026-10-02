@@ -2,7 +2,7 @@
   "id": "ariad",
   "name": "Ariad",
   "description": "Create and manage isolated Ariad autonomous engineering projects.",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "activation": {
     "onStartup": true
   },
@@ -36,6 +36,7 @@
       "ariad_tester_result",
       "ariad_reviewer_result",
       "ariad_project_debugger_result",
+      "ariad_system_debugger_result",
       "ariad_tech_lead_result",
       "ariad_tech_lead_critic_result",
       "ariad_pm_result",
@@ -61,6 +62,9 @@
       "optional": true
     },
     "ariad_project_debugger_result": {
+      "optional": true
+    },
+    "ariad_system_debugger_result": {
       "optional": true
     },
     "ariad_tech_lead_result": {
