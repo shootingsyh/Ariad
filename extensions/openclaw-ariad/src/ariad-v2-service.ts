@@ -342,16 +342,24 @@ class ProjectRuntime {
     return { planningRequest, snapshot, project: this.status() };
   }
 
-  ensureSystemDebuggerTasks() {
+  ensureUnifiedDebuggerTasks() {
     const tasks = this.store.listTasks(this.projectId);
 
-    for (const diagnostic of tasks.filter((task: any) => task.stage === 'system_debugger' && task.state === 'SYSTEM_BLOCKED')) {
+    // Migrate durable 0.7.9/0.8.0 diagnostic sidecars in place.
+    for (const legacy of tasks.filter((task: any) => task.stage === 'system_debugger')) {
+      this.store.updateTask(legacy.id, legacy.version, { stage: 'project_debugger' });
+    }
+
+    const migrated = this.store.listTasks(this.projectId);
+    for (const diagnostic of migrated.filter((task: any) =>
+      task.stage === 'project_debugger' && task.input?.blockedTaskId && task.state === 'SYSTEM_BLOCKED'
+    )) {
       this.store.appendTaskHistory(diagnostic.id, diagnostic.version, {
         type: 'SYSTEM_DIAGNOSIS_FAILED',
-        role: 'system_debugger',
+        role: 'project_debugger',
         blockedTaskId: diagnostic.input?.blockedTaskId ?? null,
-        summary: 'System Debugger itself could not run after automatic retries. Human inspection is required.',
-        questions: ['Inspect the Ariad/OpenClaw/system failure manually. The diagnostic role itself could not complete.'],
+        summary: 'Unified Project Debugger itself could not run after automatic retries. Human inspection is required.',
+        questions: ['Inspect the Ariad/OpenClaw/model/runtime failure manually. The diagnostic run itself could not complete.'],
         at: new Date().toISOString(),
       }, {
         state: 'NEEDS_HUMAN',
@@ -360,10 +368,13 @@ class ProjectRuntime {
     }
 
     const refreshed = this.store.listTasks(this.projectId);
-    for (const blocked of refreshed.filter((task: any) => task.state === 'SYSTEM_BLOCKED' && task.stage !== 'system_debugger')) {
+    for (const blocked of refreshed.filter((task: any) =>
+      task.state === 'SYSTEM_BLOCKED' && !(task.stage === 'project_debugger' && task.input?.blockedTaskId)
+    )) {
       const blockedHistoryLength = (blocked.history ?? []).length;
       const existing = refreshed.find((task: any) =>
-        task.stage === 'system_debugger'
+        task.stage === 'project_debugger'
+        && task.scope === 'control'
         && task.input?.blockedTaskId === blocked.id
         && task.input?.blockedHistoryLength === blockedHistoryLength
       );
@@ -374,9 +385,9 @@ class ProjectRuntime {
         .filter((incident: any) => incident?.taskId === blocked.id)
         .slice(-10);
       const sequence = refreshed.filter((task: any) =>
-        task.stage === 'system_debugger' && task.input?.blockedTaskId === blocked.id
+        task.stage === 'project_debugger' && task.input?.blockedTaskId === blocked.id
       ).length + 1;
-      const diagnosticId = `system-debug:${blocked.id}:${sequence}`;
+      const diagnosticId = `debug:${blocked.id}:${sequence}`;
       this.store.createTask({
         id: diagnosticId,
         projectId: this.projectId,
@@ -384,10 +395,10 @@ class ProjectRuntime {
         flowId: diagnosticId,
         parentId: null,
         dependsOn: [],
-        stage: 'system_debugger',
+        stage: 'project_debugger',
         state: 'READY',
-        title: `Diagnose system block: ${blocked.id}`,
-        intent: 'Diagnose the Ariad/OpenClaw execution-system failure for human inspection without repairing it.',
+        title: `Diagnose blocked task: ${blocked.id}`,
+        intent: 'Diagnose the root cause across task/project/model/runtime evidence and route the correct repair without directly performing it.',
         acceptanceCriteria: [],
         verification: [],
         history: [],
@@ -410,7 +421,7 @@ class ProjectRuntime {
           },
         },
       });
-      this.wakeScheduler('system-debugger-enqueued');
+      this.wakeScheduler('unified-debugger-enqueued');
     }
   }
 
@@ -419,9 +430,9 @@ class ProjectRuntime {
     this.ticking = true;
     try {
       await this.supervisor.audit(this.projectId);
-      this.ensureSystemDebuggerTasks();
+      this.ensureUnifiedDebuggerTasks();
       if (schedule) await this.scheduler.tick(this.projectId);
-      this.ensureSystemDebuggerTasks();
+      this.ensureUnifiedDebuggerTasks();
 
       const tasks = this.store.listTasks(this.projectId);
       const delivery = tasks.filter(task => task.scope === 'delivery');
@@ -431,7 +442,7 @@ class ProjectRuntime {
         state = 'NEEDS_HUMAN';
       } else if (
         tasks.some(task => task.state === 'SYSTEM_BLOCKED')
-        && tasks.some(task => task.stage === 'system_debugger' && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state))
+        && tasks.some(task => task.stage === 'project_debugger' && task.input?.blockedTaskId && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state))
       ) {
         state = 'RUNNING';
       } else if (tasks.some(task => task.state === 'SYSTEM_BLOCKED')) {
@@ -508,7 +519,7 @@ class ProjectRuntime {
   acknowledgeSystemDiagnosisOnResume(reason = 'MANUAL_RESUME_AFTER_SYSTEM_REPAIR') {
     const acknowledged: string[] = [];
     for (const task of this.store.listTasks(this.projectId)) {
-      if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'system_debugger') continue;
+      if (task.state !== 'NEEDS_HUMAN' || task.stage !== 'project_debugger' || !task.input?.blockedTaskId) continue;
       this.store.appendTaskHistory(task.id, task.version, {
         type: 'HUMAN_DECISION',
         decision: reason,
@@ -693,7 +704,7 @@ class ProjectRuntime {
   submitDecision(decision: string) {
     const task = this.store.listTasks(this.projectId).find(item => item.state === 'NEEDS_HUMAN');
     if (!task) throw new Error('project has no pending human decision');
-    const systemDiagnosis = task.stage === 'system_debugger';
+    const systemDiagnosis = task.stage === 'project_debugger' && Boolean(task.input?.blockedTaskId);
     this.store.appendTaskHistory(task.id, task.version, {
       type: 'HUMAN_DECISION',
       decision,
