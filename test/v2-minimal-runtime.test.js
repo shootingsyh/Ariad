@@ -1725,9 +1725,9 @@ test('accepted takeover plan pauses at human review until a human decision is re
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },
     });
-    assert.equal(first.state, 'READY');
-    assert.equal(first.stage, 'tech_lead');
-    assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW_ESCALATION');
+    assert.equal(first.state, 'NEEDS_HUMAN');
+    assert.equal(first.transitionHistory.role, 'pm');
+    assert.equal(first.transitionHistory.type, 'PM_HUMAN_DECISION');
     assert.equal(store.getProject('P-take-gate').deliveryEnabled, false, 'takeover human gate must override PM start request');
     assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
 
