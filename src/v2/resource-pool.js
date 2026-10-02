@@ -46,3 +46,47 @@ export class ResourcePool {
     }));
   }
 }
+
+export class ScopedResourcePool {
+  constructor(pool, scope) {
+    this.pool = pool;
+    this.scope = scope;
+    this.owners = new Set();
+  }
+
+  #owner(owner) {
+    return `${this.scope}:${owner}`;
+  }
+
+  claim(requirements = [], owner) {
+    const scopedOwner = this.#owner(owner);
+    const claimed = this.pool.claim(requirements, scopedOwner);
+    if (claimed) this.owners.add(scopedOwner);
+    return claimed;
+  }
+
+  release(owner) {
+    const scopedOwner = this.#owner(owner);
+    this.owners.delete(scopedOwner);
+    return this.pool.release(scopedOwner);
+  }
+
+  recover(tasks = []) {
+    for (const task of tasks) {
+      if (task.state !== 'WORKING') continue;
+      const resources = task.execution?.resources ?? [];
+      if (!this.claim(resources, task.id)) {
+        throw new Error(`resource capacity conflict while recovering task ${task.id}`);
+      }
+    }
+  }
+
+  releaseAll() {
+    for (const owner of this.owners) this.pool.release(owner);
+    this.owners.clear();
+  }
+
+  snapshot() {
+    return this.pool.snapshot().filter(item => item.owner.startsWith(`${this.scope}:`));
+  }
+}

@@ -4,7 +4,7 @@ import { GitSourceControlFinalizer } from '../../../src/git-source-control-final
 import { SQLiteV2Store } from '../../../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../../../src/v2/role-registry.js';
 import { ProviderRegistry } from '../../../src/v2/provider-registry.js';
-import { ResourcePool } from '../../../src/v2/resource-pool.js';
+import { ResourcePool, ScopedResourcePool } from '../../../src/v2/resource-pool.js';
 import { V2Scheduler } from '../../../src/v2/scheduler.js';
 import { V2Supervisor } from '../../../src/v2/supervisor.js';
 import { FunctionProvider } from '../../../src/v2/function-provider.js';
@@ -38,7 +38,7 @@ class ProjectRuntime {
   private readonly store: SQLiteV2Store;
   private readonly scheduler: V2Scheduler;
   private readonly supervisor: V2Supervisor;
-  private readonly resources: ResourcePool;
+  private readonly resources: ScopedResourcePool;
   private readonly sourceControl: GitSourceControlFinalizer;
   private readonly logger: any;
   private readonly executionCapabilities: string[];
@@ -58,6 +58,7 @@ class ProjectRuntime {
     executionCapabilities = [],
     executionProvenance = {},
     wakeScheduler = () => {},
+    sharedResources,
   }: {
     manager: ProjectManager;
     project: any;
@@ -67,6 +68,7 @@ class ProjectRuntime {
     executionCapabilities?: string[];
     executionProvenance?: Record<string, unknown>;
     wakeScheduler?: (reason: string) => void;
+    sharedResources: ResourcePool;
   }) {
     this.manager = manager;
     this.logger = logger;
@@ -117,7 +119,7 @@ class ProjectRuntime {
     providers.register(provider);
     providers.register(new FunctionProvider());
 
-    this.resources = new ResourcePool({});
+    this.resources = new ScopedResourcePool(sharedResources, project.id);
     this.sourceControl = new GitSourceControlFinalizer({
       workspace: project.workspace,
       push: pushSourceControl,
@@ -135,11 +137,7 @@ class ProjectRuntime {
       executionProvenance: this.executionProvenance,
       resolveRoleExecutionMetadata: (role: string) => {
         const roleModels = this.manager.status(project.id).roleModels as Record<string, string | undefined>;
-        return {
-          modelRef: role === 'system_debugger'
-            ? (roleModels?.system_debugger ?? roleModels?.project_debugger ?? null)
-            : (roleModels?.[role] ?? null),
-        };
+        return { modelRef: roleModels?.[role] ?? null };
       },
       enqueuePlanning: ({ request }: any) => {
         const id = `${project.id}:replan:${Date.now()}:${++this.requestSequence}`;
@@ -725,6 +723,9 @@ class ProjectRuntime {
   }
 
   close() {
+    // Do not release execution resources merely because the controller is
+    // closing. An OpenClaw run may still be settling after stop/restart;
+    // fail closed so a possibly-live local model cannot overlap a new run.
     this.store.close();
   }
 }
@@ -736,6 +737,7 @@ export class AriadV2Service {
   private readonly logger: any;
   private readonly executionCapabilities: string[];
   private readonly executionProvenance: Record<string, unknown>;
+  private readonly sharedResources: ResourcePool;
   private readonly onProjectEvent?: (project: any, type: 'NEEDS_HUMAN' | 'FAILED' | 'SUCCEEDED') => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private readonly signals = new Map<string, SQLiteReconcileSignal>();
@@ -767,6 +769,7 @@ export class AriadV2Service {
     this.logger = logger;
     this.executionCapabilities = [...executionCapabilities];
     this.executionProvenance = structuredClone(executionProvenance);
+    this.sharedResources = new ResourcePool({ 'local-llm': 1 });
     this.onProjectEvent = onProjectEvent;
     this.externalWake = reconcileWakePath
       ? new FileReconcileWake(reconcileWakePath, {
@@ -878,6 +881,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        sharedResources: this.sharedResources,
         wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(current.id, runtime);
@@ -930,6 +934,7 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          sharedResources: this.sharedResources,
           wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(current.id, runtime);
@@ -994,6 +999,7 @@ export class AriadV2Service {
           logger: this.logger,
           executionCapabilities: this.executionCapabilities,
           executionProvenance: this.executionProvenance,
+          sharedResources: this.sharedResources,
           wakeScheduler: (reason: string) => this.wake(reason),
         });
         this.runtimes.set(project.id, runtime);
@@ -1032,6 +1038,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        sharedResources: this.sharedResources,
         wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
@@ -1058,6 +1065,7 @@ export class AriadV2Service {
         logger: this.logger,
         executionCapabilities: this.executionCapabilities,
         executionProvenance: this.executionProvenance,
+        sharedResources: this.sharedResources,
         wakeScheduler: (reason: string) => this.wake(reason),
       });
       this.runtimes.set(project.id, runtime);
@@ -1093,6 +1101,7 @@ export class AriadV2Service {
             logger: this.logger,
             executionCapabilities: this.executionCapabilities,
             executionProvenance: this.executionProvenance,
+            sharedResources: this.sharedResources,
             wakeScheduler: (reason: string) => this.wake(reason),
           });
           this.runtimes.set(project.id, runtime);

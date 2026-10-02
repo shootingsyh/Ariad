@@ -6,7 +6,7 @@ import path from 'node:path';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
-import { ResourcePool } from '../src/v2/resource-pool.js';
+import { ResourcePool, ScopedResourcePool } from '../src/v2/resource-pool.js';
 import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
 import { buildExecutionGraph } from '../src/v2/execution-graph.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
@@ -2381,4 +2381,106 @@ test('legacy human gates recover under PM-owned authority and preserve debugger 
     legacyHumanGateTarget('project_debugger', debuggerTask('UNKNOWN_PROJECT_CAUSE')),
     'pm'
   );
+});
+
+
+test('default LLM roles request the shared local-llm resource only for llamacpp models', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-model-resource' });
+    store.createTask({ id: 'T-local', projectId: 'P-model-resource', stage: 'developer' });
+    store.createTask({ id: 'T-remote', projectId: 'P-model-resource', stage: 'reviewer' });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+      resolveRoleExecutionMetadata: role => ({
+        modelRef: role === 'developer' ? 'llamacpp/qwen3.8-27b' : 'openai-codex/gpt-5.6-codex',
+      }),
+    });
+
+    const local = definitions.developer.prepare({ task: store.getTask('T-local') });
+    const remote = definitions.reviewer.prepare({ task: store.getTask('T-remote') });
+    assert.deepEqual(local.resources, ['local-llm']);
+    assert.equal(local.context.roleModelRef, 'llamacpp/qwen3.8-27b');
+    assert.deepEqual(remote.resources, []);
+    assert.equal(remote.context.roleModelRef, 'openai-codex/gpt-5.6-codex');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('shared scoped resource pool serializes local LLM work across projects without blocking remote work', async () => {
+  const a = tempDb();
+  const b = tempDb();
+  const cdir = tempDb();
+  try {
+    const storeA = new SQLiteV2Store(a.file);
+    const storeB = new SQLiteV2Store(b.file);
+    const storeC = new SQLiteV2Store(cdir.file);
+    storeA.createProject({ id: 'P-A' });
+    storeB.createProject({ id: 'P-B' });
+    storeC.createProject({ id: 'P-C' });
+    storeA.createTask({ id: 'T-A', projectId: 'P-A', stage: 'developer' });
+    storeB.createTask({ id: 'T-B', projectId: 'P-B', stage: 'developer' });
+    storeC.createTask({ id: 'T-C', projectId: 'P-C', stage: 'developer' });
+
+    const starts = [];
+    const provider = {
+      id: 'fake',
+      async start(spec) {
+        starts.push(spec.taskId);
+        return { externalId: `run-${spec.taskId}` };
+      },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() { return { state: 'CANCELLED', confirmed: true }; },
+    };
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+
+    const makeRoles = resources => {
+      const registry = new RoleRegistry();
+      registry.register('developer', {
+        prepare: () => ({ provider: 'fake', resources }),
+        transition: () => ({ state: 'DONE' }),
+      });
+      return registry;
+    };
+
+    const shared = new ResourcePool({ 'local-llm': 1 });
+    const resourceA = new ScopedResourcePool(shared, 'P-A');
+    const resourceB = new ScopedResourcePool(shared, 'P-B');
+    const resourceC = new ScopedResourcePool(shared, 'P-C');
+    const schedulerA = new V2Scheduler({ store: storeA, roles: makeRoles(['local-llm']), providers, resources: resourceA });
+    const schedulerB = new V2Scheduler({ store: storeB, roles: makeRoles(['local-llm']), providers, resources: resourceB });
+    const schedulerC = new V2Scheduler({ store: storeC, roles: makeRoles([]), providers, resources: resourceC });
+
+    await schedulerA.tick('P-A');
+    assert.deepEqual(starts, ['T-A']);
+    assert.equal(storeA.getTask('T-A').state, 'WORKING');
+
+    await schedulerB.tick('P-B');
+    assert.deepEqual(starts, ['T-A']);
+    assert.equal(storeB.getTask('T-B').state, 'READY');
+
+    await schedulerC.tick('P-C');
+    assert.deepEqual(starts, ['T-A', 'T-C']);
+    assert.equal(storeC.getTask('T-C').state, 'WORKING');
+
+    resourceA.release('T-A');
+    await schedulerB.tick('P-B');
+    assert.deepEqual(starts, ['T-A', 'T-C', 'T-B']);
+    assert.equal(storeB.getTask('T-B').state, 'WORKING');
+
+    storeA.close();
+    storeB.close();
+    storeC.close();
+  } finally {
+    fs.rmSync(a.dir, { recursive: true, force: true });
+    fs.rmSync(b.dir, { recursive: true, force: true });
+    fs.rmSync(cdir.dir, { recursive: true, force: true });
+  }
 });
