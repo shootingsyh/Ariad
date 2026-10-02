@@ -126,8 +126,7 @@ const schemas: Record<string, any> = {
         evidence: Type.Array(Type.Any()),
         reason: Type.String({ minLength: 1 }),
       }, { additionalProperties: false })),
-      routeTo: Type.Optional(Type.Literal('artist')),
-    }, { additionalProperties: true }),
+    }, { additionalProperties: false }),
   }, { additionalProperties: false }),
   reviewer: Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
