@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CODEX_ROLE_RESULT_TOOL_NAME,
   registerCodexRoleResultTool,
+  roleResultToolMetadata,
 } from '../dist/role-result-tools.js';
 import { OpenClawRuntimeAdapter } from '../dist/openclaw-runtime-adapter.js';
 
@@ -161,4 +162,20 @@ test('OpenClawRuntimeAdapter records the actual Codex runtime against the Ariad 
     provider: 'openai',
     model: 'gpt-5.6-terra',
   });
+});
+
+
+test('tester result schema has no routing field and rejects extra result properties', () => {
+  const tester = roleResultToolMetadata().find(item => item.name === 'ariad_tester_result');
+  assert.ok(tester);
+  const resultSchema = tester.parameters.properties.result;
+  assert.equal(resultSchema.additionalProperties, false);
+  assert.deepEqual(Object.keys(resultSchema.properties), ['criteria']);
+  const criterionSchema = resultSchema.properties.criteria.items;
+  assert.equal(criterionSchema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(criterionSchema.properties),
+    ['criterionId', 'status', 'evidenceType', 'evidence', 'reason'],
+  );
+  assert.equal('routeTo' in resultSchema.properties, false);
 });
