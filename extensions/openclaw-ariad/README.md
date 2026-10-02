@@ -52,6 +52,12 @@ OpenClaw currently exposes model-override authorization for plugins under the `s
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
+## Local model concurrency
+
+Ariad v2 treats every role configured with a `llamacpp/*` model as consuming the shared `local-llm` resource. The OpenClaw plugin owns one process-wide pool with capacity 1, so local llama.cpp role attempts are serialized across all Ariad projects while remote models such as Codex or Muse may still run concurrently. Resource ownership is namespaced per project/task and is recovered from durable WORKING task state after runtime reconstruction.
+
+Cancellation is conservative: requesting AbortController cancellation is not considered confirmed termination until the underlying OpenClaw `runEmbeddedAgent` promise actually settles. Ariad therefore does not intentionally free a local-model slot merely because an abort was requested.
+
 ## Local Project Explorer
 
 The plugin starts a read-only local web UI with the Gateway. By default, open:
