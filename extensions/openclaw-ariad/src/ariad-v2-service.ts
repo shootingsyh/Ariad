@@ -410,6 +410,7 @@ class ProjectRuntime {
           },
         },
       });
+      this.wakeScheduler('system-debugger-enqueued');
     }
   }
 
