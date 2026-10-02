@@ -420,6 +420,7 @@ class ProjectRuntime {
       await this.supervisor.audit(this.projectId);
       this.ensureSystemDebuggerTasks();
       if (schedule) await this.scheduler.tick(this.projectId);
+      this.ensureSystemDebuggerTasks();
 
       const tasks = this.store.listTasks(this.projectId);
       const delivery = tasks.filter(task => task.scope === 'delivery');
