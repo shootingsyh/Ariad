@@ -4,7 +4,7 @@ import { ROLE_SPECS, getRoleSpec } from '../src/llm/role-specs.js';
 import { PromptRenderer } from '../src/llm/prompt-renderer.js';
 import { LLMWorkflowRoleExecutor } from '../src/llm/workflow-role-executor.js';
 
-const ROLES = ['developer', 'tester', 'reviewer', 'project_debugger', 'tech_lead', 'pm', 'system_debugger', 'artist'];
+const ROLES = ['developer', 'tester', 'reviewer', 'project_debugger', 'tech_lead', 'pm', 'artist'];
 
 test('all Ariad roles have substrate-neutral specs with explicit mission rules and output schema', () => {
   assert.deepEqual(Object.keys(ROLE_SPECS), ROLES);
@@ -81,21 +81,14 @@ test('Reviewer prompt explicitly denies source-control and mutation authority', 
   assert.match(system, /Do not modify code, commit, merge, or push/);
 });
 
-test('Project Debugger prompt keeps execution-system recovery outside project diagnosis', () => {
+test('Project Debugger unifies project, model, and runtime root-cause routing', () => {
   const system = new PromptRenderer().render('project_debugger', {}).messages[0].content;
-  assert.match(system, /execution-system retry\/recovery belongs to the Supervisor/i);
-  assert.match(system, /System Debugger/i);
+  assert.match(system, /business results, task history, system interruptions/i);
+  assert.match(system, /system symptom is not automatically a system root cause/i);
   assert.match(system, /TASK_TOO_LARGE/);
+  assert.match(system, /SYSTEM_RUNTIME_FAILURE/);
+  assert.match(system, /MODEL_CAPABILITY_MISMATCH/);
   assert.match(system, /WRONG_IMPLEMENTATION_APPROACH/);
-});
-
-test('System Debugger is diagnosis-only and always hands repair to the human', () => {
-  const system = new PromptRenderer().render('system_debugger', {}).messages[0].content;
-  assert.match(system, /never repair the system yourself/i);
-  assert.match(system, /Do not modify product files, Ariad files, configuration, task state, databases, services, processes, model selection, or external systems/i);
-  assert.match(system, /Do not restart services, retry the blocked role, apply a workaround/i);
-  assert.match(system, /Always finish with DIAGNOSED/i);
-  assert.match(system, /human operator/i);
 });
 
 test('workflow role executor delegates prompt construction to injected renderer', async () => {
