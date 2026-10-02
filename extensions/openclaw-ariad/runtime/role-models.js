@@ -4,6 +4,7 @@ export const ARIAD_MODEL_ROLES = Object.freeze([
   'tester',
   'reviewer',
   'project_debugger',
+  'system_debugger',
   'tech_lead',
   'tech_lead_critic',
   'pm',
@@ -27,7 +28,9 @@ export function normalizeRoleModels(value = {}) {
 }
 
 export function missingRoleModels(roleModels = {}) {
-  return ARIAD_MODEL_ROLES.filter(role => !String(roleModels?.[role] ?? '').trim());
+  return ARIAD_MODEL_ROLES
+    .filter(role => role !== 'system_debugger')
+    .filter(role => !String(roleModels?.[role] ?? '').trim());
 }
 
 export function requireCompleteRoleModels(roleModels = {}) {
