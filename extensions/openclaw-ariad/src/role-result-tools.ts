@@ -191,6 +191,44 @@ export function roleResultToolName(role: string) {
   return ROLE_RESULT_TOOL_NAMES[role] ?? null;
 }
 
+export function roleResultPromptGuidance(role: string, toolName: string, attemptId: string) {
+  const strict = [
+    'STRICT RESULT TOOL SCHEMA:',
+    `Arguments to ${toolName} are validated against a strict schema.`,
+    'Follow the tool schema exactly. Do not add extra fields, rename fields, move fields to another nesting level, or omit required fields.',
+    'Use only fields explicitly defined by the tool schema, even if another field would seem helpful.',
+    'If a tool call is rejected, read the validation error, correct only the result-tool arguments, and call the same tool again. Do not redo completed role work.',
+  ];
+
+  if (role !== 'tester') return strict.join('\n');
+
+  const example = {
+    attemptId,
+    outcome: 'PASS',
+    summary: 'Verification completed.',
+    result: {
+      criteria: [{
+        criterionId: 'AC-1',
+        status: 'SATISFIED',
+        evidenceType: 'behavioral',
+        evidence: [],
+        reason: 'Observed the required behavior.',
+      }],
+    },
+  };
+
+  return [
+    ...strict,
+    '',
+    'TESTER RESULT SHAPE:',
+    'For ariad_tester_result, result contains only criteria. Each criteria item may contain only: criterionId, status, evidenceType, evidence, reason.',
+    'Do not add fields such as requirement, verification, description, proof, criterion, or routeTo.',
+    'Minimal legal example:',
+    JSON.stringify(example, null, 2),
+  ].join('\n');
+}
+
+
 export function codexRoleResultToolMetadata() {
   return {
     name: CODEX_ROLE_RESULT_TOOL_NAME,

@@ -33,6 +33,7 @@ import {
   registerRoleResultTools,
   roleResultToolMetadata,
   roleResultToolName,
+  roleResultPromptGuidance,
 } from './role-result-tools.js';
 
 const promptRenderer = new PromptRenderer();
@@ -47,7 +48,7 @@ function renderRoleMessage(role: string, context: Record<string, unknown>) {
         `If ${toolName} is unavailable, call the MCP tool ariad_role_result exactly once with the same result payload. This is the required Codex path. If ariad_role_result is unavailable but ${CODEX_ROLE_RESULT_TOOL_NAME} is available, call ${CODEX_ROLE_RESULT_TOOL_NAME} as a legacy compatibility path. Never emit terminal JSON as a substitute for an accepted result tool call.`,
         `Pass the exact Ariad attemptId from ARIAD RUNTIME CONTEXT: ${String(context.attemptId ?? '')}`,
         'The accepted result tool call is the authoritative completion signal. Do not substitute terminal prose or a JSON final answer for the tool call.',
-        'If the tool rejects your arguments, correct them and call it again. Failed submissions do not count.',
+        roleResultPromptGuidance(role, toolName, String(context.attemptId ?? '')),
         'This tool call MUST be your final action. Finish all work first, then call it.',
         'Once accepted, Ariad seals the result and terminates this execution. Do not expect another model turn and do not plan to emit prose afterward.',
       ].join('\n')
