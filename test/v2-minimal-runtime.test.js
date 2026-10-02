@@ -2046,6 +2046,114 @@ test('restart-orphan human-gate recovery only matches the known debugger misclas
 });
 
 
+test('System Debugger only diagnoses and hands repair to a human', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-system-debug' });
+    store.createTask({
+      id: 'system-debug:T-blocked:1',
+      projectId: 'P-system-debug',
+      scope: 'control',
+      flowId: 'system-debug:T-blocked:1',
+      stage: 'system_debugger',
+      state: 'READY',
+      input: {
+        blockedTaskId: 'T-blocked',
+        systemIncident: {
+          blockedTask: {
+            id: 'T-blocked',
+            stage: 'tester',
+            state: 'SYSTEM_BLOCKED',
+            recentHistory: [{ type: 'SYSTEM_INTERRUPTION', failure: 'ROLE_RESULT_RECOVERY_FAILED' }],
+          },
+        },
+      },
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('system-debug:T-blocked:1');
+    const prepared = definitions.system_debugger.prepare({ task });
+    assert.match(prepared.context.v2Prompt, /Diagnose only/i);
+    assert.match(prepared.context.v2Prompt, /do not repair anything/i);
+    assert.match(prepared.context.v2Prompt, /ROLE_RESULT_RECOVERY_FAILED/);
+
+    const next = definitions.system_debugger.transition({
+      task,
+      result: {
+        outcome: 'DIAGNOSED',
+        summary: 'Result tool recovery repeatedly failed.',
+        result: {
+          cause: 'The result tool is not being provisioned into the recovery run.',
+          evidence: ['Three recovery attempts ended with ROLE_RESULT_RECOVERY_TOOL_UNAVAILABLE.'],
+          recommendedActions: ['Inspect OpenClaw runtimePluginToolGrant provisioning.'],
+          affectedComponent: 'openclaw-agent-session-runtime-adapter',
+          summaryForHuman: 'Ariad cannot provision the result tool into the recovery run.',
+        },
+      },
+    });
+    assert.equal(next.state, 'NEEDS_HUMAN');
+    assert.equal(next.transitionHistory.type, 'SYSTEM_DIAGNOSIS');
+    assert.equal(next.transitionHistory.role, 'system_debugger');
+    assert.equal(next.transitionHistory.blockedTaskId, 'T-blocked');
+    assert.deepEqual(next.transitionHistory.recommendedActions, [
+      'Inspect OpenClaw runtimePluginToolGrant provisioning.',
+    ]);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduler stops infinite role-start retries by entering SYSTEM_BLOCKED', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-start-failure' });
+    store.createTask({ id: 'T-start-failure', projectId: 'P-start-failure', stage: 'developer' });
+
+    const roleRegistry = new RoleRegistry();
+    roleRegistry.register('developer', {
+      prepare: () => ({ provider: 'broken' }),
+      transition: () => ({ state: 'DONE' }),
+    });
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'broken',
+      async start() { throw new Error('provider cannot start role'); },
+      async poll() { return { state: 'LOST' }; },
+      async cancel() {},
+    });
+    const scheduler = new V2Scheduler({
+      store,
+      roles: roleRegistry,
+      providers,
+      resources: new ResourcePool({}),
+    });
+
+    await scheduler.tick('P-start-failure');
+    assert.equal(store.getTask('T-start-failure').state, 'READY');
+    await scheduler.tick('P-start-failure');
+    assert.equal(store.getTask('T-start-failure').state, 'READY');
+    await scheduler.tick('P-start-failure');
+
+    const blocked = store.getTask('T-start-failure');
+    assert.equal(blocked.state, 'SYSTEM_BLOCKED');
+    assert.equal(
+      blocked.history.filter(entry => entry?.type === 'SYSTEM_INTERRUPTION').length,
+      3,
+    );
+    assert.equal(blocked.history.at(-1)?.failure, 'provider cannot start role');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('PM is the only business role that may create a human-decision gate', () => {
   const { dir, file } = tempDb();
   try {
