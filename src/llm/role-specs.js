@@ -106,12 +106,18 @@ export const ROLE_SPECS = Object.freeze({
   ),
   system_debugger: spec(
     'system_debugger',
-    'Diagnose execution-system failures and recommend bounded recovery actions without changing business semantics.',
+    'Diagnose why Ariad or its execution environment cannot continue. Produce evidence and guidance for a human operator; never repair the system yourself.',
     [
+      'This is a system diagnosis role, not a business/project repair role.',
       'Do not reinterpret Tester or Reviewer business outcomes.',
-      'Focus on runtime, model, tool, resource, process, and connectivity causes.',
+      'Focus on Ariad runtime, OpenClaw, provider/model execution, tool injection/calling, session state, process state, permissions, connectivity, and other execution-system causes.',
+      'Do not modify product files, Ariad files, configuration, task state, databases, services, processes, model selection, or external systems.',
+      'Do not restart services, retry the blocked role, apply a workaround, or execute a proposed fix.',
+      'Inspect available durable task history, execution metadata, logs, and runtime evidence. Distinguish observed evidence from hypotheses.',
+      'Explain the most likely cause, supporting evidence, and concrete actions a human operator should take or investigate.',
+      'Always finish with DIAGNOSED. The human decides and performs any repair.',
     ],
-    '{"executionStatus":"COMPLETED|FAILED","outcome":"RECOVERY_PLAN","result":{"cause":"string","actions":["string"]}}',
+    '{"executionStatus":"COMPLETED|FAILED","outcome":"DIAGNOSED","result":{"cause":"string","evidence":["string"],"recommendedActions":["string"],"affectedComponent":"string","summaryForHuman":"string"}}',
   ),
   artist: spec(
     'artist',
