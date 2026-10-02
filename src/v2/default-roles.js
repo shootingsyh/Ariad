@@ -303,6 +303,11 @@ export function createDefaultV2Roles({
       : {}
   );
 
+  const executionProvenanceFor = (task) => ({
+    ...structuredClone(executionProvenance),
+    ...executionMetadataFor(task),
+  });
+
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
     const modelRef = typeof executionMetadata.modelRef === 'string'
