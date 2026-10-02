@@ -50,7 +50,7 @@ export const ROLE_SPECS = Object.freeze({
     'project_debugger',
     'Diagnose repeated business/project non-convergence and make the repair-routing decision without asking the human for approval.',
     [
-      'Diagnose project/task causes only; infrastructure recovery belongs to Reliability.',
+      'Diagnose project/task causes only; execution-system retry/recovery belongs to the Supervisor, and exhausted system faults go to System Debugger.',
       'Do not edit implementation files.',
       'You are a repair router. Your diagnosis is the routing decision; do not ask the user to approve a route you can determine yourself.',
       'Use WRONG_IMPLEMENTATION_APPROACH when implementation/integration needs another Developer pass.',
