@@ -1725,9 +1725,9 @@ test('accepted takeover plan pauses at human review until a human decision is re
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },
     });
-    assert.equal(first.state, 'READY');
-    assert.equal(first.stage, 'tech_lead');
-    assert.equal(first.transitionHistory.type, 'TAKEOVER_REVIEW_ESCALATION');
+    assert.equal(first.state, 'NEEDS_HUMAN');
+    assert.equal(first.transitionHistory.role, 'pm');
+    assert.equal(first.transitionHistory.type, 'PM_HUMAN_DECISION');
     assert.equal(store.getProject('P-take-gate').deliveryEnabled, false, 'takeover human gate must override PM start request');
     assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
 
@@ -2046,71 +2046,96 @@ test('restart-orphan human-gate recovery only matches the known debugger misclas
 });
 
 
-test('only project debugger and tech lead may create human-decision gates', () => {
+test('PM is the only business role that may create a human-decision gate', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-routing' });
     store.createTask({ id: 'T-routing', projectId: 'P-routing', stage: 'tester' });
+    const planningRequests = [];
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
       providerId: 'fake',
       codeProviderId: 'ariad-code',
+      enqueuePlanning: ({ request }) => planningRequests.push(request),
     });
     const task = store.getTask('T-routing');
 
-    const testerAsset = definitions.tester.transition({
-      task,
-      result: { outcome: 'NOT_PASS', result: { routeTo: 'artist' } },
+    const wrongApproach = definitions.project_debugger.transition({
+      task: {
+        ...task,
+        history: [
+          { type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' },
+          { type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' },
+          { type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' },
+        ],
+      },
+      result: {
+        outcome: 'WRONG_IMPLEMENTATION_APPROACH',
+        result: { guidance: 'Fix the implementation and rerun independent verification.' },
+      },
     });
-    assert.deepEqual(testerAsset, { stage: 'developer', state: 'READY' });
+    assert.equal(wrongApproach.stage, 'developer');
+    assert.equal(wrongApproach.state, 'READY');
 
-    const testerUnknown = definitions.tester.transition({
+    const requirement = definitions.project_debugger.transition({
       task,
-      result: { outcome: 'BLOCKED' },
+      result: {
+        outcome: 'REQUIREMENT_DECISION_REQUIRED',
+        summary: 'Requirements conflict.',
+        result: { guidance: 'PM should resolve intended product behavior.' },
+      },
     });
-    assert.deepEqual(testerUnknown, { stage: 'project_debugger', state: 'READY' });
+    assert.equal(requirement.stage, 'pm');
+    assert.equal(requirement.state, 'READY');
 
-    const reviewerAsset = definitions.reviewer.transition({
+    const unknown = definitions.project_debugger.transition({
       task,
-      result: { outcome: 'NOT_PASS', result: { routeTo: 'artist' } },
+      result: { outcome: 'UNKNOWN_PROJECT_CAUSE', summary: 'Project evidence cannot resolve the product intent.' },
     });
-    assert.deepEqual(reviewerAsset, { stage: 'developer', state: 'READY' });
+    assert.equal(unknown.stage, 'pm');
+    assert.equal(unknown.state, 'READY');
 
-    const reviewerUnknown = definitions.reviewer.transition({
-      task,
-      result: { outcome: 'BLOCKED' },
-    });
-    assert.deepEqual(reviewerUnknown, { stage: 'project_debugger', state: 'READY' });
-
-    const artistFailure = definitions.artist.transition({
-      task,
-      result: { outcome: 'NEEDS_CAPABILITY', summary: 'missing image runtime', result: { missingCapabilities: ['image'] } },
-    });
-    assert.equal(artistFailure.stage, 'project_debugger');
-    assert.equal(artistFailure.state, 'READY');
-    assert.equal(artistFailure.transitionHistory.type, 'CAPABILITY_REQUIRED');
-
-    const pmEscalation = definitions.pm.transition({
-      task,
-      result: { outcome: 'NEEDS_HUMAN', summary: 'ambiguous product intent', result: { questions: ['Which behavior?'] } },
-    });
-    assert.equal(pmEscalation.stage, 'tech_lead');
-    assert.equal(pmEscalation.state, 'READY');
-
-    const debuggerGate = definitions.project_debugger.transition({
-      task,
-      result: { outcome: 'UNKNOWN_PROJECT_CAUSE', summary: 'cannot resolve safely' },
-    });
-    assert.equal(debuggerGate.state, 'NEEDS_HUMAN');
-
-    const techLeadGate = definitions.tech_lead.transition({
+    const techLeadEscalation = definitions.tech_lead.transition({
       task: { ...task, scope: 'control' },
-      result: { outcome: 'NEEDS_HUMAN', summary: 'requirements conflict', result: { questions: ['A or B?'] } },
+      result: { outcome: 'UNRESOLVED_PRODUCT_DECISION', summary: 'Need product intent.' },
     });
-    assert.equal(techLeadGate.state, 'NEEDS_HUMAN');
-    assert.equal(techLeadGate.transitionHistory.role, 'tech_lead');
+    assert.equal(techLeadEscalation.stage, 'pm');
+    assert.equal(techLeadEscalation.state, 'READY');
+
+    const productDecision = definitions.pm.transition({
+      task: { ...task, scope: 'delivery' },
+      result: {
+        outcome: 'PRODUCT_DECISION',
+        summary: 'Existing product intent is sufficient.',
+        result: {
+          reason: 'The existing spec already defines the behavior.',
+          decision: 'Preserve progression and equipped item state across save/continue.',
+          guidance: 'Amend the smallest affected task/subtree and add real-button E2E.',
+        },
+      },
+    });
+    assert.equal(productDecision.stage, 'developer');
+    assert.equal(productDecision.state, 'WAITING_REPLAN');
+    assert.equal(productDecision.transitionHistory.type, 'PRODUCT_DECISION');
+    assert.equal(planningRequests.at(-1).purpose, 'PRODUCT_DECISION_REPLAN');
+    assert.equal(planningRequests.at(-1).taskId, task.id);
+
+    const humanGate = definitions.pm.transition({
+      task: { ...task, scope: 'delivery' },
+      result: {
+        outcome: 'NEEDS_HUMAN',
+        summary: 'Two valid product behaviors remain.',
+        result: {
+          reason: 'No prior user decision resolves the conflict.',
+          questions: ['Should save/continue preserve equipped items?'],
+        },
+      },
+    });
+    assert.equal(humanGate.state, 'NEEDS_HUMAN');
+    assert.equal(humanGate.transitionHistory.role, 'pm');
+    assert.equal(humanGate.transitionHistory.type, 'PM_HUMAN_DECISION');
 
     store.close();
   } finally {
@@ -2164,13 +2189,28 @@ test('durable runtime status exposes human decisions without a live runtime', ()
   }
 });
 
-test('legacy invalid human gates migrate only to the authorized decision role', () => {
+test('legacy human gates recover under PM-owned authority and preserve debugger decisions', () => {
   for (const stage of ['artist', 'developer', 'tester', 'reviewer']) {
     assert.equal(legacyHumanGateTarget(stage), 'project_debugger');
   }
-  for (const stage of ['pm', 'plan_validator', 'tech_lead_critic']) {
-    assert.equal(legacyHumanGateTarget(stage), 'tech_lead');
-  }
-  assert.equal(legacyHumanGateTarget('project_debugger'), null);
-  assert.equal(legacyHumanGateTarget('tech_lead'), null);
+  assert.equal(legacyHumanGateTarget('tech_lead'), 'pm');
+  assert.equal(legacyHumanGateTarget('plan_validator'), 'pm');
+  assert.equal(legacyHumanGateTarget('tech_lead_critic'), 'pm');
+  assert.equal(legacyHumanGateTarget('pm'), null);
+
+  const debuggerTask = outcome => ({
+    history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome }],
+  });
+  assert.equal(
+    legacyHumanGateTarget('project_debugger', debuggerTask('WRONG_IMPLEMENTATION_APPROACH')),
+    'developer'
+  );
+  assert.equal(
+    legacyHumanGateTarget('project_debugger', debuggerTask('ASSET_ISSUE')),
+    'artist'
+  );
+  assert.equal(
+    legacyHumanGateTarget('project_debugger', debuggerTask('UNKNOWN_PROJECT_CAUSE')),
+    'pm'
+  );
 });

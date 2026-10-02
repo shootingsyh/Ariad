@@ -48,13 +48,19 @@ export const ROLE_SPECS = Object.freeze({
   ),
   project_debugger: spec(
     'project_debugger',
-    'Diagnose repeated business/project non-convergence after bounded development cycles.',
+    'Diagnose repeated business/project non-convergence and make the repair-routing decision without asking the human for approval.',
     [
       'Diagnose project/task causes only; infrastructure recovery belongs to Reliability.',
       'Do not edit implementation files.',
+      'You are a repair router. Your diagnosis is the routing decision; do not ask the user to approve a route you can determine yourself.',
+      'Use WRONG_IMPLEMENTATION_APPROACH when implementation/integration needs another Developer pass.',
+      'Use ASSET_ISSUE only when the media/resource itself requires Artist work.',
+      'Use TASK_TOO_LARGE when the engineering task/decomposition must be revised by Tech Lead.',
+      'Use REQUIREMENT_DECISION_REQUIRED when the blocker is product intent, ambiguous/conflicting requirements, or another product decision that belongs to PM.',
+      'Use UNKNOWN_PROJECT_CAUSE when you cannot determine a repair cause from the available project evidence; route that uncertainty to PM rather than directly to the human.',
       'Choose exactly one allowed diagnosis.',
     ],
-    '{"executionStatus":"COMPLETED|FAILED","outcome":"WRONG_IMPLEMENTATION_APPROACH|TASK_TOO_LARGE|TASK_CONTRADICTORY|UNKNOWN_PROJECT_CAUSE","result":{"reason":"string","guidance":"string"}}',
+    '{"executionStatus":"COMPLETED|FAILED","outcome":"WRONG_IMPLEMENTATION_APPROACH|TASK_TOO_LARGE|ASSET_ISSUE|REQUIREMENT_DECISION_REQUIRED|UNKNOWN_PROJECT_CAUSE","result":{"reason":"string","guidance":"string"}}',
   ),
   tech_lead: spec(
     'tech_lead',
@@ -78,7 +84,7 @@ export const ROLE_SPECS = Object.freeze({
       'Developer/Tester/Reviewer are workflow stages, not Tech Lead tasks. Tech Lead must not modify implementation files or perform implementation work as part of planning.',
       'When revising after product review, human decision, completed vertical slice, or debugger diagnosis, update the durable model rather than defending obsolete architecture.',
     ],
-    '{"executionStatus":"COMPLETED|FAILED","outcome":"PLANNED|REPLANNED|NEEDS_HUMAN","result":{"projectModel":{"currentState":{"existingProject":"boolean","summary":"string","keyFiles":["string"],"knownConstraints":["string"]},"architecture":{"horizontals":[{"id":"string","name":"string","responsibility":"string"}],"verticals":[{"id":"string","name":"string","responsibility":"string"}]},"contracts":[{"id":"string","provider":"component-id","consumers":["component-id"],"purpose":"string","interface":"object|string","testBoundary":"string","maturity":"PROVISIONAL|VALIDATED|STABLE","justifiedByVerticals":["vertical-slice-id"],"interfaceTaskId":"task-id","contractTestTaskId":"task-id","fakeTaskId":"task-id|null"}],"dependencies":[{"from":"component-id","to":"component-id","contractId":"string|null","implementationRequired":"boolean","rationale":"string"}],"verticalSlices":[{"id":"string","name":"string","goal":"string","componentIds":["component-id"],"contractIds":["contract-id"],"skeletonTest":"string","skeletonTaskId":"task-id","taskIds":["task-id"]}],"technicalDirection":{"summary":"string","foundations":["string"],"languages":[{"scope":"string","language":"string","rationale":"string"}],"decisions":[{"decision":"string","rationale":"string"}]},"decomposition":{"nodes":[{"id":"string","parentId":"string|null","kind":"component|subcomponent|task","componentId":"string","children":["node-id"],"taskId":"string|null"}]},"tasks":[{"id":"string","title":"string","kind":"CONTRACT_INTERFACE|CONTRACT_TEST|FAKE_PROVIDER|VERTICAL_SKELETON|IMPLEMENTATION|REFACTOR","componentId":"string","verticalSliceId":"string","dependsOn":["id"],"acceptanceCriteria":["string"],"testStrategy":"string","atomic":true}]}}}',
+    '{"executionStatus":"COMPLETED|FAILED","outcome":"PLANNED|REPLANNED","result":{"projectModel":{"currentState":{"existingProject":"boolean","summary":"string","keyFiles":["string"],"knownConstraints":["string"]},"architecture":{"horizontals":[{"id":"string","name":"string","responsibility":"string"}],"verticals":[{"id":"string","name":"string","responsibility":"string"}]},"contracts":[{"id":"string","provider":"component-id","consumers":["component-id"],"purpose":"string","interface":"object|string","testBoundary":"string","maturity":"PROVISIONAL|VALIDATED|STABLE","justifiedByVerticals":["vertical-slice-id"],"interfaceTaskId":"task-id","contractTestTaskId":"task-id","fakeTaskId":"task-id|null"}],"dependencies":[{"from":"component-id","to":"component-id","contractId":"string|null","implementationRequired":"boolean","rationale":"string"}],"verticalSlices":[{"id":"string","name":"string","goal":"string","componentIds":["component-id"],"contractIds":["contract-id"],"skeletonTest":"string","skeletonTaskId":"task-id","taskIds":["task-id"]}],"technicalDirection":{"summary":"string","foundations":["string"],"languages":[{"scope":"string","language":"string","rationale":"string"}],"decisions":[{"decision":"string","rationale":"string"}]},"decomposition":{"nodes":[{"id":"string","parentId":"string|null","kind":"component|subcomponent|task","componentId":"string","children":["node-id"],"taskId":"string|null"}]},"tasks":[{"id":"string","title":"string","kind":"CONTRACT_INTERFACE|CONTRACT_TEST|FAKE_PROVIDER|VERTICAL_SKELETON|IMPLEMENTATION|REFACTOR","componentId":"string","verticalSliceId":"string","dependsOn":["id"],"acceptanceCriteria":["string"],"testStrategy":"string","atomic":true}]}}}',
   ),
   pm: spec(
     'pm',
@@ -93,9 +99,10 @@ export const ROLE_SPECS = Object.freeze({
       'Check that TL design artifacts which require implementation—interfaces, contract tests, planned fakes, and skeletons—are represented by executable tasks rather than hidden planning work.',
       'Ask whether completing every task in the graph would reasonably make the user consider the currently planned slice complete while preserving the broader product intent.',
       'Return PLAN_REVISION_REQUIRED when the Tech Lead plan is technically plausible but product-incomplete, over-scoped, prematurely abstracted, or inconsistent with user intent.',
-      'Return NEEDS_HUMAN only when a product decision truly requires the user.',
+      'You are the only business role allowed to request NEEDS_HUMAN. First resolve product questions yourself from durable ProjectBrief, explicit user decisions, specification, and task history whenever that evidence is sufficient.',
+      'When Project Debugger escalates a delivery task for product/requirement judgment, return PRODUCT_DECISION when you can determine the intended product behavior. Include a concrete decision and guidance for Tech Lead. Return NEEDS_HUMAN only when existing product evidence is genuinely insufficient and a new user decision is required.',
     ],
-    '{"executionStatus":"COMPLETED|FAILED","outcome":"CURRENT_STATE_ACKNOWLEDGED|PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","customerOutcomeSummary":"string","questions":["string"]}}',
+    '{"executionStatus":"COMPLETED|FAILED","outcome":"CURRENT_STATE_ACKNOWLEDGED|PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|PRODUCT_DECISION|NEEDS_HUMAN","result":{"reason":"string","guidance":"string","decision":"string","customerOutcomeSummary":"string","questions":["string"]}}',
   ),
   system_debugger: spec(
     'system_debugger',

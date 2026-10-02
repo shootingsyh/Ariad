@@ -60,10 +60,10 @@ export const ROLE_RESULT_OUTCOMES: Record<string, ReadonlySet<string>> = {
   developer: new Set(['PASS', 'NOT_PASS']),
   tester: new Set(['PASS', 'NOT_PASS']),
   reviewer: new Set(['PASS', 'NOT_PASS']),
-  project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'NEEDS_HUMAN']),
+  project_debugger: new Set(['WRONG_IMPLEMENTATION_APPROACH', 'TASK_TOO_LARGE', 'ASSET_ISSUE', 'REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE']),
   tech_lead: new Set(['PLANNED', 'REPLANNED']),
   tech_lead_critic: new Set(['CLEAN', 'MINOR_ONLY', 'ISSUES']),
-  pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'NEEDS_HUMAN']),
+  pm: new Set(['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN']),
 };
 
 export const ROLE_RESULT_TOOL_NAMES: Record<string, string> = {
@@ -139,7 +139,8 @@ const schemas: Record<string, any> = {
       Type.Literal('WRONG_IMPLEMENTATION_APPROACH'),
       Type.Literal('TASK_TOO_LARGE'),
       Type.Literal('ASSET_ISSUE'),
-      Type.Literal('NEEDS_HUMAN'),
+      Type.Literal('REQUIREMENT_DECISION_REQUIRED'),
+      Type.Literal('UNKNOWN_PROJECT_CAUSE'),
     ]),
     ...commonFields,
     result: Type.Optional(Type.Any()),
@@ -172,14 +173,17 @@ const schemas: Record<string, any> = {
     outcome: Type.Union([
       Type.Literal('PLAN_ACCEPTED'),
       Type.Literal('PLAN_REVISION_REQUIRED'),
+      Type.Literal('PRODUCT_DECISION'),
       Type.Literal('NEEDS_HUMAN'),
     ]),
     ...commonFields,
     result: Type.Object({
       reason: Type.String({ minLength: 1 }),
-      startDelivery: Type.Boolean({ description: 'Explicit PM decision to open the durable delivery scheduler gate after accepting this plan.' }),
+      startDelivery: Type.Optional(Type.Boolean({ description: 'Explicit PM decision to open the durable delivery scheduler gate after accepting this plan.' })),
       guidance: Type.Optional(Type.String()),
-      questions: Type.Array(Type.String()),
+      decision: Type.Optional(Type.String()),
+      customerOutcomeSummary: Type.Optional(Type.String()),
+      questions: Type.Optional(Type.Array(Type.String())),
     }, { additionalProperties: false }),
   }, { additionalProperties: false }),
 };
