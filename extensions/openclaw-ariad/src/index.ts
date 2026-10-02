@@ -108,7 +108,12 @@ const plugin = defineFeaturePlugin({
       agentId: process.env.ARIAD_OPENCLAW_AGENT_ID || 'main',
     });
     const v2Provider = new OpenClawV2Provider(runtimeAdapter, {
-      resolveModelRef: (projectId, role) => (manager.status(projectId).roleModels as Record<string, string | undefined>)?.[role] ?? null,
+      resolveModelRef: (projectId, role) => {
+        const roleModels = manager.status(projectId).roleModels as Record<string, string | undefined>;
+        return role === 'system_debugger'
+          ? (roleModels?.system_debugger ?? roleModels?.project_debugger ?? null)
+          : (roleModels?.[role] ?? null);
+      },
     });
     const readModelOverridePolicy = () => {
       const cfg = (api.runtime as any)?.config?.current?.() ?? {};
