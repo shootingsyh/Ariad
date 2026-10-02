@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { roleResultPromptGuidance } from './role-result-tools.js';
 
 type AgentRuntime = {
   runEmbeddedAgent(input: Record<string, unknown>): Promise<any>;
@@ -280,6 +281,8 @@ export class OpenClawAgentSessionRuntimeAdapter {
           'Do not redo the task and do not change product files.',
           `Use the existing session context and artifacts, then call ${active.resultToolName} exactly once.`,
           `The attemptId MUST be exactly ${input.attemptId}.`,
+          roleResultPromptGuidance(input.role, active.resultToolName, input.attemptId),
+          'Recovery is only for correcting/submitting the structured result. Do not rerun tests, edit files, or repeat completed role work.',
           'The accepted result tool call must be your final action. Do not answer with prose or terminal JSON instead.',
         ].join('\n'),
         ...(active.runtime?.provider ? { provider: active.runtime.provider } : {}),
