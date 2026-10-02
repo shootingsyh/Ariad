@@ -43,6 +43,7 @@ type ActiveRun = {
   state: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   result?: any;
   error?: unknown;
+  cancelRequested?: boolean;
 };
 
 function safe(value: string) {
@@ -349,9 +350,37 @@ export class OpenClawAgentSessionRuntimeAdapter {
 
   async cancel(handle: { externalId: string }) {
     const active = this.runs.get(handle.externalId);
-    if (active) active.controller.abort(new Error('ARIAD_CANCELLED'));
+    if (!active) return { state: 'NOT_FOUND', confirmed: true };
+
+    active.cancelRequested = true;
+    if (active.state === 'RUNNING') active.controller.abort(new Error('ARIAD_CANCELLED'));
+
     const recoveryExternalId = this.recoveryRuns.get(handle.externalId);
-    if (recoveryExternalId) this.runs.get(recoveryExternalId)?.controller.abort(new Error('ARIAD_CANCELLED'));
-    return { state: 'CANCELLED' };
+    const recovery = recoveryExternalId ? this.runs.get(recoveryExternalId) : undefined;
+    if (recovery) {
+      recovery.cancelRequested = true;
+      if (recovery.state === 'RUNNING') recovery.controller.abort(new Error('ARIAD_CANCELLED'));
+    }
+
+    const activeTerminal = active.state !== 'RUNNING';
+    const recoveryTerminal = !recovery || recovery.state !== 'RUNNING';
+    if (activeTerminal && recoveryTerminal) {
+      return {
+        state: 'CANCELLED',
+        confirmed: true,
+        terminalState: active.state,
+        recoveryTerminalState: recovery?.state ?? null,
+      };
+    }
+
+    // AbortController.abort() is only a request. runEmbeddedAgent may still be
+    // draining or ignoring the abort. Never claim cancellation until the
+    // underlying promise has actually settled.
+    return {
+      state: 'CANCELLING',
+      confirmed: false,
+      terminalState: active.state,
+      recoveryTerminalState: recovery?.state ?? null,
+    };
   }
 }
