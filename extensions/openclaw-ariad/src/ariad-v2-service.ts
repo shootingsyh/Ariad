@@ -723,7 +723,9 @@ class ProjectRuntime {
   }
 
   close() {
-    this.resources.releaseAll();
+    // Do not release execution resources merely because the controller is
+    // closing. An OpenClaw run may still be settling after stop/restart;
+    // fail closed so a possibly-live local model cannot overlap a new run.
     this.store.close();
   }
 }
