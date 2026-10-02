@@ -423,9 +423,35 @@ export function createDefaultV2Roles({
     },
 
     project_debugger: {
-      prepare: ({ task }) => prepareLlm(task, null),
+      prepare: ({ task }) => prepareLlm(task, task.input?.blockedTaskId ? [
+        "You are Ariad's unified Project Debugger.",
+        'Automatic execution retry has been exhausted for the blocked business task below.',
+        'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
+        'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
+        'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+        JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
+      ].join('\n\n') : null),
       transition: ({ task, result }) => {
+        const blockedTaskId = task.input?.blockedTaskId ?? null;
+        const blocked = blockedTaskId ? store.getTask(blockedTaskId) : null;
+        const routeBlocked = (patch, history) => {
+          if (!blocked) return;
+          store.appendTaskHistory(blocked.id, blocked.version, history, patch);
+        };
+
         if (result.outcome === 'WRONG_IMPLEMENTATION_APPROACH') {
+          if (blocked) {
+            routeBlocked({ stage: 'developer', state: 'READY', execution: null }, {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'developer',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              source: 'system_block_diagnosis',
+              at: new Date().toISOString(),
+            });
+            return { state: 'DONE' };
+          }
           return {
             stage: 'developer',
             state: 'READY',
@@ -440,6 +466,18 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'ASSET_ISSUE') {
+          if (blocked) {
+            routeBlocked({ stage: 'artist', state: 'READY', execution: null }, {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'artist',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              source: 'system_block_diagnosis',
+              at: new Date().toISOString(),
+            });
+            return { state: 'DONE' };
+          }
           return {
             stage: 'artist',
             state: 'READY',
@@ -454,13 +492,26 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'TASK_TOO_LARGE') {
+          const targetTaskId = blockedTaskId ?? task.id;
           enqueuePlanning?.({
             request: {
               purpose: 'REPLAN_TASK',
-              taskId: task.id,
+              taskId: targetTaskId,
               diagnosis: result.result ?? result,
             },
           });
+          if (blocked) {
+            routeBlocked({ stage: 'developer', state: 'WAITING_REPLAN', execution: null }, {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'tech_lead',
+              diagnosis: result.outcome,
+              guidance: result.result?.guidance ?? null,
+              source: 'system_block_diagnosis',
+              at: new Date().toISOString(),
+            });
+            return { state: 'DONE' };
+          }
           return {
             stage: 'developer',
             state: 'WAITING_REPLAN',
@@ -474,7 +525,37 @@ export function createDefaultV2Roles({
             },
           };
         }
+        if (result.outcome === 'SYSTEM_RUNTIME_FAILURE' || result.outcome === 'MODEL_CAPABILITY_MISMATCH') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'SYSTEM_DIAGNOSIS',
+              role: 'project_debugger',
+              blockedTaskId,
+              diagnosis: result.outcome,
+              summary: result.summary ?? result.result?.reason ?? 'Execution failure requires operator action.',
+              evidence: result.result?.evidence ?? [],
+              affectedComponent: result.result?.affectedComponent ?? null,
+              guidance: result.result?.guidance ?? null,
+              questions: ['Review the diagnosis, repair the runtime/model policy as appropriate, then explicitly resume the project.'],
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (result.outcome === 'REQUIREMENT_DECISION_REQUIRED' || result.outcome === 'UNKNOWN_PROJECT_CAUSE') {
+          if (blocked) {
+            routeBlocked({ stage: 'pm', state: 'READY', execution: null }, {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'pm',
+              diagnosis: result.outcome,
+              summary: result.summary ?? result.result?.reason ?? null,
+              guidance: result.result?.guidance ?? null,
+              source: 'system_block_diagnosis',
+              at: new Date().toISOString(),
+            });
+            return { state: 'DONE' };
+          }
           return {
             stage: 'pm',
             state: 'READY',
@@ -502,33 +583,6 @@ export function createDefaultV2Roles({
           },
         };
       },
-    },
-
-    system_debugger: {
-      prepare: ({ task }) => prepareLlm(task, [
-        "You are Ariad's system debugger.",
-        'The business task is already SYSTEM_BLOCKED after automatic retry/recovery was exhausted.',
-        'Diagnose only. Do not repair anything, do not modify files/config/state, do not restart services, do not retry the blocked role, and do not apply workarounds.',
-        'Use the supplied blocked-task snapshot, system interruption history, execution metadata, and any read-only runtime/log inspection available to determine the likely system cause.',
-        'Separate observed evidence from hypotheses. Return DIAGNOSED with cause, evidence, recommendedActions, affectedComponent, and summaryForHuman.',
-        'The human operator will decide and perform any repair.',
-        JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
-      ].join('\n\n')),
-      transition: ({ task, result }) => ({
-        state: 'NEEDS_HUMAN',
-        transitionHistory: {
-          type: 'SYSTEM_DIAGNOSIS',
-          role: 'system_debugger',
-          blockedTaskId: task.input?.blockedTaskId ?? null,
-          summary: result.result?.summaryForHuman ?? result.summary ?? 'System diagnosis requires human action.',
-          cause: result.result?.cause ?? null,
-          evidence: result.result?.evidence ?? [],
-          recommendedActions: result.result?.recommendedActions ?? [],
-          affectedComponent: result.result?.affectedComponent ?? null,
-          questions: ['Review the system diagnosis, repair Ariad/OpenClaw/environment as appropriate, then explicitly resume the project.'],
-          at: new Date().toISOString(),
-        },
-      }),
     },
 
     tech_lead: {
