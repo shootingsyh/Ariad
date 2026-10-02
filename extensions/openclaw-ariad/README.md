@@ -52,6 +52,24 @@ OpenClaw currently exposes model-override authorization for plugins under the `s
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
+## Local Project Explorer
+
+The plugin starts a read-only local web UI with the Gateway. By default, open:
+
+```text
+http://127.0.0.1:18791
+```
+
+The explorer includes:
+
+- a project overview with live execution status
+- version navigation across immutable `.ariad/versions/vN/snapshot.json` snapshots and the current durable project state
+- a responsive Feature Tree with revision markers and linked task progress
+- a Milestone Tree with dependencies, acceptance criteria, test strategy, and linked tasks
+- click/tap detail inspection; desktop uses a sticky side panel and mobile uses a bottom sheet
+
+Override the listener with `ARIAD_DASHBOARD_HOST` and `ARIAD_DASHBOARD_PORT`. The dashboard is read-only and does not own or mutate project state.
+
 ## Project lifecycle
 
 `ariad_project` supports:
