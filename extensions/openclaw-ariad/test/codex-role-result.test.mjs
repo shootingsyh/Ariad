@@ -202,14 +202,13 @@ test('non-tester role-result guidance remains strict without tester-specific sch
 });
 
 
-test('system debugger result schema is diagnosis-only', () => {
-  const diagnostic = roleResultToolMetadata().find(item => item.name === 'ariad_system_debugger_result');
+test('project debugger schema includes project and system root-cause outcomes', () => {
+  const diagnostic = roleResultToolMetadata().find(item => item.name === 'ariad_project_debugger_result');
   assert.ok(diagnostic);
-  assert.equal(diagnostic.parameters.properties.outcome.const, 'DIAGNOSED');
-  const resultSchema = diagnostic.parameters.properties.result;
-  assert.equal(resultSchema.additionalProperties, false);
-  assert.deepEqual(
-    Object.keys(resultSchema.properties),
-    ['cause', 'evidence', 'recommendedActions', 'affectedComponent', 'summaryForHuman'],
-  );
+  const outcome = diagnostic.parameters.properties.outcome;
+  const literals = outcome.anyOf.map(item => item.const);
+  assert.ok(literals.includes('TASK_TOO_LARGE'));
+  assert.ok(literals.includes('SYSTEM_RUNTIME_FAILURE'));
+  assert.ok(literals.includes('MODEL_CAPABILITY_MISMATCH'));
+  assert.equal(roleResultToolMetadata().some(item => item.name === 'ariad_system_debugger_result'), false);
 });
