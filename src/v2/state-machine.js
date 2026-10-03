@@ -88,6 +88,16 @@ export const PROJECT_STATE_RULES = Object.freeze([
     when: ({ tasks }) => tasks.some(task => task.state === 'NEEDS_HUMAN'),
   },
   {
+    state: 'RUNNING',
+    when: ({ tasks }) =>
+      tasks.some(task => task.state === 'SYSTEM_BLOCKED')
+      && tasks.some(task =>
+        task.stage === 'project_debugger'
+        && task.input?.blockedTaskId
+        && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
+      ),
+  },
+  {
     state: 'FAILED',
     when: ({ tasks }) => tasks.some(task => task.state === 'SYSTEM_BLOCKED'),
   },
