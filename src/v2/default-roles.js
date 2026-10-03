@@ -16,6 +16,7 @@ import {
   validateTaskOwnershipCompilation,
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
+import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -350,6 +351,11 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
+    const roleBoundaryContext = buildRoleBoundaryContext({
+      artifactRoot,
+      task,
+      role: task.stage,
+    });
     const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
       ? `${task.stage}:${task.projectId}`
       : null;
@@ -371,6 +377,7 @@ export function createDefaultV2Roles({
         ...(modelRef ? { roleModelRef: modelRef } : {}),
         ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
+        ...(roleBoundaryContext ? { roleBoundaryContext } : {}),
         v2Prompt,
         task: {
           id: task.id,
