@@ -116,6 +116,29 @@ export class StandaloneProjectRuntime {
     return { audit, scheduled, status: this.status() };
   }
 
+  resumeSystemBlocked(reason = 'MANUAL_RESUME') {
+    const recovered = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'SYSTEM_BLOCKED') continue;
+      const lastFailure = [...(task.history ?? [])]
+        .reverse()
+        .find(entry => entry?.type === 'SYSTEM_INTERRUPTION');
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'SYSTEM_RECOVERY',
+        role: task.stage,
+        reason,
+        previousFailure: lastFailure?.failure ?? null,
+        at: new Date().toISOString(),
+      }, {
+        state: 'READY',
+        execution: null,
+      });
+      this.resources.release(task.id);
+      recovered.push(task.id);
+    }
+    return recovered;
+  }
+
   status() {
     const tasks = this.store.listTasks(this.projectId);
     const project = this.store.getProject(this.projectId);
