@@ -110,6 +110,15 @@ def build_model(config: dict[str, Any]):
                     "timeout_seconds": int(config.get("timeoutSeconds", 10)),
                 })])
 
+            if scenario == "read-file-then-result" and step["value"] == 1:
+                if isinstance(state, dict):
+                    state["lastModelAction"] = "read_file"
+                return ModelResponse(parts=[ToolCallPart("read_file", {
+                    "path": config.get("readFile", "health.txt"),
+                    "start_line": 1,
+                    "end_line": 20,
+                })])
+
             if scenario == "tool-then-result" and step["value"] == 1:
                 if isinstance(state, dict):
                     state["lastModelAction"] = "workspace_probe"
