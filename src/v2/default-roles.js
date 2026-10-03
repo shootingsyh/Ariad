@@ -6,6 +6,7 @@ import { artCapabilityRecommendations, requiredArtCapabilities } from './art-cap
 import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
+import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -285,7 +286,8 @@ function criticPrompt({ store, project, task, artifactRoot }) {
 
 export function createDefaultV2Roles({
   store,
-  providerId = 'openclaw-v2',
+  providerId = 'pydantic-v2',
+  completionProtocol = 'provider_terminal',
   codeProviderId = 'ariad-code',
   workspace,
   sourceControl = null,
@@ -310,12 +312,15 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
+    const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
+      ? `${task.stage}:${task.projectId}`
+      : null;
     const modelRef = typeof executionMetadata.modelRef === 'string'
       ? executionMetadata.modelRef.trim()
       : '';
     return {
       provider: providerId,
-      completionProtocol: 'role_result_tool',
+      completionProtocol,
       resources: modelRef.startsWith('llamacpp/') ? ['local-llm'] : [],
       executionCapabilities: [...executionCapabilities],
       executionProvenance: {
@@ -326,6 +331,7 @@ export function createDefaultV2Roles({
       context: {
         executionCapabilities: [...executionCapabilities],
         ...(modelRef ? { roleModelRef: modelRef } : {}),
+        ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
         v2Prompt,
         task: {
@@ -339,6 +345,7 @@ export function createDefaultV2Roles({
           art: task.art ?? task.input?.art ?? null,
           history: task.history ?? [],
         },
+        executionHandoff: deriveExecutionHandoff(task.history ?? []),
         devCycle: 1 + failureCount(task),
         strategyEpoch: strategyEpoch(task),
       },
@@ -438,6 +445,7 @@ export function createDefaultV2Roles({
     },
 
     project_debugger: {
+      sessionPolicy: 'persistent',
       prepare: ({ task }) => prepareLlm(task, task.input?.blockedTaskId ? [
         "You are Ariad's unified Project Debugger.",
         'Automatic execution retry has been exhausted for the blocked business task below.',
@@ -601,6 +609,7 @@ export function createDefaultV2Roles({
     },
 
     tech_lead: {
+      sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [

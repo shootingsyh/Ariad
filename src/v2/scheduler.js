@@ -1,6 +1,7 @@
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
+import { applyTaskEvent } from './state-machine.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -46,11 +47,25 @@ export class V2Scheduler {
       const role = this.roles.get(task.stage);
       const next = await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-      const { skipTaskIds = [], transitionHistory = null, ...patch } = next;
-      let updated = this.store.updateTask(task.id, task.version, {
-        ...patch,
-        execution: null,
-      });
+      const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
+      const transitionEvent = ({
+        READY: 'NEXT_ROLE',
+        DONE: 'FINISH',
+        WAITING_REPLAN: 'WAIT_REPLAN',
+        NEEDS_HUMAN: 'NEED_HUMAN',
+        SKIPPED: 'SKIP',
+      })[requestedState];
+      if (!transitionEvent) {
+        throw new Error(`role ${task.stage} requested unsupported task state: ${requestedState}`);
+      }
+      let updated = this.store.updateTask(task.id, task.version, applyTaskEvent(
+        task,
+        transitionEvent,
+        {
+          ...patch,
+          execution: null,
+        },
+      ));
       if (transitionHistory) {
         updated = this.store.appendTaskHistory(task.id, updated.version, transitionHistory);
       }
@@ -153,8 +168,7 @@ export class V2Scheduler {
       const idempotencyKey = `ariad:v2:${attemptId}`;
 
       try {
-        this.store.updateTask(task.id, task.version, {
-          state: 'WORKING',
+        this.store.updateTask(task.id, task.version, applyTaskEvent(task, 'START', {
           execution: {
             provider: spec.provider,
             externalId: null,
@@ -170,7 +184,7 @@ export class V2Scheduler {
             resources: structuredClone(requirements),
             sessionPolicy: role.sessionPolicy ?? 'fresh',
           },
-        });
+        }));
       } catch (error) {
         this.resources.release(task.id);
         if (String(error?.message).includes('version conflict')) continue;
@@ -200,16 +214,18 @@ export class V2Scheduler {
         started.push(task.id);
       } catch (error) {
         const current = this.store.getTask(task.id);
+        const blocked = systemFailureCount(current) >= 2;
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure: error?.message ?? String(error),
           consumeAttempt: true,
           at: new Date().toISOString(),
-        }, {
-          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-          execution: null,
-        });
+        }, applyTaskEvent(
+          current,
+          blocked ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
+          { execution: null },
+        ));
         this.resources.release(task.id);
       }
     }

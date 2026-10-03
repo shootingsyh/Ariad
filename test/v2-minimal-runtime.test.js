@@ -638,6 +638,24 @@ test('supervisor recovers resource claims from durable WORKING tasks after resta
   }
 });
 
+test('default runtime keeps only PM Tech Lead and Project Debugger persistent', () => {
+  const registry = createDefaultV2Roles({
+    store: {
+      listTasks: () => [],
+      listPlanningRequests: () => [],
+      listIncidents: () => [],
+      getProject: () => ({ id: 'P-policy' }),
+    },
+    workspace: process.cwd(),
+  });
+  assert.equal(registry.pm.sessionPolicy, 'persistent');
+  assert.equal(registry.tech_lead.sessionPolicy, 'persistent');
+  assert.equal(registry.project_debugger.sessionPolicy, 'persistent');
+  assert.equal(registry.developer.sessionPolicy, undefined);
+  assert.equal(registry.tester.sessionPolicy, undefined);
+  assert.equal(registry.reviewer.sessionPolicy, undefined);
+});
+
 test('role definitions carry startup policy, including persistent PM sessions', () => {
   const role = roles().get('pm');
   const project = { id: 'P5', spec: 'brainstorm this', pmBinding: 'openclaw:agent:pm-1' };
