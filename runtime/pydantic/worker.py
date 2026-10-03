@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelResponse
+from pydantic_ai import Agent, ModelMessagesTypeAdapter, ModelResponse
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -49,6 +50,26 @@ def jailed_path(root: Path, raw: str) -> Path:
         raise ValueError(f"path escapes workspace: {raw}") from exc
     return candidate
 
+
+
+def session_history_path(root: Path, session_key: str) -> Path:
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()
+    return root / ".ariad" / "memory" / "sessions" / f"{digest}.json"
+
+
+def load_session_history(root: Path, session_key: str):
+    path = session_history_path(root, session_key)
+    if not path.exists():
+        return None
+    return ModelMessagesTypeAdapter.validate_json(path.read_bytes())
+
+
+def save_session_history(root: Path, session_key: str, payload: bytes) -> None:
+    path = session_history_path(root, session_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(payload)
+    tmp.replace(path)
 
 def build_model(config: dict[str, Any]):
     kind = config.get("kind")
@@ -135,6 +156,16 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         model = build_model(model_config)
         role = str(params.get("role") or "role")
         prompt = str(params.get("prompt") or "")
+        session_policy = str(params.get("sessionPolicy") or "fresh")
+        session_key = str(params.get("sessionKey") or "").strip()
+        message_history = None
+        if session_policy == "persistent":
+            if not session_key:
+                raise ValueError("persistent session requires sessionKey")
+            state["sessionKey"] = session_key
+            state["phase"] = "load-history"
+            message_history = load_session_history(root, session_key)
+            state["historyMessages"] = len(message_history or [])
         instructions = (
             f"You are the Ariad {role} role. Work only inside the provided workspace. "
             "At every step, take exactly one kind of meaningful action: call an available tool to make or verify progress, "
@@ -203,7 +234,11 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         async def run_with_idle_watchdog():
             idle_timeout = float(params.get("idleTimeoutSeconds") or 600)
             check_interval = min(max(idle_timeout / 10.0, 0.05), 5.0)
-            run_task = asyncio.create_task(agent.run(prompt))
+            run_task = asyncio.create_task(agent.run(
+                prompt,
+                message_history=message_history,
+                run_id=str(params.get("runId") or uuid.uuid4()),
+            ))
             while True:
                 done, _ = await asyncio.wait({run_task}, timeout=check_interval)
                 if run_task in done:
@@ -237,6 +272,9 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             if hasattr(usage, "model_dump")
             else (str(usage) if usage is not None else None)
         )
+        if session_policy == "persistent":
+            state["phase"] = "save-history"
+            save_session_history(root, session_key, result.all_messages_json())
         state["phase"] = "completed"
     except asyncio.CancelledError:
         state["state"] = "CANCELLED"
@@ -269,7 +307,7 @@ async def handle(method: str, params: dict[str, Any]) -> Any:
             "state": state["state"],
             "debug": {
                 key: state.get(key)
-                for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction", "lastActivityType")
+                for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction", "lastActivityType", "historyMessages", "sessionKey")
                 if key in state
             },
         }
