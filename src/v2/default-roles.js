@@ -311,6 +311,9 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
+    const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
+      ? `${task.stage}:${task.projectId}`
+      : null;
     const modelRef = typeof executionMetadata.modelRef === 'string'
       ? executionMetadata.modelRef.trim()
       : '';
@@ -327,6 +330,7 @@ export function createDefaultV2Roles({
       context: {
         executionCapabilities: [...executionCapabilities],
         ...(modelRef ? { roleModelRef: modelRef } : {}),
+        ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
         v2Prompt,
         task: {
@@ -439,6 +443,7 @@ export function createDefaultV2Roles({
     },
 
     project_debugger: {
+      sessionPolicy: 'persistent',
       prepare: ({ task }) => prepareLlm(task, task.input?.blockedTaskId ? [
         "You are Ariad's unified Project Debugger.",
         'Automatic execution retry has been exhausted for the blocked business task below.',
@@ -602,6 +607,7 @@ export function createDefaultV2Roles({
     },
 
     tech_lead: {
+      sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
