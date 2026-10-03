@@ -95,7 +95,7 @@ function normalizeContract(raw, expectedNodeType) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('contract must be object');
   const allowed = new Set([
     'version', 'nodeId', 'nodeType', 'decomposition',
-    'interfaces', 'imports', 'integrationScenarios',
+    'interfaces', 'imports', 'integrationScenarios', 'featureUses',
     'featureTasks', 'taskLinks', 'integrationTasks',
   ]);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`${raw.nodeId ?? '?'}: unexpected property ${key}`);
@@ -116,14 +116,16 @@ function normalizeContract(raw, expectedNodeType) {
   if (!Array.isArray(raw.interfaces)) fail(`${raw.nodeId}: interfaces must be array`);
   if (!Array.isArray(raw.imports)) fail(`${raw.nodeId}: imports must be array`);
   if (!Array.isArray(raw.integrationScenarios)) fail(`${raw.nodeId}: integrationScenarios must be array`);
+  const featureUsesRaw = raw.featureUses ?? [];
   const featureTasksRaw = raw.featureTasks ?? [];
   const taskLinksRaw = raw.taskLinks ?? [];
   const integrationTasksRaw = raw.integrationTasks ?? [];
+  if (!Array.isArray(featureUsesRaw)) fail(`${raw.nodeId}: featureUses must be array`);
   if (!Array.isArray(featureTasksRaw)) fail(`${raw.nodeId}: featureTasks must be array`);
   if (!Array.isArray(taskLinksRaw)) fail(`${raw.nodeId}: taskLinks must be array`);
   if (!Array.isArray(integrationTasksRaw)) fail(`${raw.nodeId}: integrationTasks must be array`);
-  if (expectedNodeType === 'feature' && (taskLinksRaw.length || integrationTasksRaw.length)) {
-    fail(`${raw.nodeId}: feature contracts cannot own milestone taskLinks/integrationTasks`);
+  if (expectedNodeType === 'feature' && (featureUsesRaw.length || taskLinksRaw.length || integrationTasksRaw.length)) {
+    fail(`${raw.nodeId}: feature contracts cannot own milestone featureUses/taskLinks/integrationTasks`);
   }
   if (expectedNodeType === 'milestone' && featureTasksRaw.length) {
     fail(`${raw.nodeId}: milestone contracts cannot define canonical featureTasks`);
@@ -170,6 +172,17 @@ function normalizeContract(raw, expectedNodeType) {
         return { nodeId: use.nodeId, interfaceId: use.interfaceId };
       }),
     };
+  });
+
+  const featureUses = featureUsesRaw.map((use, index) => {
+    const path = `${raw.nodeId}.featureUses[${index}]`;
+    if (!use || typeof use !== 'object' || Array.isArray(use)) fail(`${path}: must be object`);
+    const allowed = new Set(['featureId', 'interfaceId', 'purpose']);
+    for (const key of Object.keys(use)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
+    for (const key of ['featureId', 'interfaceId', 'purpose']) {
+      if (typeof use[key] !== 'string' || !use[key].trim()) fail(`${path}.${key}: required`);
+    }
+    return structuredClone(use);
   });
 
   function normalizeBaseTask(task, path) {
@@ -224,6 +237,7 @@ function normalizeContract(raw, expectedNodeType) {
     interfaces,
     imports,
     integrationScenarios,
+    featureUses,
     featureTasks,
     taskLinks,
     integrationTasks,
@@ -281,6 +295,10 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
   // parent imports so a contract mutation fails at the true source.
   freezeAndValidateExports(artifactRoot, nodeType, contracts);
 
+  const featureContracts = nodeType === 'milestone'
+    ? loadBoundaryContracts(artifactRoot, 'feature')
+    : null;
+
   for (const item of tree.items) {
     const contract = contracts.get(item.id);
     if (!contract) fail(`${nodeType}:${item.id}: missing boundary contract`);
@@ -304,6 +322,18 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
       );
       if (!exposed) {
         fail(`${nodeType}:${item.id}: child interface ${imported.fromNodeId}/${imported.interfaceId} is not exported`);
+      }
+    }
+
+    if (nodeType === 'milestone') {
+      for (const use of contract.featureUses ?? []) {
+        const feature = featureContracts.get(use.featureId);
+        const exposed = feature?.interfaces.find(entry =>
+          entry.id === use.interfaceId && entry.visibility === 'exported'
+        );
+        if (!exposed) {
+          fail(`milestone:${item.id}: feature interface ${use.featureId}/${use.interfaceId} is not exported`);
+        }
       }
     }
 
@@ -396,8 +426,9 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     `Boundary contracts: ${contractDir}`,
     'Every node present in the hierarchy must have one boundary contract.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
-    'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}]. These are canonical implementation/local-test task definitions.',
-    'Milestone contracts may define integrationTasks with the same base shape, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
+    'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}] DURING the feature frontier pass. These are canonical implementation/local-test task definitions.',
+    'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces.',
+    'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
     'Milestones have no schema field capable of overriding a linked feature task title, intent, acceptanceCriteria, or ownership.',
     'TOP-DOWN RULE: define a node boundary before looking below it.',
     'ONE-LAYER RULE: in one run create or refine only the current node and its direct children. Never create grandchildren.',
@@ -475,6 +506,54 @@ export function finishFrontierPass(artifactRoot, expectedNodeType) {
   );
 }
 
+
+export function buildOwnedExecutionTasks(artifactRoot) {
+  const { featureTasks, integrationTasks, links } = collectPlannedTaskOwnership(artifactRoot);
+  const tasks = new Map();
+
+  for (const [taskId, base] of featureTasks) {
+    tasks.set(taskId, {
+      id: taskId,
+      title: base.title,
+      intent: base.intent,
+      acceptanceCriteria: structuredClone(base.acceptanceCriteria),
+      testStrategy: base.testStrategy,
+      verification: structuredClone(base.verification ?? []),
+      logicalRefs: [base.featureId],
+      dependsOn: [],
+      taskKind: 'feature',
+      ownerFeatureId: base.featureId,
+    });
+  }
+
+  for (const [taskId, base] of integrationTasks) {
+    tasks.set(taskId, {
+      id: taskId,
+      title: base.title,
+      intent: base.intent,
+      acceptanceCriteria: structuredClone(base.acceptanceCriteria),
+      testStrategy: base.testStrategy,
+      verification: structuredClone(base.verification ?? []),
+      logicalRefs: [],
+      dependsOn: [],
+      taskKind: 'integration',
+      ownerMilestoneId: base.milestoneId,
+    });
+  }
+
+  for (const link of links) {
+    const task = tasks.get(link.taskId);
+    for (const dep of link.addDependsOn) if (!task.dependsOn.includes(dep)) task.dependsOn.push(dep);
+    for (const verification of link.addVerification) {
+      if (!task.verification.some(item => stableJson(item) === stableJson(verification))) {
+        task.verification.push(structuredClone(verification));
+      }
+    }
+    task.milestoneRefs = [...new Set([...(task.milestoneRefs ?? []), link.milestoneId])];
+  }
+
+  return [...tasks.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
 
 export function collectPlannedTaskOwnership(artifactRoot) {
   const featureContracts = loadBoundaryContracts(artifactRoot, 'feature');
