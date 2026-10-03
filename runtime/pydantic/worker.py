@@ -102,6 +102,14 @@ def build_model(config: dict[str, Any]):
                 time.sleep(float(config.get("stallSeconds", 5)))
                 return ModelResponse(parts=[])
 
+            if scenario == "long-command" and step["value"] == 1:
+                if isinstance(state, dict):
+                    state["lastModelAction"] = "exec_command"
+                return ModelResponse(parts=[ToolCallPart("exec_command", {
+                    "command": config.get("command", "sleep 5"),
+                    "timeout_seconds": int(config.get("timeoutSeconds", 10)),
+                })])
+
             if scenario == "tool-then-result" and step["value"] == 1:
                 if isinstance(state, dict):
                     state["lastModelAction"] = "workspace_probe"
