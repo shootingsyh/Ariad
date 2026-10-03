@@ -207,3 +207,171 @@ test('mock project blocks after repeated runtime failures and resume requeues it
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('pause lets in-flight role settle but prevents next role dispatch until resume', async () => {
+  const { root, manager, project } = createMockProject('ariad-mock-pause-');
+  let developerRuns = 0;
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), {
+    resolveModelConfig: (_modelRef, context) => {
+      if (context.role === 'developer' && developerRuns++ === 0) {
+        return {
+          kind: 'test',
+          model: 'developer',
+          scenario: 'long-command',
+          command: 'sleep 0.3',
+          timeoutSeconds: 2,
+          outcome: 'PASS',
+        };
+      }
+      return {
+        kind: 'test',
+        model: context.role,
+        outcome: 'PASS',
+        summary: `Mock ${context.role} completed.`,
+      };
+    },
+  });
+  const service = new AriadService({ manager, provider, safetyIntervalMs: 60_000 });
+
+  try {
+    await service.ensureRunning(project.id);
+    await service.reconcile();
+
+    let store = new SQLiteV2Store(project.stateDb);
+    let task = store.getTask('T-mock');
+    store.close();
+    assert.equal(task.stage, 'developer');
+    assert.equal(task.state, 'WORKING');
+
+    await service.ensurePaused(project.id);
+
+    for (let i = 0; i < 100; i += 1) {
+      await service.reconcile();
+      store = new SQLiteV2Store(project.stateDb);
+      task = store.getTask('T-mock');
+      store.close();
+      if (task.state === 'RESULT_READY') break;
+      await sleep(10);
+    }
+
+    assert.equal(manager.status(project.id).desiredState, 'PAUSED');
+    assert.equal(task.stage, 'developer');
+    assert.equal(task.state, 'RESULT_READY');
+
+    await service.reconcile();
+    store = new SQLiteV2Store(project.stateDb);
+    task = store.getTask('T-mock');
+    store.close();
+    assert.equal(task.stage, 'developer');
+    assert.equal(task.state, 'RESULT_READY');
+
+    await service.ensureResumed(project.id);
+    const recovered = await reconcileUntil(
+      service,
+      project.id,
+      ({ status }) => status.executionState === 'SUCCEEDED',
+    );
+    assert.equal(recovered.task.state, 'DONE');
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('stop cancels in-flight role and requeues task without consuming attempt', async () => {
+  const { root, manager, project } = createMockProject('ariad-mock-stop-');
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), {
+    resolveModelConfig: (_modelRef, context) => ({
+      kind: 'test',
+      model: context.role,
+      scenario: context.role === 'developer' ? 'long-command' : 'tool-then-result',
+      command: 'sleep 5',
+      timeoutSeconds: 10,
+      outcome: 'PASS',
+    }),
+  });
+  const service = new AriadService({ manager, provider, safetyIntervalMs: 60_000 });
+
+  try {
+    await service.ensureRunning(project.id);
+    await service.reconcile();
+
+    let store = new SQLiteV2Store(project.stateDb);
+    let task = store.getTask('T-mock');
+    store.close();
+    assert.equal(task.state, 'WORKING');
+
+    const stopped = await service.ensureStopped(project.id);
+    assert.deepEqual(stopped.cancelledTasks, ['T-mock']);
+    assert.equal(manager.status(project.id).desiredState, 'STOPPED');
+
+    store = new SQLiteV2Store(project.stateDb);
+    task = store.getTask('T-mock');
+    store.close();
+    assert.equal(task.state, 'READY');
+    const cancellation = task.history.at(-1);
+    assert.equal(cancellation.type, 'SYSTEM_INTERRUPTION');
+    assert.equal(cancellation.consumeAttempt, false);
+    assert.equal(cancellation.cancelled, true);
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('system NEEDS_HUMAN decision closes debugger gate and resume recovers blocked task', async () => {
+  const { root, manager, project } = createMockProject('ariad-mock-human-');
+  const seed = new SQLiteV2Store(project.stateDb);
+  let business = seed.getTask('T-mock');
+  seed.updateTask(business.id, business.version, {
+    state: 'SYSTEM_BLOCKED',
+    execution: null,
+  });
+  seed.createControlFlow({
+    projectId: project.id,
+    flowId: 'debug-flow',
+    tasks: [{
+      id: 'debug:T-mock:1',
+      stage: 'project_debugger',
+      state: 'NEEDS_HUMAN',
+      dependsOn: [],
+      input: { blockedTaskId: 'T-mock' },
+    }],
+  });
+  seed.close();
+  manager.setDesiredState(project.id, 'RUNNING');
+  manager.setExecutionState(project.id, 'NEEDS_HUMAN');
+
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient());
+  const service = new AriadService({ manager, provider, safetyIntervalMs: 60_000 });
+
+  try {
+    const decision = await service.submitDecision(project.id, 'Runtime repair completed; resume.');
+    assert.equal(decision.result.systemDiagnosis, true);
+    assert.equal(decision.result.taskState, 'DONE');
+    assert.equal(manager.status(project.id).executionState, 'FAILED');
+
+    let store = new SQLiteV2Store(project.stateDb);
+    let debugTask = store.getTask('debug:T-mock:1');
+    let blocked = store.getTask('T-mock');
+    store.close();
+    assert.equal(debugTask.state, 'DONE');
+    assert.equal(blocked.state, 'SYSTEM_BLOCKED');
+
+    const resumed = await service.ensureResumed(project.id);
+    assert.deepEqual(resumed.recoveredTasks, ['T-mock']);
+
+    store = new SQLiteV2Store(project.stateDb);
+    blocked = store.getTask('T-mock');
+    store.close();
+    assert.equal(blocked.state, 'READY');
+    assert.equal(
+      blocked.history.filter(entry => entry.type === 'SYSTEM_RECOVERY').length,
+      1,
+    );
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
