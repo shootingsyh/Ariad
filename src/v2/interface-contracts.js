@@ -39,9 +39,10 @@ export function ensureInterfaceArtifactLayout(artifactRoot) {
   const featureDir = join(interfaceRoot, 'features');
   const milestoneDir = join(interfaceRoot, 'milestones');
   const frozenExportsPath = join(interfaceRoot, 'frozen-exports.json');
+  const activeFrontierPath = join(interfaceRoot, 'active-frontier.json');
   mkdirSync(featureDir, { recursive: true });
   mkdirSync(milestoneDir, { recursive: true });
-  return { plannerRoot, interfaceRoot, featureDir, milestoneDir, frozenExportsPath };
+  return { plannerRoot, interfaceRoot, featureDir, milestoneDir, frozenExportsPath, activeFrontierPath };
 }
 
 function hierarchy(items, label) {
@@ -378,4 +379,32 @@ export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null
     childIds: [...children],
     next: nextBoundaryFrontier(artifactRoot, nodeType),
   };
+}
+
+
+export function beginFrontierPass(artifactRoot, nodeType) {
+  const context = frontierPromptContext(artifactRoot, nodeType);
+  const { activeFrontierPath } = ensureInterfaceArtifactLayout(artifactRoot);
+  const state = {
+    version: 1,
+    nodeType,
+    bootstrap: context.bootstrap === true,
+    targetNodeId: context.bootstrap === true ? null : context.current?.node?.id ?? null,
+  };
+  writeFileSync(activeFrontierPath, JSON.stringify(state, null, 2) + '\n');
+  return context;
+}
+
+export function finishFrontierPass(artifactRoot, expectedNodeType) {
+  const { activeFrontierPath } = ensureInterfaceArtifactLayout(artifactRoot);
+  if (!existsSync(activeFrontierPath)) fail('frontier pass has no Ariad-owned active target');
+  const state = JSON.parse(readFileSync(activeFrontierPath, 'utf8'));
+  if (state.nodeType !== expectedNodeType) {
+    fail(`frontier target type mismatch: expected ${expectedNodeType}, found ${state.nodeType}`);
+  }
+  return validateFrontierPass(
+    artifactRoot,
+    expectedNodeType,
+    state.targetNodeId ?? null,
+  );
 }
