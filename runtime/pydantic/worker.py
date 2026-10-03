@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelResponse, ToolOutput
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.models.test import TestModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 
@@ -52,16 +53,21 @@ def jailed_path(root: Path, raw: str) -> Path:
 def build_model(config: dict[str, Any]):
     kind = config.get("kind")
     if kind == "test":
-        return TestModel(
-            call_tools=["workspace_probe"],
-            custom_output_args={
+        step = {"value": 0}
+
+        def deterministic_model(messages, info):
+            if step["value"] == 0:
+                step["value"] = 1
+                return ModelResponse(parts=[ToolCallPart("workspace_probe", {})])
+            return ModelResponse(parts=[ToolCallPart("ariad_role_result", {
                 "outcome": config.get("outcome", "PASS"),
                 "summary": config.get("summary", "Pydantic runtime test completed."),
                 "keyPoints": ["pydantic-ai-agent-loop"],
                 "artifacts": [],
                 "result": {"backend": "test"},
-            },
-        )
+            })])
+
+        return FunctionModel(deterministic_model)
     if kind == "openai-compatible":
         model_name = config.get("model")
         base_url = config.get("baseUrl")
@@ -96,7 +102,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         "Use tools as needed. When the work is complete, return the required structured RoleResult. "
         "Do not invent files, commands, tests, or evidence."
     )
-    agent = Agent(model, instructions=instructions, output_type=RoleResult)
+    agent = Agent(model, instructions=instructions, output_type=ToolOutput(RoleResult, name="ariad_role_result"))
 
     def touch() -> None:
         state["lastActivityAt"] = time.monotonic()
