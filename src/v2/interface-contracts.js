@@ -96,6 +96,7 @@ function normalizeContract(raw, expectedNodeType) {
   const allowed = new Set([
     'version', 'nodeId', 'nodeType', 'decomposition',
     'interfaces', 'imports', 'integrationScenarios',
+    'featureTasks', 'taskLinks', 'integrationTasks',
   ]);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`${raw.nodeId ?? '?'}: unexpected property ${key}`);
   if (raw.version !== 1) fail(`${raw.nodeId ?? '?'}: version must be 1`);
@@ -115,6 +116,18 @@ function normalizeContract(raw, expectedNodeType) {
   if (!Array.isArray(raw.interfaces)) fail(`${raw.nodeId}: interfaces must be array`);
   if (!Array.isArray(raw.imports)) fail(`${raw.nodeId}: imports must be array`);
   if (!Array.isArray(raw.integrationScenarios)) fail(`${raw.nodeId}: integrationScenarios must be array`);
+  const featureTasksRaw = raw.featureTasks ?? [];
+  const taskLinksRaw = raw.taskLinks ?? [];
+  const integrationTasksRaw = raw.integrationTasks ?? [];
+  if (!Array.isArray(featureTasksRaw)) fail(`${raw.nodeId}: featureTasks must be array`);
+  if (!Array.isArray(taskLinksRaw)) fail(`${raw.nodeId}: taskLinks must be array`);
+  if (!Array.isArray(integrationTasksRaw)) fail(`${raw.nodeId}: integrationTasks must be array`);
+  if (expectedNodeType === 'feature' && (taskLinksRaw.length || integrationTasksRaw.length)) {
+    fail(`${raw.nodeId}: feature contracts cannot own milestone taskLinks/integrationTasks`);
+  }
+  if (expectedNodeType === 'milestone' && featureTasksRaw.length) {
+    fail(`${raw.nodeId}: milestone contracts cannot define canonical featureTasks`);
+  }
 
   const interfaceIds = new Set();
   const interfaces = raw.interfaces.map((entry, index) => {
@@ -159,6 +172,50 @@ function normalizeContract(raw, expectedNodeType) {
     };
   });
 
+  function normalizeBaseTask(task, path) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) fail(`${path}: task must be object`);
+    const allowed = new Set(['id', 'title', 'intent', 'acceptanceCriteria', 'testStrategy', 'verification']);
+    for (const key of Object.keys(task)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
+    for (const key of ['id', 'title', 'intent', 'testStrategy']) {
+      if (typeof task[key] !== 'string' || !task[key].trim()) fail(`${path}.${key}: required`);
+    }
+    if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
+      fail(`${path}.acceptanceCriteria: non-empty array required`);
+    }
+    if (task.verification != null && !Array.isArray(task.verification)) fail(`${path}.verification: must be array`);
+    return {
+      id: task.id,
+      title: task.title,
+      intent: task.intent,
+      acceptanceCriteria: [...task.acceptanceCriteria],
+      testStrategy: task.testStrategy,
+      verification: structuredClone(task.verification ?? []),
+    };
+  }
+
+  const featureTasks = featureTasksRaw.map((task, index) =>
+    normalizeBaseTask(task, `${raw.nodeId}.featureTasks[${index}]`)
+  );
+
+  const integrationTasks = integrationTasksRaw.map((task, index) =>
+    normalizeBaseTask(task, `${raw.nodeId}.integrationTasks[${index}]`)
+  );
+
+  const taskLinks = taskLinksRaw.map((link, index) => {
+    const path = `${raw.nodeId}.taskLinks[${index}]`;
+    if (!link || typeof link !== 'object' || Array.isArray(link)) fail(`${path}: must be object`);
+    const allowed = new Set(['taskId', 'addDependsOn', 'addVerification']);
+    for (const key of Object.keys(link)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
+    if (typeof link.taskId !== 'string' || !link.taskId.trim()) fail(`${path}.taskId: required`);
+    if (link.addDependsOn != null && !Array.isArray(link.addDependsOn)) fail(`${path}.addDependsOn: must be array`);
+    if (link.addVerification != null && !Array.isArray(link.addVerification)) fail(`${path}.addVerification: must be array`);
+    return {
+      taskId: link.taskId,
+      addDependsOn: [...(link.addDependsOn ?? [])],
+      addVerification: structuredClone(link.addVerification ?? []),
+    };
+  });
+
   return {
     version: 1,
     nodeId: raw.nodeId,
@@ -167,6 +224,9 @@ function normalizeContract(raw, expectedNodeType) {
     interfaces,
     imports,
     integrationScenarios,
+    featureTasks,
+    taskLinks,
+    integrationTasks,
   };
 }
 
@@ -332,7 +392,10 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     `Node artifacts: ${nodeDir}`,
     `Boundary contracts: ${contractDir}`,
     'Every node present in the hierarchy must have one boundary contract.',
-    'Contract shape: {"version":1,"nodeId":"...","nodeType":"feature|milestone","decomposition":{"kind":"leaf|expand","reason":"..."},"interfaces":[{"id":"...","type":"service|ui|journey|event|data","visibility":"internal|exported","contract":"..."}],"imports":[{"fromNodeId":"direct-child-id","interfaceId":"child-export-id","purpose":"..."}],"integrationScenarios":[{"id":"...","description":"...","uses":[{"nodeId":"...","interfaceId":"..."}]}]}.',
+    'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
+    'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}]. These are canonical implementation/local-test task definitions.',
+    'Milestone contracts may define integrationTasks with the same base shape, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
+    'Milestones have no schema field capable of overriding a linked feature task title, intent, acceptanceCriteria, or ownership.',
     'TOP-DOWN RULE: define a node boundary before looking below it.',
     'ONE-LAYER RULE: in one run create or refine only the current node and its direct children. Never create grandchildren.',
     'ENCAPSULATION RULE: a parent may depend only on direct-child exported interfaces.',
@@ -407,4 +470,76 @@ export function finishFrontierPass(artifactRoot, expectedNodeType) {
     expectedNodeType,
     state.targetNodeId ?? null,
   );
+}
+
+
+export function collectPlannedTaskOwnership(artifactRoot) {
+  const featureContracts = loadBoundaryContracts(artifactRoot, 'feature');
+  const milestoneContracts = loadBoundaryContracts(artifactRoot, 'milestone');
+
+  const featureTasks = new Map();
+  for (const [featureId, contract] of featureContracts) {
+    for (const task of contract.featureTasks ?? []) {
+      if (featureTasks.has(task.id)) fail(`duplicate canonical feature task ${task.id}`);
+      featureTasks.set(task.id, { ...structuredClone(task), featureId });
+    }
+  }
+
+  const integrationTasks = new Map();
+  const links = [];
+  for (const [milestoneId, contract] of milestoneContracts) {
+    for (const task of contract.integrationTasks ?? []) {
+      if (featureTasks.has(task.id) || integrationTasks.has(task.id)) {
+        fail(`duplicate planned task id ${task.id}`);
+      }
+      integrationTasks.set(task.id, { ...structuredClone(task), milestoneId });
+    }
+    for (const link of contract.taskLinks ?? []) {
+      if (!featureTasks.has(link.taskId)) {
+        fail(`milestone:${milestoneId}: taskLink references unknown feature task ${link.taskId}`);
+      }
+      links.push({ milestoneId, ...structuredClone(link) });
+    }
+  }
+
+  return { featureTasks, integrationTasks, links };
+}
+
+export function validateTaskOwnershipCompilation(artifactRoot, executionTasks) {
+  const ownership = collectPlannedTaskOwnership(artifactRoot);
+  const byId = new Map((executionTasks ?? []).map(task => [task.id, task]));
+
+  for (const [taskId, base] of ownership.featureTasks) {
+    const compiled = byId.get(taskId);
+    if (!compiled) fail(`compiled plan missing feature task ${taskId}`);
+    for (const key of ['title', 'intent', 'testStrategy']) {
+      if (compiled[key] !== base[key]) fail(`task:${taskId}: milestone compilation illegally overrode ${key}`);
+    }
+    if (stableJson(compiled.acceptanceCriteria ?? []) !== stableJson(base.acceptanceCriteria ?? [])) {
+      fail(`task:${taskId}: milestone compilation illegally overrode acceptanceCriteria`);
+    }
+    if (!(compiled.logicalRefs ?? []).includes(base.featureId)) {
+      fail(`task:${taskId}: compiled feature task must retain owning feature ${base.featureId}`);
+    }
+  }
+
+  for (const link of ownership.links) {
+    const compiled = byId.get(link.taskId);
+    if (!compiled) fail(`taskLink missing compiled task ${link.taskId}`);
+    for (const dep of link.addDependsOn) {
+      if (!(compiled.dependsOn ?? []).includes(dep)) {
+        fail(`task:${link.taskId}: missing milestone-added dependency ${dep}`);
+      }
+    }
+    for (const verification of link.addVerification) {
+      const found = (compiled.verification ?? []).some(item => stableJson(item) === stableJson(verification));
+      if (!found) fail(`task:${link.taskId}: missing milestone-added verification`);
+    }
+  }
+
+  for (const [taskId] of ownership.integrationTasks) {
+    if (!byId.has(taskId)) fail(`compiled plan missing milestone integration task ${taskId}`);
+  }
+
+  return { ok: true };
 }
