@@ -158,9 +158,14 @@ export class AriadService {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
     this.manager.setDesiredState(name, 'RUNNING');
-    if (current.executionState === 'FAILED') this.manager.setExecutionState(name, 'IDLE');
+    let recoveredTasks = [];
+    if (current.executionState === 'FAILED') {
+      const runtime = this.runtimeFor(this.manager.status(name));
+      recoveredTasks = runtime.resumeSystemBlocked('MANUAL_RESUME_AFTER_FAILED_PROJECT');
+      this.manager.setExecutionState(name, 'IDLE');
+    }
     this.wake('resumed');
-    return this.status(name);
+    return { ...this.status(name), recoveredTasks };
   }
 
   async ensureStopped(name) {
