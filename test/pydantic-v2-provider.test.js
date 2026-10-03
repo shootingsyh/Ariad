@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { PydanticRuntimeClient, PydanticV2Provider } from '../src/runtime/pydantic-v2-provider.js';
+import { StandaloneProjectRuntime } from '../src/runtime/standalone-project-runtime.js';
+import { AriadProjectManager } from '../src/runtime/project-manager.js';
+import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
@@ -247,5 +250,60 @@ test('persistent roles reload Ariad-owned message history across runs', async ()
   } finally {
     await provider.close();
     fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+
+test('standalone project runtime drives default developer tester reviewer roles to DONE without OpenClaw', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-standalone-project-'));
+  const manager = new AriadProjectManager({ projectsRoot: root });
+  const roleModels = Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'test/runtime']));
+  const project = manager.create('project-one', {
+    goal: 'Exercise the standalone role pipeline.',
+    roleModels,
+  });
+
+  const seed = new SQLiteV2Store(project.stateDb);
+  seed.createProject({
+    id: project.id,
+    spec: project.goal,
+    workspace: project.workspace,
+    deliveryEnabled: true,
+  });
+  seed.createTask({
+    id: 'T-default-pipeline',
+    projectId: project.id,
+    stage: 'developer',
+    state: 'READY',
+    title: 'Exercise default pipeline',
+    intent: 'Complete through developer, tester and reviewer.',
+    acceptanceCriteria: [],
+  });
+  seed.close();
+
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient());
+  const runtime = new StandaloneProjectRuntime({
+    project,
+    provider,
+    resolveRoleModel: role => manager.status(project.id).roleModels?.[role] ?? null,
+  });
+
+  try {
+    let task = runtime.store.getTask('T-default-pipeline');
+    for (let i = 0; i < 300 && task.state !== 'DONE'; i += 1) {
+      await runtime.tick();
+      task = runtime.store.getTask('T-default-pipeline');
+      if (task.state !== 'DONE') await sleep(10);
+    }
+
+    assert.equal(task.state, 'DONE');
+    const results = task.history.filter(entry => entry.type === 'ROLE_RESULT');
+    assert.deepEqual(results.map(entry => entry.role), ['developer', 'tester', 'reviewer']);
+    assert.ok(results.every(entry => entry.outcome === 'PASS'));
+    assert.ok(results.every(entry => entry.source === undefined));
+  } finally {
+    runtime.close();
+    await provider.close();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
