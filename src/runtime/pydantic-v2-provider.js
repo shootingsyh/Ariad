@@ -149,6 +149,7 @@ export class PydanticV2Provider {
       prompt,
       modelConfig,
       sessionPolicy: spec.sessionPolicy || 'fresh',
+      idleTimeoutSeconds: spec.runtimePolicy?.idleTimeoutSeconds ?? spec.idleTimeoutSeconds ?? 600,
     });
   }
 
