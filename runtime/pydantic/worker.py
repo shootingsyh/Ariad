@@ -62,7 +62,6 @@ def build_model(config: dict[str, Any]):
             if isinstance(state, dict):
                 state["modelCalls"] = state.get("modelCalls", 0) + 1
                 state["lastActivityAt"] = time.monotonic()
-        state["lastActivityType"] = "run_start"
                 state["lastActivityType"] = "model_response"
                 state["functionTools"] = [tool.name for tool in (info.function_tools or [])]
                 state["outputTools"] = [tool.name for tool in (info.output_tools or [])]
@@ -128,6 +127,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         root = resolve_workspace(params.get("workspace"))
         state["workspace"] = str(root)
         state["lastActivityAt"] = time.monotonic()
+        state["lastActivityType"] = "run_start"
 
         model_config = dict(params.get("modelConfig") or {})
         model_config["_debugState"] = state
