@@ -5,6 +5,7 @@ import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
+import { takeoverReviewPending, completeTakeoverReview } from './takeover-gate.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -141,9 +142,7 @@ function planningBatchRequests(store, task) {
 }
 
 function isTakeoverPlanningTask(store, task) {
-  const project = store.getProject(task.projectId);
-  if (project?.mode === 'TAKEOVER') return true;
-  return planningBatchRequests(store, task).some(item => item.request?.purpose === 'RESTORE_PROJECT_STATE');
+  return takeoverReviewPending(store, task.projectId);
 }
 
 function iterationRequest(store, task) {
@@ -847,7 +846,6 @@ export function createDefaultV2Roles({
           store.applyDeliveryPlan(task.projectId, validated.plan);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
-          const project = store.getProject(task.projectId);
           const setDeliveryEnabled = (enabled) => {
             const current = store.getProject(task.projectId);
             if (current?.deliveryEnabled === enabled) return current;
@@ -869,6 +867,7 @@ export function createDefaultV2Roles({
               },
             };
           }
+          if (takeover && hasHumanDecision) completeTakeoverReview(store, task.projectId);
           setDeliveryEnabled(result.result?.startDelivery === true);
           return {
             state: 'DONE',
