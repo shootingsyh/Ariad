@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 
 const defaultWorkerPath = fileURLToPath(
   new URL('../../runtime/pydantic/worker.py', import.meta.url),
@@ -135,11 +136,10 @@ export class PydanticV2Provider {
       taskId: spec.taskId,
       role: spec.role,
     });
-    const prompt = (
-      typeof spec.context?.v2Prompt === 'string' && spec.context.v2Prompt.trim()
-        ? spec.context.v2Prompt
-        : spec.prompt
-    ) || '';
+    const prompt = buildStandaloneRolePrompt(
+      spec.context ?? {},
+      spec.prompt ?? '',
+    );
     return await this.runtime.request('start', {
       runId: spec.attemptId || `v2:${spec.projectId}:${spec.taskId}`,
       projectId: spec.projectId,
