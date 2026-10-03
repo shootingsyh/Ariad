@@ -17,6 +17,8 @@ jobs:
           python-version: '3.13'
       - name: Install Pydantic runtime only
         run: pip install -r runtime/pydantic/requirements.txt
+      - name: Compile standalone worker
+        run: python -m py_compile runtime/pydantic/worker.py
       - name: Test standalone runtime without OpenClaw
         run: npm run test:pydantic-runtime
 
