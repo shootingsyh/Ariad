@@ -7,6 +7,7 @@ import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
+import { deriveProjectExecutionState } from '../v2/state-machine.js';
 
 export class AriadService {
   constructor({
@@ -171,22 +172,32 @@ export class AriadService {
   async ensureStopped(name) {
     const project = this.manager.setDesiredState(name, 'STOPPED');
     const runtime = this.runtimes.get(project.id);
+    let cancelledTasks = [];
     if (runtime) {
+      cancelledTasks = await runtime.cancelActive('PROJECT_STOPPED');
       runtime.close();
       this.runtimes.delete(project.id);
     }
     this.wake('stopped');
-    return this.status(name);
+    return { ...this.status(name), cancelledTasks };
   }
 
   deriveExecutionState(runtime) {
-    const status = runtime.status();
-    const { tasks } = status;
-    if (tasks.needsHuman > 0) return 'NEEDS_HUMAN';
-    if (tasks.blocked > 0) return 'FAILED';
-    if (tasks.total > 0 && tasks.done === tasks.total) return 'SUCCEEDED';
-    if (tasks.working > 0 || tasks.ready > 0 || tasks.resultReady > 0) return 'RUNNING';
-    return 'IDLE';
+    const tasks = runtime.store.listTasks(runtime.projectId);
+    const hasPlanning = runtime.store.hasUnplannedPlanningRequests(runtime.projectId);
+    return deriveProjectExecutionState({ tasks, hasPlanning });
+  }
+
+  async submitDecision(name, decision) {
+    const project = this.manager.status(name);
+    const runtime = this.runtimeFor(project);
+    const result = runtime.submitDecision(decision);
+    this.manager.setExecutionState(
+      name,
+      result.systemDiagnosis ? 'FAILED' : 'IDLE',
+    );
+    this.wake('human-decision');
+    return { result, project: this.status(name) };
   }
 
   async reconcile() {
