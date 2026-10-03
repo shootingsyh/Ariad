@@ -253,7 +253,11 @@ test('milestone may consume exported feature interfaces but not feature internal
         interfaceId: 'new-game',
         purpose: 'Start from the product entry contract.',
       }],
-      integrationScenarios: [],
+      integrationScenarios: [{
+        id: 'start-product',
+        description: 'Milestone verifies the product entry interface.',
+        uses: [{ graph: 'feature', nodeId: 'project', interfaceId: 'new-game' }],
+      }],
       taskLinks: [],
       integrationTasks: [],
     });
@@ -261,6 +265,14 @@ test('milestone may consume exported feature interfaces but not feature internal
     assert.equal(
       validateBoundaryContracts(root, 'milestone', { allowFrontier: false }).ok,
       true,
+    );
+
+    const undeclared = JSON.parse(fs.readFileSync(path.join(layout.milestoneDir, 'M0.json'), 'utf8'));
+    undeclared.featureUses = [];
+    writeJson(path.join(layout.milestoneDir, 'M0.json'), undeclared);
+    assert.throws(
+      () => validateBoundaryContracts(root, 'milestone', { allowFrontier: false }),
+      /scenario start-product uses unavailable interface feature:project\/new-game/,
     );
 
     const bad = JSON.parse(fs.readFileSync(path.join(layout.milestoneDir, 'M0.json'), 'utf8'));
