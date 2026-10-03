@@ -213,14 +213,67 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             names = sorted(item.name for item in root.iterdir())
             return "\n".join(names[:200])
 
+        read_cache: dict[str, tuple[int, int, str]] = {}
+
         @agent.tool_plain
-        def read_file(path: str) -> str:
-            """Read one UTF-8 text file relative to the workspace."""
+        def search_code(pattern: str, paths: list[str] | None = None, max_results: int = 80) -> str:
+            """Search code/text with ripgrep. Prefer this before broad file reads. Paths are workspace-relative."""
+            touch("tool:search_code")
+            max_results = max(1, min(int(max_results), 200))
+            safe_paths = []
+            for raw in paths or ["."]:
+                target = jailed_path(root, raw)
+                safe_paths.append(str(target.relative_to(root)) if target != root else ".")
+            command = ["rg", "-n", "--no-heading", "--color", "never", pattern, *safe_paths]
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            lines = completed.stdout.splitlines()[:max_results]
+            remember_list("commands", {
+                "command": " ".join(command)[:1000],
+                "exitCode": completed.returncode,
+            }, 24)
+            if completed.returncode not in (0, 1):
+                raise RuntimeError(completed.stderr[-4000:])
+            return "\n".join(lines)
+
+        @agent.tool_plain
+        def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> str:
+            """Read a bounded UTF-8 line range. Default returns at most 400 lines; request another range if needed."""
             touch("tool:read_file")
             target = jailed_path(root, path)
             relative = str(target.relative_to(root))
             remember_list("readFiles", relative, 48)
-            return target.read_text(encoding="utf-8")
+
+            start_line = max(1, int(start_line))
+            if end_line is None:
+                end_line = start_line + 399
+            end_line = max(start_line, min(int(end_line), start_line + 399))
+
+            stat = target.stat()
+            cache_key = f"{relative}:{start_line}:{end_line}"
+            fingerprint = f"{stat.st_mtime_ns}:{stat.st_size}"
+            cached = read_cache.get(cache_key)
+            if cached and cached[2] == fingerprint:
+                return (
+                    f"UNCHANGED: {relative} lines {start_line}-{end_line} were already read "
+                    "in this run and the file has not changed. Use the previous tool result."
+                )
+
+            lines = target.read_text(encoding="utf-8").splitlines()
+            selected = lines[start_line - 1:end_line]
+            read_cache[cache_key] = (start_line, end_line, fingerprint)
+            body = "\n".join(
+                f"{line_no}: {text}"
+                for line_no, text in enumerate(selected, start=start_line)
+            )
+            if end_line < len(lines):
+                body += f"\n... ({len(lines) - end_line} more lines; request a later range if needed)"
+            return body
 
         @agent.tool_plain
         def write_file(path: str, content: str) -> str:
@@ -256,8 +309,8 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             command_record["exitCode"] = process.returncode
             return json.dumps({
                 "exitCode": process.returncode,
-                "stdout": stdout.decode(errors="replace")[-20000:],
-                "stderr": stderr.decode(errors="replace")[-20000:],
+                "stdout": stdout.decode(errors="replace")[-12000:],
+                "stderr": stderr.decode(errors="replace")[-8000:],
             })
 
         async def run_with_idle_watchdog():
