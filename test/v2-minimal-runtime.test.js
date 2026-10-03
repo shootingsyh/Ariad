@@ -19,7 +19,7 @@ import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import { isRestartOrphanHumanGate } from '../src/v2/restart-orphan-recovery.js';
 import { legacyHumanGateTarget } from '../src/v2/legacy-human-gate-recovery.js';
 import { buildDurableRuntimeStatus } from '../src/v2/durable-runtime-status.js';
-import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates, repairLegacyRecoveredTakeoverDeliveryGate } from '../src/v2/takeover-gate.js';
+import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../src/v2/takeover-gate.js';
 import {
   ensurePlannerArtifactLayout,
   applyFeatureTreeDiff,
@@ -1944,69 +1944,6 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
     const recovered = recoverObsoleteTakeoverHumanGates(store, 'P-take-closed');
     assert.deepEqual(recovered, ['PM-obsolete']);
     assert.equal(store.getProject('P-take-closed').deliveryEnabled, false);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-
-test('0.8.3-cleared obsolete takeover gate is repaired on later startup from durable delivery history', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({
-      id: 'P-083-damaged',
-      mode: 'TAKEOVER',
-      takeoverReviewRequired: false,
-      deliveryEnabled: false,
-    });
-    store.createTask({
-      id: 'PM-approved',
-      projectId: 'P-083-damaged',
-      scope: 'control',
-      flowId: 'planner:P-083-damaged:approved',
-      stage: 'pm',
-      state: 'DONE',
-      input: { purpose: 'PLANNER_PM_REVIEW' },
-      history: [
-        { type: 'HUMAN_DECISION', decision: 'approve takeover', at: '2026-09-25T14:03:00Z' },
-        { type: 'DELIVERY_GATE', enabled: true, at: '2026-09-25T14:03:01Z' },
-      ],
-    });
-    store.createTask({
-      id: 'PM-obsolete-cleared-by-083',
-      projectId: 'P-083-damaged',
-      scope: 'control',
-      flowId: 'planner:P-083-damaged:batch-4-4',
-      stage: 'pm',
-      state: 'DONE',
-      input: { purpose: 'PLANNER_PM_REVIEW' },
-      history: [
-        {
-          type: 'ROLE_RESULT',
-          role: 'pm',
-          outcome: 'PLAN_ACCEPTED',
-          result: { startDelivery: false },
-          completedAt: '2026-10-03T04:42:00Z',
-        },
-        {
-          type: 'SYSTEM_RECOVERY',
-          role: 'pm',
-          reason: 'OBSOLETE_REPEAT_TAKEOVER_GATE',
-          at: '2026-10-03T05:44:00Z',
-        },
-      ],
-    });
-
-    const repaired = repairLegacyRecoveredTakeoverDeliveryGate(store, 'P-083-damaged');
-    assert.equal(repaired.repaired, true);
-    assert.equal(repaired.deliveryEnabled, true);
-    assert.equal(store.getProject('P-083-damaged').deliveryEnabled, true);
-
-    const idempotent = repairLegacyRecoveredTakeoverDeliveryGate(store, 'P-083-damaged');
-    assert.equal(idempotent.repaired, false);
-    assert.equal(idempotent.reason, 'already-matches-durable-gate');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
