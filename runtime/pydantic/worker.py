@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelResponse, ToolOutput
+from pydantic_ai import Agent, ModelResponse
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -59,7 +59,10 @@ def build_model(config: dict[str, Any]):
             if step["value"] == 0:
                 step["value"] = 1
                 return ModelResponse(parts=[ToolCallPart("workspace_probe", {})])
-            return ModelResponse(parts=[ToolCallPart("ariad_role_result", {
+            if not info.output_tools:
+                raise RuntimeError("Pydantic AI did not expose a structured output tool")
+            output_tool_name = info.output_tools[0].name
+            return ModelResponse(parts=[ToolCallPart(output_tool_name, {
                 "outcome": config.get("outcome", "PASS"),
                 "summary": config.get("summary", "Pydantic runtime test completed."),
                 "keyPoints": ["pydantic-ai-agent-loop"],
@@ -102,7 +105,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         "Use tools as needed. When the work is complete, return the required structured RoleResult. "
         "Do not invent files, commands, tests, or evidence."
     )
-    agent = Agent(model, instructions=instructions, output_type=ToolOutput(RoleResult, name="ariad_role_result"))
+    agent = Agent(model, instructions=instructions, output_type=RoleResult)
 
     def touch() -> None:
         state["lastActivityAt"] = time.monotonic()
