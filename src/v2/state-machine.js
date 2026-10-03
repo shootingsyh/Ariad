@@ -1,12 +1,19 @@
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
 export function defineStateMachine({ name, transitions }) {
   if (!name) throw new Error('state machine name is required');
   if (!transitions || typeof transitions !== 'object') {
     throw new Error(`${name} transitions are required`);
   }
 
+  const frozenTransitions = deepFreeze(transitions);
   const machine = {
     name,
-    transitions: Object.freeze(structuredClone(transitions)),
+    transitions: frozenTransitions,
     resolve(state, event, context = {}) {
       const rule = transitions?.[state]?.[event];
       if (!rule) {
