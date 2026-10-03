@@ -157,6 +157,11 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         state["workspace"] = str(root)
         state["lastActivityAt"] = time.monotonic()
         state["lastActivityType"] = "run_start"
+        state["executionContext"] = {
+            "readFiles": [],
+            "writtenFiles": [],
+            "commands": [],
+        }
 
         model_config = dict(params.get("modelConfig") or {})
         model_config["_debugState"] = state
@@ -192,6 +197,15 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             state["lastActivityAt"] = time.monotonic()
             state["lastActivityType"] = activity_type
 
+        def remember_list(key: str, value: Any, limit: int) -> None:
+            context = state["executionContext"]
+            items = context[key]
+            if value in items:
+                items.remove(value)
+            items.append(value)
+            if len(items) > limit:
+                del items[:-limit]
+
         @agent.tool_plain
         def workspace_probe() -> str:
             """List the workspace root so the agent can orient itself before acting."""
@@ -204,6 +218,8 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             """Read one UTF-8 text file relative to the workspace."""
             touch("tool:read_file")
             target = jailed_path(root, path)
+            relative = str(target.relative_to(root))
+            remember_list("readFiles", relative, 48)
             return target.read_text(encoding="utf-8")
 
         @agent.tool_plain
@@ -213,13 +229,17 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             target = jailed_path(root, path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-            return f"wrote {target.relative_to(root)}"
+            relative = str(target.relative_to(root))
+            remember_list("writtenFiles", relative, 32)
+            return f"wrote {relative}"
 
         @agent.tool_plain
         async def exec_command(command: str, timeout_seconds: int = 120) -> str:
             """Execute a shell command in the workspace and return exit code plus captured stdout/stderr."""
             touch("tool:exec_command:start")
             timeout_seconds = max(1, min(int(timeout_seconds), 600))
+            command_record = {"command": command[:1000], "exitCode": None}
+            remember_list("commands", command_record, 24)
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=root,
@@ -233,6 +253,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
                 await process.wait()
                 raise TimeoutError(f"command timed out after {timeout_seconds}s: {command}")
             touch("tool:exec_command:end")
+            command_record["exitCode"] = process.returncode
             return json.dumps({
                 "exitCode": process.returncode,
                 "stdout": stdout.decode(errors="replace")[-20000:],
@@ -312,6 +333,7 @@ async def handle(method: str, params: dict[str, Any]) -> Any:
             return {"state": "LOST", "failure": "PYDANTIC_RUN_NOT_FOUND", "restartOrphan": True}
         status = {
             "state": state["state"],
+            "executionContext": state.get("executionContext") or None,
             "debug": {
                 key: state.get(key)
                 for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction", "lastActivityType", "historyMessages", "sessionKey")
