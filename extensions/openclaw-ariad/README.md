@@ -52,6 +52,10 @@ OpenClaw currently exposes model-override authorization for plugins under the `s
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
+## One-time TAKEOVER review gate
+
+TAKEOVER is a project origin mode, not a permanent human gate on every future replan. Ariad persists `takeoverReviewRequired` at project scope. The initial reconstruction remains delivery-gated until a human decision is incorporated into an accepted PM review; that acceptance clears the flag durably. Later technical replans such as `TASK_TOO_LARGE -> Tech Lead` remain autonomous and do not recreate TAKEOVER approval. Legacy TAKEOVER projects infer prior approval from existing PM human-decision history or already-executed delivery work, and obsolete repeated takeover gates are recovered automatically.
+
 ## Local model concurrency
 
 Ariad v2 treats every role configured with a `llamacpp/*` model as consuming the shared `local-llm` resource. The OpenClaw plugin owns one process-wide pool with capacity 1, so local llama.cpp role attempts are serialized across all Ariad projects while remote models such as Codex or Muse may still run concurrently. Resource ownership is namespaced per project/task and is recovered from durable WORKING task state after runtime reconstruction.

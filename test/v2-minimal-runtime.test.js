@@ -19,6 +19,7 @@ import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import { isRestartOrphanHumanGate } from '../src/v2/restart-orphan-recovery.js';
 import { legacyHumanGateTarget } from '../src/v2/legacy-human-gate-recovery.js';
 import { buildDurableRuntimeStatus } from '../src/v2/durable-runtime-status.js';
+import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../src/v2/takeover-gate.js';
 import {
   ensurePlannerArtifactLayout,
   applyFeatureTreeDiff,
@@ -1741,6 +1742,139 @@ test('accepted takeover plan pauses at human review until a human decision is re
     });
     assert.equal(second.state, 'DONE');
     assert.equal(store.getProject('P-take-gate').deliveryEnabled, true, 'PM must explicitly open delivery after human takeover review');
+    assert.equal(store.getProject('P-take-gate').takeoverReviewRequired, false, 'human-approved takeover review must be durable');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('later technical replans in an approved TAKEOVER project do not create another human gate', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-take-replan',
+      pmBinding: 'pm:P-take-replan',
+      mode: 'TAKEOVER',
+      sourcePath: '/tmp/existing-repo',
+      takeoverReviewRequired: false,
+      deliveryEnabled: true,
+    });
+    store.enqueuePlanningRequest({
+      id: 'replan-1',
+      projectId: 'P-take-replan',
+      request: { purpose: 'REPLAN_TASK', taskId: 'BIG', diagnosis: { outcome: 'TASK_TOO_LARGE' } },
+    });
+    const plan = validateTechLeadPlan({
+      version: 2,
+      projectSummary: 'Smaller slices',
+      rootTaskId: 'ROOT',
+      tasks: [{
+        id: 'ROOT',
+        title: 'Recovered root',
+        intent: 'Finish the recovered project.',
+        parentId: null,
+        dependsOn: [],
+        acceptanceCriteria: ['Project still completes.'],
+        testStrategy: 'Run project E2E.',
+      }],
+    }).plan;
+    store.createPlanningBatch({
+      projectId: 'P-take-replan',
+      batchId: 'batch-replan',
+      requestIds: ['replan-1'],
+      tasks: [
+        {
+          id: 'TL-replan',
+          stage: 'tech_lead',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            result: { plan },
+          }],
+        },
+        {
+          id: 'PM-replan',
+          stage: 'pm',
+          dependsOn: ['TL-replan'],
+          input: { planningBatchId: 'batch-replan', purpose: 'PLANNER_PM_REVIEW' },
+        },
+      ],
+    });
+
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const pmTask = store.getTask('PM-replan');
+    const prompt = definitions.pm.prepare({
+      project: store.getProject('P-take-replan'),
+      task: pmTask,
+    }).context.v2Prompt;
+    assert.doesNotMatch(prompt, /This is an existing-project takeover/);
+
+    const accepted = definitions.pm.transition({
+      task: pmTask,
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true } },
+    });
+    assert.equal(accepted.state, 'DONE');
+    assert.equal(accepted.transitionHistory.type, 'DELIVERY_GATE');
+    assert.equal(store.getProject('P-take-replan').takeoverReviewRequired, false);
+    assert.equal(store.getProject('P-take-replan').deliveryEnabled, true);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy TAKEOVER projects infer completed review from prior delivery and recover obsolete repeat gates', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-legacy-take',
+      pmBinding: 'pm:P-legacy-take',
+      mode: 'TAKEOVER',
+      sourcePath: '/tmp/existing-repo',
+      deliveryEnabled: false,
+    });
+    store.createTask({
+      id: 'OLD-DONE',
+      projectId: 'P-legacy-take',
+      scope: 'delivery',
+      stage: 'reviewer',
+      state: 'DONE',
+    });
+    store.createTask({
+      id: 'planner:batch-4-4:pm-review',
+      projectId: 'P-legacy-take',
+      scope: 'control',
+      flowId: 'planner:P-legacy-take:batch-4-4',
+      stage: 'pm',
+      state: 'NEEDS_HUMAN',
+      input: { planningBatchId: 'batch-4-4', purpose: 'PLANNER_PM_REVIEW' },
+      history: [{
+        type: 'ROLE_RESULT',
+        role: 'pm',
+        outcome: 'PLAN_ACCEPTED',
+        result: { reason: 'Task split accepted.', startDelivery: true },
+      }],
+    });
+
+    const migrated = ensureTakeoverReviewState(store, 'P-legacy-take');
+    assert.equal(migrated.takeoverReviewRequired, false);
+
+    const recovered = recoverObsoleteTakeoverHumanGates(store, 'P-legacy-take');
+    assert.deepEqual(recovered, ['planner:batch-4-4:pm-review']);
+    assert.equal(store.getTask('planner:batch-4-4:pm-review').state, 'DONE');
+    assert.equal(store.getTask('planner:batch-4-4:pm-review').history.at(-1).reason, 'OBSOLETE_REPEAT_TAKEOVER_GATE');
+    assert.equal(store.getProject('P-legacy-take').deliveryEnabled, true);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
