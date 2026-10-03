@@ -82,6 +82,30 @@ export function applyTaskEvent(task, event, patch = {}, context = {}) {
   };
 }
 
+
+export const PROJECT_CONTROL_MACHINE = defineStateMachine({
+  name: 'AriadProjectControl',
+  transitions: {
+    STOPPED: {
+      START: 'RUNNING',
+      RESUME: 'RUNNING',
+      STOP: 'STOPPED',
+    },
+    RUNNING: {
+      START: 'RUNNING',
+      PAUSE: 'PAUSED',
+      RESUME: 'RUNNING',
+      STOP: 'STOPPED',
+    },
+    PAUSED: {
+      START: 'RUNNING',
+      PAUSE: 'PAUSED',
+      RESUME: 'RUNNING',
+      STOP: 'STOPPED',
+    },
+  },
+});
+
 export const PROJECT_STATE_RULES = Object.freeze([
   {
     state: 'NEEDS_HUMAN',
