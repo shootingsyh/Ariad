@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -103,78 +104,81 @@ def build_model(config: dict[str, Any]):
 async def execute_run(external_id: str, params: dict[str, Any]) -> None:
     state = runs[external_id]
     state["state"] = "RUNNING"
-    root = resolve_workspace(params.get("workspace"))
-    state["workspace"] = str(root)
-    state["lastActivityAt"] = time.monotonic()
-
-    model_config = dict(params.get("modelConfig") or {})
-    model_config["_debugState"] = state
-    state["phase"] = "build-model"
-    model = build_model(model_config)
-    role = str(params.get("role") or "role")
-    prompt = str(params.get("prompt") or "")
-    instructions = (
-        f"You are the Ariad {role} role. Work only inside the provided workspace. "
-        "Use tools as needed. When the work is complete, return the required structured RoleResult. "
-        "Do not invent files, commands, tests, or evidence."
-    )
-    state["phase"] = "construct-agent"
-    agent = Agent(model, instructions=instructions, output_type=RoleResult)
-    state["phase"] = "register-tools"
-
-    def touch() -> None:
+    try:
+        state["phase"] = "resolve-workspace"
+        root = resolve_workspace(params.get("workspace"))
+        state["workspace"] = str(root)
         state["lastActivityAt"] = time.monotonic()
 
-    @agent.tool_plain
-    def workspace_probe() -> str:
-        """List the workspace root so the agent can orient itself before acting."""
-        touch()
-        names = sorted(item.name for item in root.iterdir())
-        return "\n".join(names[:200])
-
-    @agent.tool_plain
-    def read_file(path: str) -> str:
-        """Read one UTF-8 text file relative to the workspace."""
-        touch()
-        target = jailed_path(root, path)
-        return target.read_text(encoding="utf-8")
-
-    @agent.tool_plain
-    def write_file(path: str, content: str) -> str:
-        """Write one UTF-8 text file relative to the workspace, creating parent directories."""
-        touch()
-        target = jailed_path(root, path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        return f"wrote {target.relative_to(root)}"
-
-    @agent.tool_plain
-    def exec_command(command: str, timeout_seconds: int = 120) -> str:
-        """Execute a shell command in the workspace and return exit code plus captured stdout/stderr."""
-        touch()
-        timeout_seconds = max(1, min(int(timeout_seconds), 600))
-        completed = subprocess.run(
-            command,
-            cwd=root,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
+        model_config = dict(params.get("modelConfig") or {})
+        model_config["_debugState"] = state
+        state["phase"] = "build-model"
+        model = build_model(model_config)
+        role = str(params.get("role") or "role")
+        prompt = str(params.get("prompt") or "")
+        instructions = (
+            f"You are the Ariad {role} role. Work only inside the provided workspace. "
+            "Use tools as needed. When the work is complete, return the required structured RoleResult. "
+            "Do not invent files, commands, tests, or evidence."
         )
-        return json.dumps({
-            "exitCode": completed.returncode,
-            "stdout": completed.stdout[-20000:],
-            "stderr": completed.stderr[-20000:],
-        })
 
-    state["phase"] = "before-run"
-    try:
+        state["phase"] = "construct-agent"
+        agent = Agent(model, instructions=instructions, output_type=RoleResult)
+        state["phase"] = "register-tools"
+
+        def touch() -> None:
+            state["lastActivityAt"] = time.monotonic()
+
+        @agent.tool_plain
+        def workspace_probe() -> str:
+            """List the workspace root so the agent can orient itself before acting."""
+            touch()
+            names = sorted(item.name for item in root.iterdir())
+            return "\n".join(names[:200])
+
+        @agent.tool_plain
+        def read_file(path: str) -> str:
+            """Read one UTF-8 text file relative to the workspace."""
+            touch()
+            target = jailed_path(root, path)
+            return target.read_text(encoding="utf-8")
+
+        @agent.tool_plain
+        def write_file(path: str, content: str) -> str:
+            """Write one UTF-8 text file relative to the workspace, creating parent directories."""
+            touch()
+            target = jailed_path(root, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return f"wrote {target.relative_to(root)}"
+
+        @agent.tool_plain
+        def exec_command(command: str, timeout_seconds: int = 120) -> str:
+            """Execute a shell command in the workspace and return exit code plus captured stdout/stderr."""
+            touch()
+            timeout_seconds = max(1, min(int(timeout_seconds), 600))
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                shell=True,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            return json.dumps({
+                "exitCode": completed.returncode,
+                "stdout": completed.stdout[-20000:],
+                "stderr": completed.stderr[-20000:],
+            })
+
+        state["phase"] = "before-run"
         run_coro = agent.run(prompt, usage_limits=UsageLimits(request_limit=8))
         if model_config.get("kind") == "test":
             result = await asyncio.wait_for(run_coro, timeout=2.0)
         else:
             result = await run_coro
         state["phase"] = "after-run"
+
         output = result.output
         if not isinstance(output, RoleResult):
             output = RoleResult.model_validate(output)
@@ -183,14 +187,21 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         usage = getattr(result, "usage", None)
         if callable(usage):
             usage = usage()
-        state["usage"] = usage.model_dump(mode="json") if hasattr(usage, "model_dump") else (str(usage) if usage is not None else None)
+        state["usage"] = (
+            usage.model_dump(mode="json")
+            if hasattr(usage, "model_dump")
+            else (str(usage) if usage is not None else None)
+        )
+        state["phase"] = "completed"
     except asyncio.CancelledError:
         state["state"] = "CANCELLED"
         state["failure"] = "PYDANTIC_RUN_CANCELLED"
+        state["phase"] = "cancelled"
         raise
     except Exception as exc:
         state["state"] = "FAILED"
         state["failure"] = f"{type(exc).__name__}: {exc}"
+        state["phase"] = "failed"
 
 
 async def handle(method: str, params: dict[str, Any]) -> Any:
