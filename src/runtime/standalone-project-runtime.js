@@ -9,6 +9,7 @@ import { V2Supervisor } from '../v2/supervisor.js';
 import { FunctionProvider } from '../v2/function-provider.js';
 import { createDefaultV2Roles } from '../v2/default-roles.js';
 import { ensureTakeoverReviewState } from '../v2/takeover-gate.js';
+import { applyTaskEvent } from '../v2/state-machine.js';
 
 /**
  * Standalone Ariad execution composition for one project.
@@ -129,14 +130,62 @@ export class StandaloneProjectRuntime {
         reason,
         previousFailure: lastFailure?.failure ?? null,
         at: new Date().toISOString(),
-      }, {
-        state: 'READY',
+      }, applyTaskEvent(task, 'RECOVER', {
         execution: null,
-      });
+      }));
       this.resources.release(task.id);
       recovered.push(task.id);
     }
     return recovered;
+  }
+
+  async cancelActive(reason = 'PROJECT_STOPPED') {
+    const cancelled = [];
+    for (const task of this.store.listTasks(this.projectId)) {
+      if (task.state !== 'WORKING') continue;
+      const execution = task.execution;
+      if (execution?.provider && execution?.externalId) {
+        const provider = this.providers.get(execution.provider);
+        await provider.cancel({
+          externalId: execution.externalId,
+          taskId: task.id,
+        });
+      }
+      const current = this.store.getTask(task.id);
+      this.store.appendTaskHistory(current.id, current.version, {
+        type: 'SYSTEM_INTERRUPTION',
+        role: current.stage,
+        failure: reason,
+        consumeAttempt: false,
+        cancelled: true,
+        at: new Date().toISOString(),
+      }, applyTaskEvent(current, 'CANCEL', {
+        execution: null,
+      }));
+      this.resources.release(current.id);
+      cancelled.push(current.id);
+    }
+    return cancelled;
+  }
+
+  submitDecision(decision) {
+    const task = this.store.listTasks(this.projectId).find(item => item.state === 'NEEDS_HUMAN');
+    if (!task) throw new Error('project has no pending human decision');
+    const systemDiagnosis = task.stage === 'project_debugger' && Boolean(task.input?.blockedTaskId);
+    const updated = this.store.appendTaskHistory(task.id, task.version, {
+      type: 'HUMAN_DECISION',
+      decision,
+      at: new Date().toISOString(),
+    }, applyTaskEvent(task, 'HUMAN_DECISION', {
+      execution: null,
+    }, { systemDiagnosis }));
+    return {
+      taskId: updated.id,
+      decision,
+      systemDiagnosis,
+      blockedTaskId: systemDiagnosis ? task.input?.blockedTaskId ?? null : null,
+      taskState: updated.state,
+    };
   }
 
   status() {
