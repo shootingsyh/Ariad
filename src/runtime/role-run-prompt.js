@@ -121,6 +121,14 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
     );
   }
 
+  if (context.roleBoundaryContext) {
+    sections.push(
+      '',
+      'ARIAD ROLE BOUNDARY CONTEXT',
+      JSON.stringify(context.roleBoundaryContext, null, 2),
+    );
+  }
+
   if (executionHandoff) {
     sections.push(
       '',
