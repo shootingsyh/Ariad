@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildOwnedExecutionTasks,
   ensureInterfaceArtifactLayout,
   validateTaskOwnershipCompilation,
 } from '../src/v2/interface-contracts.js';
@@ -115,6 +116,70 @@ test('milestone taskLink cannot reference a nonexistent feature task', () => {
       () => validateTaskOwnershipCompilation(root, []),
       /references unknown feature task/,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('canonical task compiler preserves feature ownership and applies only additive milestone changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-canonical-tasks-'));
+  try {
+    const layout = ensureInterfaceArtifactLayout(root);
+    write(path.join(layout.featureDir, 'entry.json'), baseContract('entry', 'feature', {
+      featureTasks: [{
+        id: 'entry-impl',
+        title: 'Implement entry',
+        intent: 'Implement the supported new-game entry contract.',
+        acceptanceCriteria: ['New game starts cleanly.'],
+        testStrategy: 'Local entry tests.',
+        verification: [],
+      }],
+    }));
+    write(path.join(layout.milestoneDir, 'M1.json'), baseContract('M1', 'milestone', {
+      featureUses: [],
+      taskLinks: [{
+        taskId: 'entry-impl',
+        addDependsOn: ['asset-ready'],
+        addVerification: [{ criterionId: 'AC1', mode: 'runtime', target: 'linux.native' }],
+      }],
+      integrationTasks: [{
+        id: 'm1-entry-e2e',
+        title: 'Verify entry journey',
+        intent: 'Verify entry through the supported UI boundary.',
+        acceptanceCriteria: ['The journey succeeds without state injection.'],
+        testStrategy: 'Tester-authored UI integration test.',
+        verification: [],
+      }],
+    }));
+
+    assert.deepEqual(buildOwnedExecutionTasks(root), [
+      {
+        id: 'entry-impl',
+        title: 'Implement entry',
+        intent: 'Implement the supported new-game entry contract.',
+        acceptanceCriteria: ['New game starts cleanly.'],
+        testStrategy: 'Local entry tests.',
+        verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'linux.native' }],
+        logicalRefs: ['entry'],
+        dependsOn: ['asset-ready'],
+        taskKind: 'feature',
+        ownerFeatureId: 'entry',
+        milestoneRefs: ['M1'],
+      },
+      {
+        id: 'm1-entry-e2e',
+        title: 'Verify entry journey',
+        intent: 'Verify entry through the supported UI boundary.',
+        acceptanceCriteria: ['The journey succeeds without state injection.'],
+        testStrategy: 'Tester-authored UI integration test.',
+        verification: [],
+        logicalRefs: [],
+        dependsOn: [],
+        taskKind: 'integration',
+        ownerMilestoneId: 'M1',
+      },
+    ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
