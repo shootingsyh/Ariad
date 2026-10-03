@@ -86,7 +86,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
     state["state"] = "RUNNING"
     root = resolve_workspace(params.get("workspace"))
     state["workspace"] = str(root)
-    state["lastActivityAt"] = asyncio.get_running_loop().time()
+    state["lastActivityAt"] = time.monotonic()
 
     model = build_model(params.get("modelConfig") or {})
     role = str(params.get("role") or "role")
@@ -99,7 +99,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
     agent = Agent(model, instructions=instructions, output_type=RoleResult)
 
     def touch() -> None:
-        state["lastActivityAt"] = asyncio.get_running_loop().time()
+        state["lastActivityAt"] = time.monotonic()
 
     @agent.tool_plain
     def workspace_probe() -> str:
