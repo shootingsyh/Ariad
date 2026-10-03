@@ -92,7 +92,6 @@ test('mock project retries business failure through developer and then succeeds'
   const service = new AriadService({ manager, provider, safetyIntervalMs: 60_000 });
 
   try {
-    await service.start();
     await service.ensureRunning(project.id);
 
     const { status, task, snapshots } = await reconcileUntil(
@@ -156,7 +155,6 @@ test('mock project blocks after repeated runtime failures and resume requeues it
   const service = new AriadService({ manager, provider, safetyIntervalMs: 60_000 });
 
   try {
-    await service.start();
     await service.ensureRunning(project.id);
 
     const failed = await reconcileUntil(
