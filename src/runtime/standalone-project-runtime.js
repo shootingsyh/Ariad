@@ -43,6 +43,7 @@ export class StandaloneProjectRuntime {
     this.store = new SQLiteV2Store(project.stateDb);
     this.resources = new ScopedResourcePool(sharedResources, project.id);
     this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
+    this.requestSequence = 0;
 
     if (!this.store.getProject(project.id)) {
       this.store.createProject({
@@ -82,7 +83,7 @@ export class StandaloneProjectRuntime {
       }),
       enqueuePlanning: ({ request }) => {
         this.store.enqueuePlanningRequest({
-          id: `${project.id}:replan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+          id: `${project.id}:replan:${Date.now()}:${++this.requestSequence}`,
           projectId: project.id,
           request,
         });
