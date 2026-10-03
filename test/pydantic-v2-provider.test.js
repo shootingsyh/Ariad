@@ -202,3 +202,50 @@ test('idle watchdog cancels a stalled role run', async () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+
+test('persistent roles reload Ariad-owned message history across runs', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pydantic-memory-'));
+  const runtime = new PydanticRuntimeClient();
+  const provider = new PydanticV2Provider(runtime, {
+    resolveModelRef: () => 'test/runtime',
+  });
+
+  try {
+    const first = await provider.start({
+      projectId: 'P-memory',
+      taskId: 'PM-1',
+      role: 'pm',
+      attemptId: 'P-memory:PM-1:pm:1',
+      workspace,
+      prompt: 'Remember this first project interaction.',
+      sessionPolicy: 'persistent',
+      sessionKey: 'pm:P-memory',
+      context: {},
+    });
+    const firstStatus = await waitForTerminal(provider, first.externalId);
+    assert.equal(firstStatus.state, 'COMPLETED');
+    assert.equal(firstStatus.debug?.historyMessages, 0);
+
+    const second = await provider.start({
+      projectId: 'P-memory',
+      taskId: 'PM-2',
+      role: 'pm',
+      attemptId: 'P-memory:PM-2:pm:1',
+      workspace,
+      prompt: 'Continue from the prior project interaction.',
+      sessionPolicy: 'persistent',
+      sessionKey: 'pm:P-memory',
+      context: {},
+    });
+    const secondStatus = await waitForTerminal(provider, second.externalId);
+    assert.equal(secondStatus.state, 'COMPLETED');
+    assert.ok((secondStatus.debug?.historyMessages ?? 0) > 0);
+
+    const memoryDir = path.join(workspace, '.ariad', 'memory', 'sessions');
+    assert.equal(fs.readdirSync(memoryDir).filter(name => name.endsWith('.json')).length, 1);
+  } finally {
+    await provider.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
