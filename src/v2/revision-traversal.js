@@ -149,3 +149,74 @@ export function revisionInstructions(artifactRoot, nodeType) {
     'Never rewrite the full tree during traversal. Ariad compiles node decisions into the next version.',
   ].join('\n');
 }
+
+
+export function compileFeatureRevisionDiff(artifactRoot, targetVersion) {
+  if (!Number.isInteger(targetVersion) || targetVersion < 1) {
+    fail('targetVersion must be a positive integer');
+  }
+  const decisions = loadRevisionDecisions(artifactRoot, 'feature');
+  const tree = loadPlannerHierarchy(artifactRoot, 'feature');
+  const operations = [];
+
+  for (const node of tree.items) {
+    const decision = decisions.get(node.id);
+    if (!decision) fail(`feature:${node.id}: missing revision decision`);
+    if (decision.action === 'KEEP') continue;
+    if (decision.action === 'AMEND') {
+      const allowed = new Set(['title', 'summary', 'parentId']);
+      for (const key of Object.keys(decision.patch ?? {})) {
+        if (!allowed.has(key)) fail(`feature:${node.id}: AMEND patch cannot change ${key}`);
+      }
+      operations.push({
+        op: 'update',
+        id: node.id,
+        patch: structuredClone(decision.patch),
+        reason: decision.reason,
+      });
+      continue;
+    }
+    if (decision.action === 'REMOVE') {
+      operations.push({ op: 'remove', id: node.id, reason: decision.reason });
+      continue;
+    }
+    if (decision.action === 'REFINE') {
+      // Structure refinement happens in the subsequent one-layer frontier pass.
+      // The existing node identity remains stable here.
+      continue;
+    }
+  }
+
+  return { version: 1, targetVersion, operations };
+}
+
+export function revisionRefinementTargets(artifactRoot, nodeType) {
+  const decisions = loadRevisionDecisions(artifactRoot, nodeType);
+  return [...decisions.values()]
+    .filter(decision => decision.action === 'REFINE')
+    .map(decision => decision.nodeId);
+}
+
+export function validateRevisionTraversalComplete(artifactRoot, nodeType) {
+  const next = nextRevisionFrontier(artifactRoot, nodeType);
+  if (next) fail(`${nodeType}: revision traversal incomplete at ${next.node.id}`);
+  const tree = loadPlannerHierarchy(artifactRoot, nodeType);
+  const decisions = loadRevisionDecisions(artifactRoot, nodeType);
+
+  for (const node of tree.items) {
+    const decision = decisions.get(node.id);
+    if (!decision) continue; // pruned by an ancestor KEEP visitChildren=false
+    if (decision.action === 'REMOVE' && node.parentId) {
+      const parentDecision = decisions.get(node.parentId);
+      if (!parentDecision || !['AMEND', 'REFINE', 'REMOVE'].includes(parentDecision.action)) {
+        fail(`${nodeType}:${node.id}: REMOVE requires parent ${node.parentId} to be AMEND/REFINE/REMOVE`);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    visited: decisions.size,
+    refinementTargets: revisionRefinementTargets(artifactRoot, nodeType),
+  };
+}
