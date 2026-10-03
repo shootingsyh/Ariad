@@ -146,7 +146,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         )
 
         state["phase"] = "construct-agent"
-        agent = Agent(model, instructions=instructions, output_type=RoleResult)
+        agent = Agent(model, instructions=instructions, output_type=RoleResult, retries={"output": 1, "tools": 3})
         state["phase"] = "register-tools"
 
         def touch(activity_type: str) -> None:
@@ -203,12 +203,11 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         async def run_with_idle_watchdog():
             idle_timeout = float(params.get("idleTimeoutSeconds") or 600)
             check_interval = min(max(idle_timeout / 10.0, 0.05), 5.0)
-            run_task = asyncio.create_task(agent.run(
-                prompt,
-                retries={"output": 1, "tools": 3},
-            ))
-            while not run_task.done():
-                await asyncio.sleep(check_interval)
+            run_task = asyncio.create_task(agent.run(prompt))
+            while True:
+                done, _ = await asyncio.wait({run_task}, timeout=check_interval)
+                if run_task in done:
+                    return await run_task
                 idle_for = time.monotonic() - float(state.get("lastActivityAt") or time.monotonic())
                 if idle_for >= idle_timeout:
                     run_task.cancel()
@@ -220,7 +219,6 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
                         f"IDLE_TIMEOUT: no model/tool activity for {idle_for:.1f}s "
                         f"(limit {idle_timeout:.1f}s, last={state.get('lastActivityType', 'unknown')})"
                     )
-            return await run_task
 
         state["phase"] = "before-run"
         result = await run_with_idle_watchdog()
