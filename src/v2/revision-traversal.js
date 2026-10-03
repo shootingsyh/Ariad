@@ -159,7 +159,9 @@ export function compileFeatureRevisionDiff(artifactRoot, targetVersion) {
   const tree = loadPlannerHierarchy(artifactRoot, 'feature');
   const operations = [];
 
+  const reachable = new Set(orderedReachable(tree, decisions));
   for (const node of tree.items) {
+    if (!reachable.has(node.id)) continue;
     const decision = decisions.get(node.id);
     if (!decision) fail(`feature:${node.id}: missing revision decision`);
     if (decision.action === 'KEEP') continue;
