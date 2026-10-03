@@ -285,7 +285,8 @@ function criticPrompt({ store, project, task, artifactRoot }) {
 
 export function createDefaultV2Roles({
   store,
-  providerId = 'openclaw-v2',
+  providerId = 'pydantic-v2',
+  completionProtocol = 'provider_terminal',
   codeProviderId = 'ariad-code',
   workspace,
   sourceControl = null,
@@ -315,7 +316,7 @@ export function createDefaultV2Roles({
       : '';
     return {
       provider: providerId,
-      completionProtocol: 'role_result_tool',
+      completionProtocol,
       resources: modelRef.startsWith('llamacpp/') ? ['local-llm'] : [],
       executionCapabilities: [...executionCapabilities],
       executionProvenance: {
