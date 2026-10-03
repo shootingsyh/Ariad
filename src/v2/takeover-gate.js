@@ -1,3 +1,14 @@
+function latestDurableDeliveryGate(store, projectId) {
+  let latest = null;
+  for (const task of store.listTasks(projectId)) {
+    for (const entry of task.history ?? []) {
+      if (entry?.type !== 'DELIVERY_GATE' || typeof entry?.enabled !== 'boolean') continue;
+      latest = entry;
+    }
+  }
+  return latest;
+}
+
 function plannerPmTask(task) {
   return task?.scope === 'control'
     && task?.stage === 'pm'
@@ -74,10 +85,14 @@ export function recoverObsoleteTakeoverHumanGates(store, projectId) {
       execution: null,
     });
 
-    if (accepted.result?.startDelivery === true) {
+    // The repeated gate is invalid and must not overwrite the last durable
+    // delivery decision. Restore the most recent persisted DELIVERY_GATE
+    // rather than reading startDelivery from this obsolete PM result.
+    const durableGate = latestDurableDeliveryGate(store, projectId);
+    if (durableGate) {
       const current = store.getProject(projectId);
-      if (current?.deliveryEnabled !== true) {
-        store.updateProject(projectId, current.version, { deliveryEnabled: true });
+      if (current?.deliveryEnabled !== durableGate.enabled) {
+        store.updateProject(projectId, current.version, { deliveryEnabled: durableGate.enabled });
       }
     }
     recovered.push(task.id);

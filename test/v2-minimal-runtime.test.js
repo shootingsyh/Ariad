@@ -1852,6 +1852,19 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
       state: 'DONE',
     });
     store.createTask({
+      id: 'planner:batch-1-1:pm-review',
+      projectId: 'P-legacy-take',
+      scope: 'control',
+      flowId: 'planner:P-legacy-take:batch-1-1',
+      stage: 'pm',
+      state: 'DONE',
+      input: { planningBatchId: 'batch-1-1', purpose: 'PLANNER_PM_REVIEW' },
+      history: [
+        { type: 'HUMAN_DECISION', decision: 'approve takeover' },
+        { type: 'DELIVERY_GATE', role: 'pm', enabled: true, reason: 'Human approved takeover.', at: '2026-09-25T14:03:00Z' },
+      ],
+    });
+    store.createTask({
       id: 'planner:batch-4-4:pm-review',
       projectId: 'P-legacy-take',
       scope: 'control',
@@ -1863,7 +1876,7 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
         type: 'ROLE_RESULT',
         role: 'pm',
         outcome: 'PLAN_ACCEPTED',
-        result: { reason: 'Task split accepted.', startDelivery: true },
+        result: { reason: 'Task split accepted.', startDelivery: false },
       }],
     });
 
@@ -1874,7 +1887,63 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
     assert.deepEqual(recovered, ['planner:batch-4-4:pm-review']);
     assert.equal(store.getTask('planner:batch-4-4:pm-review').state, 'DONE');
     assert.equal(store.getTask('planner:batch-4-4:pm-review').history.at(-1).reason, 'OBSOLETE_REPEAT_TAKEOVER_GATE');
-    assert.equal(store.getProject('P-legacy-take').deliveryEnabled, true);
+    assert.equal(store.getProject('P-legacy-take').deliveryEnabled, true, 'obsolete replan gate must restore the latest durable DELIVERY_GATE, not its own startDelivery=false');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('obsolete takeover recovery preserves a later durable closed delivery gate', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-take-closed',
+      mode: 'TAKEOVER',
+      takeoverReviewRequired: false,
+      deliveryEnabled: true,
+    });
+    store.createTask({
+      id: 'PM-old-open',
+      projectId: 'P-take-closed',
+      scope: 'control',
+      flowId: 'planner:P-take-closed:old',
+      stage: 'pm',
+      state: 'DONE',
+      input: { purpose: 'PLANNER_PM_REVIEW' },
+      history: [{ type: 'DELIVERY_GATE', enabled: true, at: '2026-09-01T00:00:00Z' }],
+    });
+    store.createTask({
+      id: 'PM-later-close',
+      projectId: 'P-take-closed',
+      scope: 'control',
+      flowId: 'planner:P-take-closed:later',
+      stage: 'pm',
+      state: 'DONE',
+      input: { purpose: 'PLANNER_PM_REVIEW' },
+      history: [{ type: 'DELIVERY_GATE', enabled: false, at: '2026-09-02T00:00:00Z' }],
+    });
+    store.createTask({
+      id: 'PM-obsolete',
+      projectId: 'P-take-closed',
+      scope: 'control',
+      flowId: 'planner:P-take-closed:obsolete',
+      stage: 'pm',
+      state: 'NEEDS_HUMAN',
+      input: { purpose: 'PLANNER_PM_REVIEW' },
+      history: [{
+        type: 'ROLE_RESULT',
+        role: 'pm',
+        outcome: 'PLAN_ACCEPTED',
+        result: { startDelivery: true },
+      }],
+    });
+
+    const recovered = recoverObsoleteTakeoverHumanGates(store, 'P-take-closed');
+    assert.deepEqual(recovered, ['PM-obsolete']);
+    assert.equal(store.getProject('P-take-closed').deliveryEnabled, false);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
