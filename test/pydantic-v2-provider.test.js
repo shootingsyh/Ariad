@@ -119,3 +119,86 @@ test('V2 scheduler and supervisor can use pydantic-v2 with provider-terminal com
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('empty model output is retried once instead of being treated as completion', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pydantic-empty-'));
+  const runtime = new PydanticRuntimeClient();
+  const provider = new PydanticV2Provider(runtime, {
+    resolveModelRef: () => 'test/empty-once',
+    resolveModelConfig: () => ({ kind: 'test', model: 'empty-once', scenario: 'empty-once' }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-empty',
+      taskId: 'T-empty',
+      role: 'developer',
+      workspace,
+      prompt: 'Complete the task and return RoleResult.',
+      context: {},
+    });
+    const status = await waitForTerminal(provider, handle.externalId);
+    assert.equal(status.state, 'COMPLETED');
+    assert.equal(status.outcome, 'PASS');
+    assert.equal(status.debug?.modelCalls, 2);
+    assert.match(status.debug?.lastModelAction ?? '', /^output:/);
+  } finally {
+    await provider.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('repeated empty model output fails protocol instead of completing', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pydantic-empty-fail-'));
+  const runtime = new PydanticRuntimeClient();
+  const provider = new PydanticV2Provider(runtime, {
+    resolveModelRef: () => 'test/empty-always',
+    resolveModelConfig: () => ({ kind: 'test', model: 'empty-always', scenario: 'empty-always' }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-empty-fail',
+      taskId: 'T-empty-fail',
+      role: 'developer',
+      workspace,
+      prompt: 'Complete the task and return RoleResult.',
+      context: {},
+    });
+    const status = await waitForTerminal(provider, handle.externalId);
+    assert.equal(status.state, 'FAILED');
+    assert.match(status.failure ?? '', /UnexpectedModelBehavior|retry|output/i);
+    assert.ok((status.debug?.modelCalls ?? 0) >= 2);
+  } finally {
+    await provider.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('idle watchdog cancels a stalled role run', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pydantic-idle-'));
+  const runtime = new PydanticRuntimeClient();
+  const provider = new PydanticV2Provider(runtime, {
+    resolveModelRef: () => 'test/stall',
+    resolveModelConfig: () => ({ kind: 'test', model: 'stall', scenario: 'stall', stallSeconds: 1 }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-idle',
+      taskId: 'T-idle',
+      role: 'developer',
+      workspace,
+      prompt: 'Do not hang.',
+      context: {},
+      runtimePolicy: { idleTimeoutSeconds: 0.1 },
+    });
+    const status = await waitForTerminal(provider, handle.externalId);
+    assert.equal(status.state, 'FAILED');
+    assert.match(status.failure ?? '', /IDLE_TIMEOUT/i);
+  } finally {
+    await provider.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
