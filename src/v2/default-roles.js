@@ -269,6 +269,9 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
+    const canonicalTasks = hasBoundaryContracts(artifactRoot)
+      ? buildOwnedExecutionTasks(artifactRoot)
+      : [];
     return [
       'You are Ariad\'s Tech Lead dependency compilation pass.',
       'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. Feature and milestone frontier passes already own task definition.',
@@ -279,9 +282,12 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
+      canonicalTasks.length
+        ? 'ARIAD CANONICAL TASKS (copy semantics exactly; only compile dependency/milestone placement):\n' + JSON.stringify(canonicalTasks, null, 2)
+        : null,
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       plannerArtifactInstructions(artifactRoot),
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
   }
 
   if (purpose === 'PLANNER_REPAIR') {
