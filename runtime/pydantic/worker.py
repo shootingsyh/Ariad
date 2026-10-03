@@ -237,7 +237,6 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             run_task = asyncio.create_task(agent.run(
                 prompt,
                 message_history=message_history,
-                run_id=str(params.get("runId") or uuid.uuid4()),
             ))
             while True:
                 done, _ = await asyncio.wait({run_task}, timeout=check_interval)
