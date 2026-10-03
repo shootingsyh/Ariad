@@ -277,6 +277,10 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
     fail(`${nodeType}: every planned node must have exactly one boundary contract`);
   }
 
+  // Validate already-exposed parent-facing surfaces before checking current
+  // parent imports so a contract mutation fails at the true source.
+  freezeAndValidateExports(artifactRoot, nodeType, contracts);
+
   for (const item of tree.items) {
     const contract = contracts.get(item.id);
     if (!contract) fail(`${nodeType}:${item.id}: missing boundary contract`);
@@ -320,7 +324,6 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
     if (!tree.byId.has(nodeId)) fail(`${nodeType}: orphan boundary contract ${nodeId}`);
   }
 
-  freezeAndValidateExports(artifactRoot, nodeType, contracts);
   const frontier = nextBoundaryFrontier(artifactRoot, nodeType);
   return { ok: true, count: contracts.size, complete: frontier == null };
 }
