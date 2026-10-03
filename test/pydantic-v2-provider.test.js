@@ -15,12 +15,13 @@ import { V2Supervisor } from '../src/v2/supervisor.js';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function waitForTerminal(provider, externalId) {
+  let last = null;
   for (let i = 0; i < 200; i += 1) {
-    const status = await provider.poll({ externalId });
-    if (!['RUNNING', 'QUEUED'].includes(status.state)) return status;
+    last = await provider.poll({ externalId });
+    if (!['RUNNING', 'QUEUED'].includes(last.state)) return last;
     await sleep(10);
   }
-  throw new Error('pydantic runtime did not settle');
+  throw new Error(`pydantic runtime did not settle; last=${JSON.stringify(last)}`);
 }
 
 test('standalone Pydantic provider runs a tool-capable structured role without OpenClaw', async () => {
