@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelResponse, UsageLimits
+from pydantic_ai import Agent, ModelResponse
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -54,19 +54,39 @@ def build_model(config: dict[str, Any]):
     kind = config.get("kind")
     if kind == "test":
         step = {"value": 0}
+        scenario = config.get("scenario", "tool-then-result")
 
         def deterministic_model(messages, info):
             state = config.get("_debugState")
+            step["value"] += 1
             if isinstance(state, dict):
                 state["modelCalls"] = state.get("modelCalls", 0) + 1
+                state["lastActivityAt"] = time.monotonic()
+        state["lastActivityType"] = "run_start"
+                state["lastActivityType"] = "model_response"
                 state["functionTools"] = [tool.name for tool in (info.function_tools or [])]
                 state["outputTools"] = [tool.name for tool in (info.output_tools or [])]
                 state["messageCount"] = len(messages)
-            if step["value"] == 0:
-                step["value"] = 1
+
+            if scenario == "empty-once" and step["value"] == 1:
+                if isinstance(state, dict):
+                    state["lastModelAction"] = "empty"
+                return ModelResponse(parts=[])
+
+            if scenario == "empty-always":
+                if isinstance(state, dict):
+                    state["lastModelAction"] = "empty"
+                return ModelResponse(parts=[])
+
+            if scenario == "stall":
+                time.sleep(float(config.get("stallSeconds", 5)))
+                return ModelResponse(parts=[])
+
+            if scenario == "tool-then-result" and step["value"] == 1:
                 if isinstance(state, dict):
                     state["lastModelAction"] = "workspace_probe"
                 return ModelResponse(parts=[ToolCallPart("workspace_probe", {})])
+
             if not info.output_tools:
                 raise RuntimeError("Pydantic AI did not expose a structured output tool")
             output_tool_name = info.output_tools[0].name
@@ -117,7 +137,11 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         prompt = str(params.get("prompt") or "")
         instructions = (
             f"You are the Ariad {role} role. Work only inside the provided workspace. "
-            "Use tools as needed. When the work is complete, return the required structured RoleResult. "
+            "At every step, take exactly one kind of meaningful action: call an available tool to make or verify progress, "
+            "or, if and only if the assigned work is actually complete, return the required structured RoleResult. "
+            "A tool result never means the task is complete by itself; after every tool result, reassess the task and continue "
+            "with another tool when more work or verification is needed. "
+            "Do not stop merely to summarize progress. Do not use ordinary prose as a final answer. "
             "Do not invent files, commands, tests, or evidence."
         )
 
@@ -125,57 +149,81 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         agent = Agent(model, instructions=instructions, output_type=RoleResult)
         state["phase"] = "register-tools"
 
-        def touch() -> None:
+        def touch(activity_type: str) -> None:
             state["lastActivityAt"] = time.monotonic()
+            state["lastActivityType"] = activity_type
 
         @agent.tool_plain
         def workspace_probe() -> str:
             """List the workspace root so the agent can orient itself before acting."""
-            touch()
+            touch("tool:workspace_probe")
             names = sorted(item.name for item in root.iterdir())
             return "\n".join(names[:200])
 
         @agent.tool_plain
         def read_file(path: str) -> str:
             """Read one UTF-8 text file relative to the workspace."""
-            touch()
+            touch("tool:read_file")
             target = jailed_path(root, path)
             return target.read_text(encoding="utf-8")
 
         @agent.tool_plain
         def write_file(path: str, content: str) -> str:
             """Write one UTF-8 text file relative to the workspace, creating parent directories."""
-            touch()
+            touch("tool:write_file")
             target = jailed_path(root, path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return f"wrote {target.relative_to(root)}"
 
         @agent.tool_plain
-        def exec_command(command: str, timeout_seconds: int = 120) -> str:
+        async def exec_command(command: str, timeout_seconds: int = 120) -> str:
             """Execute a shell command in the workspace and return exit code plus captured stdout/stderr."""
-            touch()
+            touch("tool:exec_command:start")
             timeout_seconds = max(1, min(int(timeout_seconds), 600))
-            completed = subprocess.run(
+            process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=root,
-                shell=True,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise TimeoutError(f"command timed out after {timeout_seconds}s: {command}")
+            touch("tool:exec_command:end")
             return json.dumps({
-                "exitCode": completed.returncode,
-                "stdout": completed.stdout[-20000:],
-                "stderr": completed.stderr[-20000:],
+                "exitCode": process.returncode,
+                "stdout": stdout.decode(errors="replace")[-20000:],
+                "stderr": stderr.decode(errors="replace")[-20000:],
             })
 
+        async def run_with_idle_watchdog():
+            idle_timeout = float(params.get("idleTimeoutSeconds") or 600)
+            check_interval = min(max(idle_timeout / 10.0, 0.05), 5.0)
+            run_task = asyncio.create_task(agent.run(
+                prompt,
+                retries={"output": 1, "tools": 3},
+            ))
+            while not run_task.done():
+                await asyncio.sleep(check_interval)
+                idle_for = time.monotonic() - float(state.get("lastActivityAt") or time.monotonic())
+                if idle_for >= idle_timeout:
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except asyncio.CancelledError:
+                        pass
+                    raise TimeoutError(
+                        f"IDLE_TIMEOUT: no model/tool activity for {idle_for:.1f}s "
+                        f"(limit {idle_timeout:.1f}s, last={state.get('lastActivityType', 'unknown')})"
+                    )
+            return await run_task
+
         state["phase"] = "before-run"
-        run_coro = agent.run(prompt, usage_limits=UsageLimits(request_limit=8))
-        if model_config.get("kind") == "test":
-            result = await asyncio.wait_for(run_coro, timeout=2.0)
-        else:
-            result = await run_coro
+        result = await run_with_idle_watchdog()
         state["phase"] = "after-run"
 
         output = result.output
@@ -223,7 +271,7 @@ async def handle(method: str, params: dict[str, Any]) -> Any:
             "state": state["state"],
             "debug": {
                 key: state.get(key)
-                for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction")
+                for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction", "lastActivityType")
                 if key in state
             },
         }
