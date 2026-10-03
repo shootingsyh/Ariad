@@ -78,7 +78,7 @@ export class V2Supervisor {
           projectVersion: execution?.projectVersion ?? null,
           consumeAttempt: false,
           uncertainStart: Boolean(task.execution?.attemptId),
-          executionContext: structuredClone(status?.executionContext ?? null),
+          executionContext: null,
           at: incident.at,
         }, {
           ...applyTaskEvent(
@@ -206,6 +206,7 @@ export class V2Supervisor {
           keyPoints: status.keyPoints ?? [],
           artifacts: status.artifacts ?? [],
           result: status.result ?? null,
+          executionContext: structuredClone(status.executionContext ?? null),
           completedAt: new Date().toISOString(),
         }, applyTaskEvent(current, 'COMPLETE', {
           execution: null,
