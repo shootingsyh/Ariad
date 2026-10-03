@@ -19,6 +19,7 @@ import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
 import { legacyHumanGateTarget } from '../../../src/v2/legacy-human-gate-recovery.js';
 import { buildDurableRuntimeStatus } from '../../../src/v2/durable-runtime-status.js';
+import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../../../src/v2/takeover-gate.js';
 
 type ProjectManager = {
   list(): any[];
@@ -89,6 +90,7 @@ class ProjectRuntime {
         workspace: project.workspace,
         pmBinding: `pm:${project.id}`,
         deliveryEnabled: false,
+        takeoverReviewRequired: (project.mode ?? 'NEW') === 'TAKEOVER',
         projectVersion: project.projectVersion ?? 0,
         activeVersion: project.activeVersion ?? 1,
         versionHistory: [],
@@ -114,6 +116,8 @@ class ProjectRuntime {
         });
       }
     }
+
+    ensureTakeoverReviewState(this.store, project.id);
 
     const providers = new ProviderRegistry();
     providers.register(provider);
@@ -206,6 +210,10 @@ class ProjectRuntime {
         });
       }
     }
+  }
+
+  recoverObsoleteTakeoverGate() {
+    return recoverObsoleteTakeoverHumanGates(this.store, this.projectId);
   }
 
   status() {
@@ -1087,6 +1095,23 @@ export class AriadV2Service {
             this.runtimes.delete(project.id);
           }
           continue;
+        }
+
+        if (project.executionState === 'NEEDS_HUMAN' && project.stateDb && existsSync(project.stateDb)) {
+          const migrationStore = new SQLiteV2Store(project.stateDb);
+          try {
+            ensureTakeoverReviewState(migrationStore, project.id);
+            const recovered = recoverObsoleteTakeoverHumanGates(migrationStore, project.id);
+            if (recovered.length > 0) {
+              this.manager.setExecutionState(project.id, 'IDLE');
+              project = this.manager.status(project.id);
+              this.logger?.info?.(
+                `Ariad recovered obsolete repeated TAKEOVER gate(s) for ${project.id}: ${recovered.join(', ')}`
+              );
+            }
+          } finally {
+            migrationStore.close();
+          }
         }
 
         if (['SUCCEEDED', 'FAILED', 'NEEDS_HUMAN'].includes(project.executionState)) continue;
