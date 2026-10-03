@@ -60,6 +60,43 @@ export function completeTakeoverReview(store, projectId) {
   return project;
 }
 
+function obsoleteTakeoverRecoveryExists(store, projectId) {
+  return store.listTasks(projectId).some(task =>
+    (task.history ?? []).some(entry =>
+      entry?.type === 'SYSTEM_RECOVERY'
+      && entry?.reason === 'OBSOLETE_REPEAT_TAKEOVER_GATE'
+    )
+  );
+}
+
+export function repairLegacyRecoveredTakeoverDeliveryGate(store, projectId) {
+  const project = ensureTakeoverReviewState(store, projectId);
+  if (project.mode !== 'TAKEOVER' || project.takeoverReviewRequired !== false) {
+    return { repaired: false, deliveryEnabled: project.deliveryEnabled === true, reason: 'takeover-review-pending-or-not-takeover' };
+  }
+  if (!obsoleteTakeoverRecoveryExists(store, projectId)) {
+    return { repaired: false, deliveryEnabled: project.deliveryEnabled === true, reason: 'no-obsolete-takeover-recovery' };
+  }
+
+  const durableGate = latestDurableDeliveryGate(store, projectId);
+  if (!durableGate) {
+    return { repaired: false, deliveryEnabled: project.deliveryEnabled === true, reason: 'no-durable-delivery-gate' };
+  }
+
+  if (project.deliveryEnabled === durableGate.enabled) {
+    return { repaired: false, deliveryEnabled: project.deliveryEnabled === true, reason: 'already-matches-durable-gate' };
+  }
+
+  const updated = store.updateProject(projectId, project.version, {
+    deliveryEnabled: durableGate.enabled,
+  });
+  return {
+    repaired: true,
+    deliveryEnabled: updated.deliveryEnabled === true,
+    reason: 'restored-latest-durable-delivery-gate',
+  };
+}
+
 export function recoverObsoleteTakeoverHumanGates(store, projectId) {
   const project = ensureTakeoverReviewState(store, projectId);
   if (project.takeoverReviewRequired !== false) return [];
