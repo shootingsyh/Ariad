@@ -169,7 +169,12 @@ function normalizeContract(raw, expectedNodeType) {
         if (!use || typeof use !== 'object' || Array.isArray(use)) fail(`${raw.nodeId}.integrationScenarios[${index}].uses[${useIndex}] invalid`);
         if (typeof use.nodeId !== 'string' || !use.nodeId) fail('scenario use requires nodeId');
         if (typeof use.interfaceId !== 'string' || !use.interfaceId) fail('scenario use requires interfaceId');
-        return { nodeId: use.nodeId, interfaceId: use.interfaceId };
+        const graph = use.graph ?? expectedNodeType;
+        if (!['feature', 'milestone'].includes(graph)) fail('scenario use graph must be feature|milestone');
+        if (expectedNodeType === 'feature' && graph !== 'feature') {
+          fail(`${raw.nodeId}: feature scenario cannot consume milestone interfaces`);
+        }
+        return { graph, nodeId: use.nodeId, interfaceId: use.interfaceId };
       }),
     };
   });
@@ -338,13 +343,17 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
     }
 
     const available = new Set([
-      ...contract.interfaces.map(entry => `${item.id}:${entry.id}`),
-      ...contract.imports.map(entry => `${entry.fromNodeId}:${entry.interfaceId}`),
+      ...contract.interfaces.map(entry => `${nodeType}:${item.id}:${entry.id}`),
+      ...contract.imports.map(entry => `${nodeType}:${entry.fromNodeId}:${entry.interfaceId}`),
+      ...(nodeType === 'milestone'
+        ? (contract.featureUses ?? []).map(use => `feature:${use.featureId}:${use.interfaceId}`)
+        : []),
     ]);
     for (const scenario of contract.integrationScenarios) {
       for (const use of scenario.uses) {
-        if (!available.has(`${use.nodeId}:${use.interfaceId}`)) {
-          fail(`${nodeType}:${item.id}: scenario ${scenario.id} uses unavailable interface ${use.nodeId}/${use.interfaceId}`);
+        const key = `${use.graph}:${use.nodeId}:${use.interfaceId}`;
+        if (!available.has(key)) {
+          fail(`${nodeType}:${item.id}: scenario ${scenario.id} uses unavailable interface ${use.graph}:${use.nodeId}/${use.interfaceId}`);
         }
       }
     }
@@ -427,7 +436,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     'Every node present in the hierarchy must have one boundary contract.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
     'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}] DURING the feature frontier pass. These are canonical implementation/local-test task definitions.',
-    'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces.',
+    'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces. integrationScenarios.uses can then reference them as {graph:"feature",nodeId:featureId,interfaceId}.',
     'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
     'Milestones have no schema field capable of overriding a linked feature task title, intent, acceptanceCriteria, or ownership.',
     'TOP-DOWN RULE: define a node boundary before looking below it.',
