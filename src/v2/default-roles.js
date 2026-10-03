@@ -10,6 +10,7 @@ import {
   beginFrontierPass,
   finishFrontierPass,
   frontierArtifactInstructions,
+  hasBoundaryContracts,
   validateBoundaryContracts,
   validateTaskOwnershipCompilation,
 } from './interface-contracts.js';
@@ -741,9 +742,11 @@ export function createDefaultV2Roles({
           if (rawArtifactPlan) {
             try {
               const validated = validatePlannerArtifactPlan(rawArtifactPlan);
-              validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
-              validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
-              validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+              if (hasBoundaryContracts(artifactRoot)) {
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+              }
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
