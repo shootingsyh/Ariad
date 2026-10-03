@@ -52,6 +52,10 @@ OpenClaw currently exposes model-override authorization for plugins under the `s
 
 `ariad_project set_role_models` stores the project-specific role-to-model mapping. Newly created Ariad projects require a complete mapping for all Ariad roles. The OpenClaw plugin policy above is the independent host-level allowlist authorizing those model refs.
 
+## Durable delivery-gate recovery
+
+When clearing an obsolete repeated TAKEOVER human gate, Ariad restores `deliveryEnabled` from the most recent persisted `DELIVERY_GATE` history entry. The obsolete PM result's `startDelivery` value is not authoritative because that repeated gate should never have existed. This preserves earlier human-approved delivery state across migration/recovery while also respecting a later persisted gate that intentionally closed delivery.
+
 ## One-time TAKEOVER review gate
 
 TAKEOVER is a project origin mode, not a permanent human gate on every future replan. Ariad persists `takeoverReviewRequired` at project scope. The initial reconstruction remains delivery-gated until a human decision is incorporated into an accepted PM review; that acceptance clears the flag durably. Later technical replans such as `TASK_TOO_LARGE -> Tech Lead` remain autonomous and do not recreate TAKEOVER approval. Legacy TAKEOVER projects infer prior approval from existing PM human-decision history or already-executed delivery work, and obsolete repeated takeover gates are recovered automatically.
