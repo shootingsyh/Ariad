@@ -8,6 +8,7 @@ import { validatePlanAutonomy } from './autonomy.js';
 import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
 import {
   beginFrontierPass,
+  buildOwnedExecutionTasks,
   finishFrontierPass,
   frontierArtifactInstructions,
   hasBoundaryContracts,
@@ -247,8 +248,8 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       frontierArtifactInstructions(artifactRoot, nodeType),
       nodeType === 'feature'
-        ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition and contracts. Do not create detailed execution tasks yet.'
-        : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition and contracts. Detailed execution tasks are created in the later dependency pass.',
+        ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition, boundary contracts, and the canonical implementation/local-test tasks owned by every node created or finalized in this round. Do not defer task intent to a later global pass.'
+        : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition, feature interface uses, additive links to feature tasks, and milestone-owned integration/E2E tasks for every node created or finalized in this round. Do not defer integration test ownership to a later global pass.',
       frontier.bootstrap
         ? frontier.instruction
         : [
@@ -262,20 +263,19 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
         frontier,
       }, null, 2),
       nodeType === 'milestone'
-        ? 'Milestone artifacts created during frontier planning may keep tasks=[] temporarily. The later dependency pass must replace that with bounded implementation/integration execution tasks before validation.'
-        : null,
+        ? 'Milestone artifacts may keep legacy tasks=[] as a compatibility view; canonical task ownership now lives in the milestone boundary contract (featureUses/taskLinks/integrationTasks).'
+        : 'A leaf Feature that requires implementation should own its canonical featureTasks now. A pure composition node may own no implementation task and instead express integrationScenarios.'
     ].filter(Boolean).join('\n\n');
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
     return [
-      'You are Ariad\'s Tech Lead dependency pass.',
-      'Inspect the completed top-down feature and milestone boundary contracts, then COMPILE their task ownership into bounded execution tasks and dependencies in place. Do not emit a monolithic plan.',
-      'Feature featureTasks are canonical base tasks: preserve their title, intent, acceptanceCriteria, testStrategy, and feature ownership exactly.',
-      'Milestone taskLinks may only add dependencies and verification to linked feature tasks. Never replace or weaken the feature task definition.',
-      'Milestone integrationTasks are new milestone-owned tasks for contract/integration/UI-journey/E2E verification.',
-      'Leaf implementation scopes should own implementation plus local/unit/component correctness. Parent feature and milestone scopes should own integration/E2E verification derived from their integrationScenarios.',
-      'Tester is allowed and expected to author/update cross-feature, milestone-integration, UI-journey, contract, and E2E tests. Developer should not absorb those higher-level integration responsibilities.',
+      'You are Ariad\'s Tech Lead dependency compilation pass.',
+      'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. Feature and milestone frontier passes already own task definition.',
+      'Compile the already-defined canonical featureTasks, milestone taskLinks, and milestone integrationTasks into the legacy milestone/tasks compatibility artifacts and add only precise dependency edges required for execution ordering.',
+      'Feature task title, intent, acceptanceCriteria, testStrategy, and feature ownership are immutable in this pass.',
+      'Milestone taskLinks may only add dependencies and verification. Milestone integrationTasks are already defined and must remain milestone-owned.',
+      'Tester owns milestone/cross-feature integration, UI-journey, contract, and E2E test implementation/execution; Developer owns feature implementation plus local/unit/component correctness.',
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
