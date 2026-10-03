@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelResponse
+from pydantic_ai import Agent, ModelResponse, UsageLimits
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -56,12 +56,22 @@ def build_model(config: dict[str, Any]):
         step = {"value": 0}
 
         def deterministic_model(messages, info):
+            state = config.get("_debugState")
+            if isinstance(state, dict):
+                state["modelCalls"] = state.get("modelCalls", 0) + 1
+                state["functionTools"] = [tool.name for tool in (info.function_tools or [])]
+                state["outputTools"] = [tool.name for tool in (info.output_tools or [])]
+                state["messageCount"] = len(messages)
             if step["value"] == 0:
                 step["value"] = 1
+                if isinstance(state, dict):
+                    state["lastModelAction"] = "workspace_probe"
                 return ModelResponse(parts=[ToolCallPart("workspace_probe", {})])
             if not info.output_tools:
                 raise RuntimeError("Pydantic AI did not expose a structured output tool")
             output_tool_name = info.output_tools[0].name
+            if isinstance(state, dict):
+                state["lastModelAction"] = f"output:{output_tool_name}"
             return ModelResponse(parts=[ToolCallPart(output_tool_name, {
                 "outcome": config.get("outcome", "PASS"),
                 "summary": config.get("summary", "Pydantic runtime test completed."),
@@ -97,7 +107,9 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
     state["workspace"] = str(root)
     state["lastActivityAt"] = time.monotonic()
 
-    model = build_model(params.get("modelConfig") or {})
+    model_config = dict(params.get("modelConfig") or {})
+    model_config["_debugState"] = state
+    model = build_model(model_config)
     role = str(params.get("role") or "role")
     prompt = str(params.get("prompt") or "")
     instructions = (
@@ -153,7 +165,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         })
 
     try:
-        result = await agent.run(prompt)
+        result = await agent.run(prompt, usage_limits=UsageLimits(request_limit=8))
         output = result.output
         if not isinstance(output, RoleResult):
             output = RoleResult.model_validate(output)
@@ -188,7 +200,14 @@ async def handle(method: str, params: dict[str, Any]) -> Any:
         state = runs.get(external_id)
         if state is None:
             return {"state": "LOST", "failure": "PYDANTIC_RUN_NOT_FOUND", "restartOrphan": True}
-        status = {"state": state["state"]}
+        status = {
+            "state": state["state"],
+            "debug": {
+                key: state.get(key)
+                for key in ("modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction")
+                if key in state
+            },
+        }
         if state["state"] == "COMPLETED":
             role_result = state.get("result") or {}
             status.update({
