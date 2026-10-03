@@ -5,7 +5,7 @@ import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
-import { takeoverReviewPending, completeTakeoverReview } from './takeover-gate.js';
+import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -142,7 +142,8 @@ function planningBatchRequests(store, task) {
 }
 
 function isTakeoverPlanningTask(store, task) {
-  return takeoverReviewPending(store, task.projectId);
+  const project = ensureTakeoverReviewState(store, task.projectId);
+  return project.mode === 'TAKEOVER' && project.takeoverReviewRequired === true;
 }
 
 function iterationRequest(store, task) {
