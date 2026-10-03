@@ -7,7 +7,7 @@ import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
-import { deriveProjectExecutionState } from '../v2/state-machine.js';
+import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
 
 export class AriadService {
   constructor({
@@ -137,7 +137,10 @@ export class AriadService {
   async ensureRunning(name) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
-    const project = this.manager.setDesiredState(name, 'RUNNING');
+    const project = this.manager.setDesiredState(
+      name,
+      PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'START'),
+    );
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
     }
@@ -150,7 +153,10 @@ export class AriadService {
     if (current.desiredState === 'STOPPED') {
       throw new Error(`project ${current.id} is STOPPED; start or resume it before pausing`);
     }
-    this.manager.setDesiredState(name, 'PAUSED');
+    this.manager.setDesiredState(
+      name,
+      PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'PAUSE'),
+    );
     this.wake('paused');
     return this.status(name);
   }
@@ -158,7 +164,10 @@ export class AriadService {
   async ensureResumed(name) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
-    this.manager.setDesiredState(name, 'RUNNING');
+    this.manager.setDesiredState(
+      name,
+      PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'RESUME'),
+    );
     let recoveredTasks = [];
     if (current.executionState === 'FAILED') {
       const runtime = this.runtimeFor(this.manager.status(name));
@@ -170,7 +179,11 @@ export class AriadService {
   }
 
   async ensureStopped(name) {
-    const project = this.manager.setDesiredState(name, 'STOPPED');
+    const current = this.manager.status(name);
+    const project = this.manager.setDesiredState(
+      name,
+      PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'STOP'),
+    );
     const runtime = this.runtimes.get(project.id);
     let cancelledTasks = [];
     if (runtime) {
@@ -200,35 +213,39 @@ export class AriadService {
     return { result, project: this.status(name) };
   }
 
+  async reconcileProject(project) {
+    if (project.desiredState === 'STOPPED') {
+      const runtime = this.runtimes.get(project.id);
+      if (runtime) {
+        runtime.close();
+        this.runtimes.delete(project.id);
+      }
+      return;
+    }
+
+    if (['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
+
+    const runtime = this.runtimeFor(project);
+    const beforeState = project.executionState;
+    try {
+      await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
+      const nextState = this.deriveExecutionState(runtime);
+      if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);
+      if (nextState !== beforeState && ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(nextState)) {
+        await this.onProjectEvent?.(this.status(project.id), nextState);
+      }
+    } catch (error) {
+      this.manager.setExecutionState(project.id, 'FAILED');
+      this.logger?.error?.(
+        `Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+      );
+      if (beforeState !== 'FAILED') await this.onProjectEvent?.(this.status(project.id), 'FAILED');
+    }
+  }
+
   async reconcile() {
     for (const project of this.manager.list()) {
-      if (project.desiredState === 'STOPPED') {
-        const runtime = this.runtimes.get(project.id);
-        if (runtime) {
-          runtime.close();
-          this.runtimes.delete(project.id);
-        }
-        continue;
-      }
-
-      if (['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) continue;
-
-      const runtime = this.runtimeFor(project);
-      const beforeState = project.executionState;
-      try {
-        await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
-        const nextState = this.deriveExecutionState(runtime);
-        if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);
-        if (nextState !== beforeState && ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(nextState)) {
-          await this.onProjectEvent?.(this.status(project.id), nextState);
-        }
-      } catch (error) {
-        this.manager.setExecutionState(project.id, 'FAILED');
-        this.logger?.error?.(
-          `Ariad project ${project.id} failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
-        );
-        if (beforeState !== 'FAILED') await this.onProjectEvent?.(this.status(project.id), 'FAILED');
-      }
+      await this.reconcileProject(project);
     }
   }
 }
