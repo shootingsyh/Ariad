@@ -150,7 +150,10 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             output = RoleResult.model_validate(output)
         state["state"] = "COMPLETED"
         state["result"] = output.model_dump()
-        state["usage"] = result.usage().model_dump() if hasattr(result.usage(), "model_dump") else str(result.usage())
+        usage = getattr(result, "usage", None)
+        if callable(usage):
+            usage = usage()
+        state["usage"] = usage.model_dump(mode="json") if hasattr(usage, "model_dump") else (str(usage) if usage is not None else None)
     except asyncio.CancelledError:
         state["state"] = "CANCELLED"
         state["failure"] = "PYDANTIC_RUN_CANCELLED"
