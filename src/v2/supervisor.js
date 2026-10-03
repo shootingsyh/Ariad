@@ -1,3 +1,5 @@
+import { applyTaskEvent } from './state-machine.js';
+
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
   if (!attemptId) return null;
   return [...(task?.history ?? [])].reverse().find(
@@ -50,11 +52,10 @@ export class V2Supervisor {
   }
 
   #acceptSubmittedResult(task, submitted) {
-    this.store.updateTask(task.id, task.version, {
-      state: 'RESULT_READY',
+    this.store.updateTask(task.id, task.version, applyTaskEvent(task, 'COMPLETE', {
       execution: null,
       artifacts: [...(task.artifacts ?? []), ...(submitted.artifacts ?? [])],
-    });
+    }));
     this.resources.release(task.id);
   }
 
@@ -79,8 +80,11 @@ export class V2Supervisor {
           uncertainStart: Boolean(task.execution?.attemptId),
           at: incident.at,
         }, {
-          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-          execution: null,
+          ...applyTaskEvent(
+            current,
+            systemFailureCount(current) >= 2 ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
+            { execution: null },
+          ),
         });
         this.resources.release(task.id);
         continue;
@@ -131,11 +135,10 @@ export class V2Supervisor {
             protocolVersion: execution.protocolVersion ?? 'role-result-v2',
             projectVersion: execution?.projectVersion ?? null,
             completedAt: new Date().toISOString(),
-          }, {
-            state: 'RESULT_READY',
+          }, applyTaskEvent(current, 'COMPLETE', {
             execution: null,
             artifacts: [...(current.artifacts ?? []), ...(Array.isArray(fallback.artifacts) ? fallback.artifacts : [])],
-          });
+          }));
           this.resources.release(task.id);
           continue;
         }
@@ -182,8 +185,11 @@ export class V2Supervisor {
           projectVersion: execution?.projectVersion ?? null,
           at: incident.at,
         }, {
-          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-          execution: null,
+          ...applyTaskEvent(
+            current,
+            systemFailureCount(current) >= 2 ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
+            { execution: null },
+          ),
         });
         this.resources.release(task.id);
         continue;
@@ -199,11 +205,10 @@ export class V2Supervisor {
           artifacts: status.artifacts ?? [],
           result: status.result ?? null,
           completedAt: new Date().toISOString(),
-        }, {
-          state: 'RESULT_READY',
+        }, applyTaskEvent(current, 'COMPLETE', {
           execution: null,
           artifacts: [...(current.artifacts ?? []), ...(status.artifacts ?? [])],
-        });
+        }));
         this.resources.release(task.id);
         continue;
       }
@@ -212,6 +217,7 @@ export class V2Supervisor {
       const incident = await this.#incident(task, failure);
       incidents.push(incident);
       const consumeAttempt = status?.consumeAttempt !== false;
+      const blocked = consumeAttempt && systemFailureCount(current) >= 2;
       this.store.appendTaskHistory(task.id, current.version, {
         type: 'SYSTEM_INTERRUPTION',
         role: task.stage,
@@ -222,10 +228,11 @@ export class V2Supervisor {
         consumeAttempt,
         ...(status?.restartOrphan === true ? { restartOrphan: true } : {}),
         at: incident.at,
-      }, {
-        state: consumeAttempt && systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-        execution: null,
-      });
+      }, applyTaskEvent(
+        current,
+        blocked ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
+        { execution: null },
+      ));
       this.resources.release(task.id);
     }
     return { incidents };
