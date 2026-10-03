@@ -1087,7 +1087,7 @@ export class AriadV2Service {
     // ReconcileTrigger owns single-flight after startup. Do not add another
     // "already reconciling" guard here: a guard can turn a queued wake into a
     // successful no-op and lose durable work at the drain boundary.
-    for (const project of this.manager.list()) {
+    for (let project of this.manager.list()) {
         if (project.desiredState === 'STOPPED') {
           const existing = this.runtimes.get(project.id);
           if (existing) {
