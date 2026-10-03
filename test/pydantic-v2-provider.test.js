@@ -307,3 +307,45 @@ test('standalone project runtime drives default developer tester reviewer roles 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('runtime returns concrete executionContext from actual file reads', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pydantic-handoff-'));
+  fs.writeFileSync(path.join(workspace, 'health.txt'), 'status=healthy\n');
+  const runtime = new PydanticRuntimeClient();
+  const provider = new PydanticV2Provider(runtime, {
+    resolveModelRef: () => 'test/read-file',
+    resolveModelConfig: () => ({
+      kind: 'test',
+      model: 'read-file',
+      scenario: 'read-file-then-result',
+      readFile: 'health.txt',
+    }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-handoff',
+      taskId: 'T-handoff',
+      role: 'developer',
+      workspace,
+      prompt: 'Inspect health.txt and complete.',
+      context: {
+        task: {
+          id: 'T-handoff',
+          title: 'Read handoff evidence',
+          intent: 'Inspect health.txt',
+          acceptanceCriteria: [],
+          history: [],
+        },
+      },
+    });
+    const status = await waitForTerminal(provider, handle.externalId);
+    assert.equal(status.state, 'COMPLETED');
+    assert.deepEqual(status.executionContext?.readFiles, ['health.txt']);
+    assert.deepEqual(status.executionContext?.writtenFiles, []);
+  } finally {
+    await provider.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
