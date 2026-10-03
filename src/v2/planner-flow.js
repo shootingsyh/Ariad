@@ -5,8 +5,6 @@ function taskId(batchId, name) {
 export function plannerFlowTasks(batchId, requests) {
   const ids = {
     decompose: taskId(batchId, 'decompose'),
-    featureInterfaces: taskId(batchId, 'feature-interfaces'),
-    milestoneInterfaces: taskId(batchId, 'milestone-interfaces'),
     dependencies: taskId(batchId, 'dependencies'),
     validate1: taskId(batchId, 'validate-1'),
     critic1: taskId(batchId, 'critic-1'),
@@ -35,23 +33,9 @@ export function plannerFlowTasks(batchId, requests) {
       },
     },
     {
-      id: ids.featureInterfaces,
-      stage: 'tech_lead',
-      dependsOn: [ids.decompose],
-      ...common,
-      input: { ...common.input, purpose: 'PLANNER_FEATURE_INTERFACES', depth: null },
-    },
-    {
-      id: ids.milestoneInterfaces,
-      stage: 'tech_lead',
-      dependsOn: [ids.featureInterfaces],
-      ...common,
-      input: { ...common.input, purpose: 'PLANNER_MILESTONE_INTERFACES', depth: null },
-    },
-    {
       id: ids.dependencies,
       stage: 'tech_lead',
-      dependsOn: [ids.milestoneInterfaces],
+      dependsOn: [ids.decompose],
       ...common,
       input: { ...common.input, purpose: 'PLANNER_DEPENDENCIES' },
     },
