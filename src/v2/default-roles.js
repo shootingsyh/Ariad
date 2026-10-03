@@ -6,6 +6,12 @@ import { artCapabilityRecommendations, requiredArtCapabilities } from './art-cap
 import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
+import {
+  beginFrontierPass,
+  finishFrontierPass,
+  frontierArtifactInstructions,
+  validateBoundaryContracts,
+} from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import {
   ensurePlannerArtifactLayout,
@@ -233,17 +239,38 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   };
 
   if (purpose === 'PLANNER_DECOMPOSE') {
+    const nodeType = task.input?.frontierPhase ?? 'feature';
+    const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
-      plannerArtifactInstructions(artifactRoot),
-      'Create the complete known project-wide Logical Tree and Milestone execution tree as bounded artifacts. Later milestones may be coarser, but known future scope must remain represented.',
-    ].join('\n\n');
+      frontierArtifactInstructions(artifactRoot, nodeType),
+      nodeType === 'feature'
+        ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition and contracts. Do not create detailed execution tasks yet.'
+        : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition and contracts. Detailed execution tasks are created in the later dependency pass.',
+      frontier.bootstrap
+        ? frontier.instruction
+        : [
+            frontier.instruction,
+            'The current node already has a parent-facing contract. Preserve every exported interface exactly.',
+            'If expanding, define each direct child completely enough to expose its own stable parent-facing contract and decomposition decision.',
+            'Then update the current node imports and integrationScenarios so they use only those direct-child exported interfaces.',
+          ].join(' '),
+      JSON.stringify({
+        frontierPhase: nodeType,
+        frontier,
+      }, null, 2),
+      nodeType === 'milestone'
+        ? 'Milestone artifacts created during frontier planning may keep tasks=[] temporarily. The later dependency pass must replace that with bounded implementation/integration execution tasks before validation.'
+        : null,
+    ].filter(Boolean).join('\n\n');
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
     return [
       'You are Ariad\'s Tech Lead dependency pass.',
-      'Inspect the existing planner artifacts and reconcile execution dependencies in place. Do not emit a monolithic plan.',
+      'Inspect the completed top-down feature and milestone boundary contracts, then create/reconcile bounded execution tasks and dependencies in place. Do not emit a monolithic plan.',
+      'Leaf implementation scopes should own implementation plus local/unit/component correctness. Parent feature and milestone scopes should own integration/E2E verification derived from their integrationScenarios.',
+      'Tester is allowed and expected to author/update cross-feature, milestone-integration, UI-journey, contract, and E2E tests. Developer should not absorb those higher-level integration responsibilities.',
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
@@ -622,6 +649,46 @@ export function createDefaultV2Roles({
       },
       transition: ({ task, result }) => {
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
+            const nodeType = task.input?.frontierPhase ?? 'feature';
+            const pass = finishFrontierPass(artifactRoot, nodeType);
+            if (pass.next) {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: nodeType,
+                },
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType,
+                  nodeId: pass.targetNodeId,
+                  disposition: pass.targetDisposition,
+                  childIds: pass.childIds,
+                  nextNodeId: pass.next.node?.id ?? null,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            if (nodeType === 'feature') {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: 'milestone',
+                },
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_PHASE_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType: 'feature',
+                  nextPhase: 'milestone',
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            return { state: 'DONE' };
+          }
           return task.scope === 'control'
             ? { state: 'DONE' }
             : { stage: 'developer', state: 'WAITING_REPLAN' };
@@ -670,6 +737,8 @@ export function createDefaultV2Roles({
           if (rawArtifactPlan) {
             try {
               const validated = validatePlannerArtifactPlan(rawArtifactPlan);
+              validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+              validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
