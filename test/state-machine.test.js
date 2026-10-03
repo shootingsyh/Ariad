@@ -37,6 +37,20 @@ test('project state is derived by ordered declarative rules', () => {
     'FAILED',
   );
   assert.equal(
+    deriveProjectExecutionState({
+      tasks: [
+        { ...delivery('SYSTEM_BLOCKED'), id: 'blocked' },
+        {
+          scope: 'control',
+          stage: 'project_debugger',
+          state: 'WORKING',
+          input: { blockedTaskId: 'blocked' },
+        },
+      ],
+    }),
+    'RUNNING',
+  );
+  assert.equal(
     deriveProjectExecutionState({ tasks: [delivery('NEEDS_HUMAN')] }),
     'NEEDS_HUMAN',
   );
