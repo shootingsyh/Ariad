@@ -276,7 +276,13 @@ test('milestone may consume exported feature interfaces but not feature internal
     );
 
     const bad = JSON.parse(fs.readFileSync(path.join(layout.milestoneDir, 'M0.json'), 'utf8'));
-    bad.featureUses[0].interfaceId = 'not-exported';
+    bad.featureUses = [{
+      featureId: 'project',
+      interfaceId: 'not-exported',
+      purpose: 'Bad reference for validation.',
+    }];
+    bad.integrationScenarios = [];
+
     writeJson(path.join(layout.milestoneDir, 'M0.json'), bad);
     assert.throws(
       () => validateBoundaryContracts(root, 'milestone', { allowFrontier: false }),
