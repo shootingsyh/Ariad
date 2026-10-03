@@ -11,6 +11,7 @@ import {
   finishFrontierPass,
   frontierArtifactInstructions,
   validateBoundaryContracts,
+  validateTaskOwnershipCompilation,
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import {
@@ -268,7 +269,10 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   if (purpose === 'PLANNER_DEPENDENCIES') {
     return [
       'You are Ariad\'s Tech Lead dependency pass.',
-      'Inspect the completed top-down feature and milestone boundary contracts, then create/reconcile bounded execution tasks and dependencies in place. Do not emit a monolithic plan.',
+      'Inspect the completed top-down feature and milestone boundary contracts, then COMPILE their task ownership into bounded execution tasks and dependencies in place. Do not emit a monolithic plan.',
+      'Feature featureTasks are canonical base tasks: preserve their title, intent, acceptanceCriteria, testStrategy, and feature ownership exactly.',
+      'Milestone taskLinks may only add dependencies and verification to linked feature tasks. Never replace or weaken the feature task definition.',
+      'Milestone integrationTasks are new milestone-owned tasks for contract/integration/UI-journey/E2E verification.',
       'Leaf implementation scopes should own implementation plus local/unit/component correctness. Parent feature and milestone scopes should own integration/E2E verification derived from their integrationScenarios.',
       'Tester is allowed and expected to author/update cross-feature, milestone-integration, UI-journey, contract, and E2E tests. Developer should not absorb those higher-level integration responsibilities.',
       'Logical parentage is semantic only and never creates an execution dependency.',
@@ -739,6 +743,7 @@ export function createDefaultV2Roles({
               const validated = validatePlannerArtifactPlan(rawArtifactPlan);
               validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
               validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+              validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
