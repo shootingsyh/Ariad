@@ -19,7 +19,7 @@ import { FileReconcileWake } from '../../../src/v2/file-reconcile-wake.js';
 import { restartOrphanEvidence } from '../../../src/v2/restart-orphan-recovery.js';
 import { legacyHumanGateTarget } from '../../../src/v2/legacy-human-gate-recovery.js';
 import { buildDurableRuntimeStatus } from '../../../src/v2/durable-runtime-status.js';
-import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates, repairLegacyRecoveredTakeoverDeliveryGate } from '../../../src/v2/takeover-gate.js';
+import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../../../src/v2/takeover-gate.js';
 
 type ProjectManager = {
   list(): any[];
@@ -118,7 +118,6 @@ class ProjectRuntime {
     }
 
     ensureTakeoverReviewState(this.store, project.id);
-    repairLegacyRecoveredTakeoverDeliveryGate(this.store, project.id);
 
     const providers = new ProviderRegistry();
     providers.register(provider);
@@ -1103,17 +1102,11 @@ export class AriadV2Service {
           try {
             ensureTakeoverReviewState(migrationStore, project.id);
             const recovered = recoverObsoleteTakeoverHumanGates(migrationStore, project.id);
-            const repairedGate = repairLegacyRecoveredTakeoverDeliveryGate(migrationStore, project.id);
             if (recovered.length > 0) {
               this.manager.setExecutionState(project.id, 'IDLE');
               project = this.manager.status(project.id);
               this.logger?.info?.(
                 `Ariad recovered obsolete repeated TAKEOVER gate(s) for ${project.id}: ${recovered.join(', ')}`
-              );
-            } else if (repairedGate.repaired) {
-              project = this.manager.status(project.id);
-              this.logger?.info?.(
-                `Ariad restored durable delivery gate for ${project.id}: enabled=${repairedGate.deliveryEnabled}`
               );
             }
           } finally {
