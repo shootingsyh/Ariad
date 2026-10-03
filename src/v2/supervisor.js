@@ -78,6 +78,7 @@ export class V2Supervisor {
           projectVersion: execution?.projectVersion ?? null,
           consumeAttempt: false,
           uncertainStart: Boolean(task.execution?.attemptId),
+          executionContext: structuredClone(status?.executionContext ?? null),
           at: incident.at,
         }, {
           ...applyTaskEvent(
@@ -134,6 +135,7 @@ export class V2Supervisor {
             provenance: structuredClone(execution?.provenance ?? null),
             protocolVersion: execution.protocolVersion ?? 'role-result-v2',
             projectVersion: execution?.projectVersion ?? null,
+            executionContext: structuredClone(status.executionContext ?? null),
             completedAt: new Date().toISOString(),
           }, applyTaskEvent(current, 'COMPLETE', {
             execution: null,
@@ -226,6 +228,7 @@ export class V2Supervisor {
         protocolVersion: execution?.protocolVersion ?? null,
         projectVersion: execution?.projectVersion ?? null,
         consumeAttempt,
+        executionContext: structuredClone(status?.executionContext ?? null),
         ...(status?.restartOrphan === true ? { restartOrphan: true } : {}),
         at: incident.at,
       }, applyTaskEvent(
