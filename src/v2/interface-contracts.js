@@ -340,3 +340,42 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     'Do not bind these contracts to concrete source files yet. Code indexing comes later.',
   ].join('\n');
 }
+
+
+export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null) {
+  const validated = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: true });
+  const tree = loadPlannerHierarchy(artifactRoot, nodeType);
+  const contracts = loadBoundaryContracts(artifactRoot, nodeType);
+
+  const target = targetNodeId == null ? tree.root : tree.byId.get(targetNodeId);
+  if (!target) {
+    fail(`${nodeType}: frontier pass did not create expected target ${targetNodeId ?? 'root'}`);
+  }
+  const contract = contracts.get(target.id);
+  if (!contract) fail(`${nodeType}:${target.id}: missing target contract after frontier pass`);
+
+  const children = tree.childrenById.get(target.id) ?? [];
+  if (contract.decomposition.kind === 'leaf') {
+    if (children.length > 0) fail(`${nodeType}:${target.id}: leaf frontier pass created children`);
+  } else {
+    if (children.length === 0) fail(`${nodeType}:${target.id}: expand frontier pass must create direct children`);
+    for (const childId of children) {
+      const child = tree.byId.get(childId);
+      const childContract = contracts.get(childId);
+      if (!childContract) fail(`${nodeType}:${childId}: new direct child requires boundary contract`);
+      const grandchildren = tree.childrenById.get(childId) ?? [];
+      if (grandchildren.length > 0) {
+        fail(`${nodeType}:${target.id}: one-layer frontier pass illegally created grandchild under ${childId}`);
+      }
+      if (child.parentId !== target.id) fail(`${nodeType}:${childId}: child parent mismatch`);
+    }
+  }
+
+  return {
+    ...validated,
+    targetNodeId: target.id,
+    targetDisposition: contract.decomposition.kind,
+    childIds: [...children],
+    next: nextBoundaryFrontier(artifactRoot, nodeType),
+  };
+}
