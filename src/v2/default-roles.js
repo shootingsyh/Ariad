@@ -6,6 +6,7 @@ import { artCapabilityRecommendations, requiredArtCapabilities } from './art-cap
 import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
+import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -344,6 +345,7 @@ export function createDefaultV2Roles({
           art: task.art ?? task.input?.art ?? null,
           history: task.history ?? [],
         },
+        executionHandoff: deriveExecutionHandoff(task.history ?? []),
         devCycle: 1 + failureCount(task),
         strategyEpoch: strategyEpoch(task),
       },
