@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  PROJECT_CONTROL_MACHINE,
   TASK_MACHINE,
   applyTaskEvent,
   deriveProjectExecutionState,
@@ -61,5 +62,17 @@ test('project state is derived by ordered declarative rules', () => {
   assert.equal(
     deriveProjectExecutionState({ tasks: [], hasPlanning: true }),
     'PLANNING',
+  );
+});
+
+
+test('project control lifecycle is declared rather than hard-coded in service methods', () => {
+  assert.equal(PROJECT_CONTROL_MACHINE.resolve('STOPPED', 'START'), 'RUNNING');
+  assert.equal(PROJECT_CONTROL_MACHINE.resolve('RUNNING', 'PAUSE'), 'PAUSED');
+  assert.equal(PROJECT_CONTROL_MACHINE.resolve('PAUSED', 'RESUME'), 'RUNNING');
+  assert.equal(PROJECT_CONTROL_MACHINE.resolve('RUNNING', 'STOP'), 'STOPPED');
+  assert.throws(
+    () => PROJECT_CONTROL_MACHINE.resolve('STOPPED', 'PAUSE'),
+    /invalid transition/,
   );
 });
