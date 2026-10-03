@@ -546,3 +546,13 @@ export function validateTaskOwnershipCompilation(artifactRoot, executionTasks) {
 
   return { ok: true };
 }
+
+
+export function hasBoundaryContracts(artifactRoot, nodeType = null) {
+  const { featureDir, milestoneDir } = ensureInterfaceArtifactLayout(artifactRoot);
+  const hasJson = dir => readdirSync(dir, { withFileTypes: true })
+    .some(entry => entry.isFile() && entry.name.endsWith('.json'));
+  if (nodeType === 'feature') return hasJson(featureDir);
+  if (nodeType === 'milestone') return hasJson(milestoneDir);
+  return hasJson(featureDir) || hasJson(milestoneDir);
+}
