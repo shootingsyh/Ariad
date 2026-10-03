@@ -106,8 +106,6 @@ export class PydanticRuntimeClient {
 }
 
 export class PydanticV2Provider {
-  readonlyId = 'pydantic-v2';
-
   constructor(runtime = new PydanticRuntimeClient(), {
     resolveModelRef,
     resolveModelConfig = defaultModelConfig,
