@@ -109,6 +109,7 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
 
     model_config = dict(params.get("modelConfig") or {})
     model_config["_debugState"] = state
+    state["phase"] = "build-model"
     model = build_model(model_config)
     role = str(params.get("role") or "role")
     prompt = str(params.get("prompt") or "")
@@ -117,7 +118,9 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
         "Use tools as needed. When the work is complete, return the required structured RoleResult. "
         "Do not invent files, commands, tests, or evidence."
     )
+    state["phase"] = "construct-agent"
     agent = Agent(model, instructions=instructions, output_type=RoleResult)
+    state["phase"] = "register-tools"
 
     def touch() -> None:
         state["lastActivityAt"] = time.monotonic()
@@ -164,8 +167,14 @@ async def execute_run(external_id: str, params: dict[str, Any]) -> None:
             "stderr": completed.stderr[-20000:],
         })
 
+    state["phase"] = "before-run"
     try:
-        result = await agent.run(prompt, usage_limits=UsageLimits(request_limit=8))
+        run_coro = agent.run(prompt, usage_limits=UsageLimits(request_limit=8))
+        if model_config.get("kind") == "test":
+            result = await asyncio.wait_for(run_coro, timeout=2.0)
+        else:
+            result = await run_coro
+        state["phase"] = "after-run"
         output = result.output
         if not isinstance(output, RoleResult):
             output = RoleResult.model_validate(output)
@@ -204,7 +213,7 @@ async def handle(method: str, params: dict[str, Any]) -> Any:
             "state": state["state"],
             "debug": {
                 key: state.get(key)
-                for key in ("modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction")
+                for key in ("phase", "modelCalls", "functionTools", "outputTools", "messageCount", "lastModelAction")
                 if key in state
             },
         }
