@@ -223,3 +223,54 @@ test('milestone frontier uses the same top-down contract discipline', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('milestone may consume exported feature interfaces but not feature internals or unknown interfaces', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-feature-use-'));
+  try {
+    feature(root, 'project', null);
+    contract(root, 'feature', 'project', {
+      decomposition: 'leaf',
+      exports: ['new-game'],
+    });
+
+    milestone(root, 'M0', null);
+    const layout = ensureInterfaceArtifactLayout(root);
+    writeJson(path.join(layout.milestoneDir, 'M0.json'), {
+      version: 1,
+      nodeId: 'M0',
+      nodeType: 'milestone',
+      decomposition: { kind: 'leaf', reason: 'single integration boundary' },
+      interfaces: [{
+        id: 'm0-journey',
+        type: 'journey',
+        visibility: 'exported',
+        contract: 'Player can start the supported journey.',
+      }],
+      imports: [],
+      featureUses: [{
+        featureId: 'project',
+        interfaceId: 'new-game',
+        purpose: 'Start from the product entry contract.',
+      }],
+      integrationScenarios: [],
+      taskLinks: [],
+      integrationTasks: [],
+    });
+
+    assert.equal(
+      validateBoundaryContracts(root, 'milestone', { allowFrontier: false }).ok,
+      true,
+    );
+
+    const bad = JSON.parse(fs.readFileSync(path.join(layout.milestoneDir, 'M0.json'), 'utf8'));
+    bad.featureUses[0].interfaceId = 'not-exported';
+    writeJson(path.join(layout.milestoneDir, 'M0.json'), bad);
+    assert.throws(
+      () => validateBoundaryContracts(root, 'milestone', { allowFrontier: false }),
+      /feature interface project\/not-exported is not exported/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
