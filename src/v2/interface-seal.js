@@ -135,7 +135,7 @@ async function validateAnchor({ workspace, codeIntelligence, anchor, observedCom
       };
     }
   } else {
-    const lines = readFileSync(absolute, 'utf8').split(/\\r?\\n/);
+    const lines = readFileSync(absolute, 'utf8').split(/\r?\n/);
     if (!Number.isInteger(anchor.startLine) || !Number.isInteger(anchor.endLine)
       || anchor.startLine < 1 || anchor.endLine < anchor.startLine || anchor.endLine > lines.length) {
       return {
@@ -164,7 +164,7 @@ function writeContract(artifactRoot, featureId, contract) {
   const { featureDir } = ensureInterfaceArtifactLayout(artifactRoot);
   const file = join(featureDir, `${featureId}.json`);
   const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(contract, null, 2) + '\\n');
+  writeFileSync(tmp, JSON.stringify(contract, null, 2) + '\n');
   renameSync(tmp, file);
 }
 
