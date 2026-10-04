@@ -74,7 +74,7 @@ test('planner flow keeps one iterative decompose task before dependency planning
 });
 
 
-test('version migration planning handles one frontier before critic and repair', () => {
+test('version migration planning gives one frontier up to three critic rounds before debugger', () => {
   const tasks = plannerFlowTasks('batch-migrate', [{
     request: { purpose: 'VERSION_MIGRATION', frontierPhase: 'feature' },
   }]);
@@ -87,16 +87,34 @@ test('version migration planning handles one frontier before critic and repair',
       'PLANNER_FRONTIER_CRITIC',
       'PLANNER_FRONTIER_REPAIR',
       'PLANNER_FRONTIER_VALIDATE',
+      'PLANNER_FRONTIER_CRITIC',
+      'PLANNER_FRONTIER_REPAIR',
+      'PLANNER_FRONTIER_VALIDATE',
+      'PLANNER_FRONTIER_CRITIC',
+      'PLANNER_FRONTIER_DEBUG',
       'PLANNER_FRONTIER_FINALIZE',
     ],
   );
   assert.equal(tasks[0].input.singleFrontier, true);
   assert.equal(tasks[0].input.frontierPhase, 'feature');
-  assert.deepEqual(tasks[1].dependsOn, [tasks[0].id]);
-  assert.deepEqual(tasks[2].dependsOn, [tasks[1].id]);
-  assert.deepEqual(tasks[3].dependsOn, [tasks[2].id]);
-  assert.deepEqual(tasks[4].dependsOn, [tasks[3].id]);
-  assert.deepEqual(tasks[5].dependsOn, [tasks[2].id, tasks[4].id]);
+  assert.deepEqual(
+    tasks.filter(task => task.input?.purpose === 'PLANNER_FRONTIER_CRITIC').map(task => task.input.round),
+    [1, 2, 3],
+  );
+  assert.deepEqual(
+    tasks.filter(task => task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE').map(task => task.input.round),
+    [1, 2, 3],
+  );
+  assert.equal(tasks.find(task => task.input?.purpose === 'PLANNER_FRONTIER_DEBUG').stage, 'project_debugger');
+  assert.deepEqual(
+    tasks.at(-1).dependsOn,
+    [
+      'planner:batch-migrate:frontier-critic-1',
+      'planner:batch-migrate:frontier-critic-2',
+      'planner:batch-migrate:frontier-critic-3',
+      'planner:batch-migrate:frontier-debugger',
+    ],
+  );
 });
 
 test('version migration finalization compiles the frozen tree before PM review', () => {
