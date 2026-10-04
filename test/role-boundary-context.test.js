@@ -68,6 +68,7 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     contract(root, 'feature', 'entry', {
       interfaces: [
         { id: 'new-game', type: 'ui', visibility: 'exported', contract: 'Title New Game starts a clean run.' },
+        { id: 'continue-game', type: 'ui', visibility: 'exported', contract: 'Continue restores the existing save.' },
         { id: 'load-save-internal', type: 'service', visibility: 'internal', contract: 'Internal load helper.' },
       ],
       bindings: [
@@ -155,8 +156,16 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     });
     assert.deepEqual(tester.milestones.map(x => x.id), ['V2.1']);
     assert.deepEqual(tester.featureInterfaces.map(x => x.id).sort(), ['entry', 'progression']);
+    assert.deepEqual(
+      tester.featureInterfaces.find(x => x.id === 'entry').interfaces.map(x => x.id),
+      ['new-game'],
+    );
     assert.equal(
       tester.featureInterfaces.find(x => x.id === 'entry').interfaces.some(x => x.id === 'load-save-internal'),
+      false,
+    );
+    assert.equal(
+      tester.featureInterfaces.find(x => x.id === 'entry').interfaces.some(x => x.id === 'continue-game'),
       false,
     );
     assert.equal(JSON.stringify(tester).includes('load-save-internal'), false);
