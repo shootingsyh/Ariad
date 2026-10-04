@@ -21,6 +21,7 @@ import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { sealDeveloperInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
+import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
 import {
   beginRevisionPass,
   finishRevisionPass,
@@ -1340,6 +1341,12 @@ export function createDefaultV2Roles({
             ? validatePlannerArtifactPlan(rawArtifactPlan)
             : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
           store.applyDeliveryPlan(task.projectId, validated.plan);
+          const migrationReconciliation = reconcileMigratedDeliveryTasks({
+            store,
+            projectId: task.projectId,
+            artifactRoot,
+            workspace,
+          });
           completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
@@ -1373,6 +1380,7 @@ export function createDefaultV2Roles({
               role: 'pm',
               enabled: result.result?.startDelivery === true,
               reason: result.result?.reason ?? null,
+              migrationReconciliation,
               at: new Date().toISOString(),
             },
           };
