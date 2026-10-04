@@ -68,7 +68,7 @@ test('static GDScript interface seal resolves exact function range and fails aft
       },
     });
     assert.equal(broken.ok, false);
-    assert.equal(broken.failures[0].reason, 'SYMBOL_NOT_FOUND');
+    assert.equal(broken.failures[0].reason, 'SYMBOL_UNRESOLVED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
