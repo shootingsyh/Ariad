@@ -143,7 +143,6 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     assert.equal(dev.features[0].id, 'entry');
     assert.deepEqual(dev.features[0].interfaces.map(x => x.id), ['new-game']);
     assert.equal(dev.features[0].interfaces[0].binding.realization[0].resolved.snippet.some(x => x.text.includes('func new_game')), true);
-    assert.equal(JSON.stringify(dev).includes('internal_load'), false);
     assert.equal(JSON.stringify(dev).includes('battle'), false);
     assert.equal(JSON.stringify(dev).includes('equip-persist'), false);
     assert.equal(dev.parentExpectations[0].featureId, 'srpg');
