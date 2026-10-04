@@ -66,7 +66,7 @@ test('SRPG-style developer context stays on its feature boundary while tester se
 
     contract(root, 'feature', 'srpg', {
       decomposition: { kind: 'expand', reason: 'product capabilities' },
-      interfaces: [{ id: 'playable', type: 'journey', visibility: 'exported', contract: 'Product is playable.' }],
+      interfaces: [{ id: 'playable', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Product is playable.'], sideEffects: [] } }],
       imports: [
         { fromNodeId: 'entry', interfaceId: 'new-game', purpose: 'start product journey' },
         { fromNodeId: 'progression', interfaceId: 'equip-persist', purpose: 'persist player progression' },
@@ -74,9 +74,9 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     });
     contract(root, 'feature', 'entry', {
       interfaces: [
-        { id: 'new-game', type: 'ui', visibility: 'exported', contract: 'Title New Game starts a clean run.' },
-        { id: 'continue-game', type: 'ui', visibility: 'exported', contract: 'Continue restores the existing save.' },
-        { id: 'load-save-internal', type: 'service', visibility: 'internal', contract: 'Internal load helper.' },
+        { id: 'new-game', kind: 'provider', visibility: 'exported', contract: { input: [], produces: { thing: 'interactive surface', input: [], output: [], sideEffects: ['Title New Game starts a clean run.'] } } },
+        { id: 'continue-game', kind: 'provider', visibility: 'exported', contract: { input: [], produces: { thing: 'interactive surface', input: [], output: [], sideEffects: ['Continue restores the existing save.'] } } },
+        { id: 'load-save-internal', kind: 'executor', visibility: 'internal', contract: { input: [], output: ['Internal load helper.'], sideEffects: [] } },
       ],
       bindings: [
         {
@@ -101,7 +101,7 @@ test('SRPG-style developer context stays on its feature boundary while tester se
       }],
     });
     contract(root, 'feature', 'progression', {
-      interfaces: [{ id: 'equip-persist', type: 'journey', visibility: 'exported', contract: 'Equipment survives save/continue.' }],
+      interfaces: [{ id: 'equip-persist', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Equipment survives save/continue.'], sideEffects: [] } }],
       bindings: [{
         interfaceId: 'equip-persist',
         realizationAnchors: [{ kind: 'symbol', file: 'scripts/progression.gd', symbol: 'equip_persist', status: 'VALID' }],
@@ -109,18 +109,18 @@ test('SRPG-style developer context stays on its feature boundary while tester se
       }],
     });
     contract(root, 'feature', 'battle', {
-      interfaces: [{ id: 'win', type: 'event', visibility: 'exported', contract: 'Battle produces a real WIN.' }],
+      interfaces: [{ id: 'win', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Battle produces a real WIN.'], sideEffects: [] } }],
     });
 
     milestoneNode(root, 'V2', null, 'V2');
     milestoneNode(root, 'V2.1', 'V2', 'Entry/progression');
     contract(root, 'milestone', 'V2', {
       decomposition: { kind: 'expand', reason: 'delivery phases' },
-      interfaces: [{ id: 'release-journey', type: 'journey', visibility: 'exported', contract: 'Release journey.' }],
+      interfaces: [{ id: 'release-journey', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Release journey.'], sideEffects: [] } }],
       imports: [{ fromNodeId: 'V2.1', interfaceId: 'v2-1-journey', purpose: 'entry/progression checkpoint' }],
     });
     contract(root, 'milestone', 'V2.1', {
-      interfaces: [{ id: 'v2-1-journey', type: 'journey', visibility: 'exported', contract: 'New game through save/continue.' }],
+      interfaces: [{ id: 'v2-1-journey', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['New game through save/continue.'], sideEffects: [] } }],
       featureUses: [
         { featureId: 'entry', interfaceId: 'new-game', purpose: 'start from real UI' },
         { featureId: 'progression', interfaceId: 'equip-persist', purpose: 'verify persistence' },
