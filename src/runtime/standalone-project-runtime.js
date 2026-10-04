@@ -28,6 +28,7 @@ export class StandaloneProjectRuntime {
     executionCapabilities = [],
     executionProvenance = {},
     incidentSink = null,
+    codeIntelligence = null,
   }) {
     if (!project?.id || !project?.workspace || !project?.stateDb) {
       throw new Error('StandaloneProjectRuntime requires project id, workspace, and stateDb');
@@ -79,6 +80,7 @@ export class StandaloneProjectRuntime {
       artifactRoot: this.artifactRoot,
       executionCapabilities,
       executionProvenance,
+      codeIntelligence,
       resolveRoleExecutionMetadata: role => ({
         modelRef: this.resolveRoleModel(role) ?? null,
       }),
