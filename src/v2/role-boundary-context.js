@@ -2,6 +2,7 @@ import {
   loadBoundaryContracts,
   loadPlannerHierarchy,
 } from './interface-contracts.js';
+import { resolveAnchorStatically } from '../runtime/code-intelligence/interface-seal.js';
 
 function exported(contract) {
   return (contract?.interfaces ?? []).filter(entry => entry.visibility === 'exported');
@@ -36,21 +37,54 @@ function milestoneFeatureUses(featureIds, milestoneContracts) {
   return uses;
 }
 
-function compactFeature(featureId, tree, contracts, { includeInternals = false } = {}) {
+function boundInterface(contract, iface, workspace) {
+  const binding = (contract.bindings ?? []).find(item => item.interfaceId === iface.id) ?? null;
+  const materialize = anchors => (anchors ?? []).map(anchor => {
+    if (!workspace) return { anchor: structuredClone(anchor), resolved: null };
+    const resolved = resolveAnchorStatically({ workspace, anchor });
+    return {
+      anchor: structuredClone(anchor),
+      resolved: resolved.ok ? {
+        fileHash: resolved.fileHash,
+        range: resolved.range,
+        snippet: resolved.snippet,
+        resolver: 'static-preload',
+      } : {
+        error: resolved.reason,
+      },
+    };
+  });
+  return {
+    ...structuredClone(iface),
+    binding: binding ? {
+      realization: materialize(binding.realizationAnchors),
+      verification: materialize(binding.verificationAnchors),
+    } : null,
+  };
+}
+
+function compactFeature(featureId, tree, contracts, {
+  includeInternals = false,
+  interfaceIds = null,
+  workspace = null,
+} = {}) {
   const node = tree.byId.get(featureId);
   const contract = contracts.get(featureId);
   if (!node || !contract) return null;
+  const selected = interfaceIds?.length
+    ? (contract.interfaces ?? []).filter(entry => interfaceIds.includes(entry.id))
+    : (contract.interfaces ?? []);
+  const visible = includeInternals
+    ? selected
+    : selected.filter(entry => entry.visibility === 'exported');
   return {
     id: featureId,
     title: node.title ?? null,
     summary: node.summary ?? null,
     decomposition: structuredClone(contract.decomposition),
-    exports: structuredClone(exported(contract)),
+    interfaces: visible.map(iface => boundInterface(contract, iface, workspace)),
     ...(includeInternals ? {
       imports: structuredClone(contract.imports ?? []),
-      internalInterfaces: structuredClone(
-        (contract.interfaces ?? []).filter(entry => entry.visibility === 'internal')
-      ),
       localIntegrationScenarios: structuredClone(contract.integrationScenarios ?? []),
     } : {}),
   };
@@ -73,7 +107,7 @@ function compactMilestone(milestoneId, tree, contracts) {
   };
 }
 
-export function buildRoleBoundaryContext({ artifactRoot, task, role }) {
+export function buildRoleBoundaryContext({ artifactRoot, task, role, workspace = null }) {
   if (!artifactRoot) return null;
 
   let featureTree;
@@ -103,8 +137,13 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role }) {
   ].filter(id => id && milestoneContracts.has(id)))];
 
   if (role === 'developer') {
+    const requestedInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
     const features = featureIds
-      .map(id => compactFeature(id, featureTree, featureContracts, { includeInternals: true }))
+      .map(id => compactFeature(id, featureTree, featureContracts, {
+        includeInternals: true,
+        interfaceIds: requestedInterfaceIds,
+        workspace,
+      }))
       .filter(Boolean);
     return {
       role: 'developer',
@@ -128,7 +167,10 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role }) {
       principle: 'Author and execute integration/contract/UI-journey/E2E verification from declared interfaces. Drill into implementation only when an interface fails.',
       milestones,
       featureInterfaces: [...directlyUsedFeatureIds]
-        .map(id => compactFeature(id, featureTree, featureContracts, { includeInternals: false }))
+        .map(id => compactFeature(id, featureTree, featureContracts, {
+          includeInternals: false,
+          workspace,
+        }))
         .filter(Boolean),
     };
   }
@@ -142,7 +184,10 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role }) {
       principle: 'Review contract satisfaction and fresh evidence. Do not redo repository-wide discovery; drill down only to validate disputed evidence.',
       milestones,
       featureInterfaces: featureIds
-        .map(id => compactFeature(id, featureTree, featureContracts, { includeInternals: false }))
+        .map(id => compactFeature(id, featureTree, featureContracts, {
+          includeInternals: false,
+          workspace,
+        }))
         .filter(Boolean),
     };
   }
