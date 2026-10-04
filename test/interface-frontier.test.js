@@ -62,6 +62,68 @@ function contract(root, nodeType, nodeId, {
   });
 }
 
+
+test('interface schema accepts executor/provider primitives and rejects legacy interface types', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-interface-primitives-'));
+  try {
+    feature(root, 'project', null);
+    const layout = ensureInterfaceArtifactLayout(root);
+    writeJson(path.join(layout.featureDir, 'project.json'), {
+      version: 1,
+      nodeId: 'project',
+      nodeType: 'feature',
+      decomposition: { kind: 'leaf', reason: 'bounded primitive schema test' },
+      interfaces: [
+        {
+          id: 'run',
+          kind: 'executor',
+          visibility: 'exported',
+          contract: {
+            input: 'request',
+            output: ['result'],
+            sideEffects: [],
+          },
+        },
+        {
+          id: 'surface',
+          kind: 'provider',
+          visibility: 'exported',
+          contract: {
+            input: ['view state'],
+            produces: {
+              thing: 'interactive surface',
+              input: ['select'],
+              output: ['selection intent'],
+              sideEffects: ['updates visible selection'],
+            },
+          },
+        },
+      ],
+      imports: [],
+      integrationScenarios: [],
+      bindings: [],
+      featureTasks: [],
+    });
+
+    assert.equal(validateBoundaryContracts(root, 'feature', { allowFrontier: false }).ok, true);
+
+    const raw = JSON.parse(fs.readFileSync(path.join(layout.featureDir, 'project.json'), 'utf8'));
+    raw.interfaces[0] = {
+      id: 'run',
+      type: 'service',
+      visibility: 'exported',
+      contract: 'legacy contract',
+    };
+    writeJson(path.join(layout.featureDir, 'project.json'), raw);
+    assert.throws(
+      () => validateBoundaryContracts(root, 'feature', { allowFrontier: false }),
+      /unexpected|executor\|provider/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('planner flow keeps one iterative decompose task before dependency planning', () => {
   const tasks = plannerFlowTasks('batch-1', []);
   const decompose = tasks.find(task => task.input?.purpose === 'PLANNER_DECOMPOSE');
