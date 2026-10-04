@@ -30,34 +30,34 @@ function headCommit(workspace) {
 }
 
 function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function localResolveSymbol(workspace, anchor) {
   const absolute = resolve(workspace, anchor.file);
   if (!existsSync(absolute)) return null;
-  const lines = readFileSync(absolute, 'utf8').split(/\\r?\\n/);
+  const lines = readFileSync(absolute, 'utf8').split(/\r?\n/);
   const leaf = String(anchor.symbol ?? '').split('.').at(-1);
   if (!leaf) return null;
 
   const patterns = [
-    new RegExp(`^\\\\s*func\\\\s+${escapeRegExp(leaf)}\\\\s*\\\\(`),
-    new RegExp(`^\\\\s*(?:class|class_name)\\\\s+${escapeRegExp(leaf)}\\\\b`),
-    new RegExp(`^\\\\s*(?:const|var|let)\\\\s+${escapeRegExp(leaf)}\\\\b`),
+    new RegExp(`^\\s*func\\s+${escapeRegExp(leaf)}\\s*\\(`),
+    new RegExp(`^\\s*(?:class|class_name)\\s+${escapeRegExp(leaf)}\\b`),
+    new RegExp(`^\\s*(?:const|var|let)\\s+${escapeRegExp(leaf)}\\b`),
   ];
   const index = lines.findIndex(line => patterns.some(pattern => pattern.test(line)));
   if (index < 0) return null;
 
   let end = index;
-  const indent = lines[index].match(/^\\s*/)?.[0]?.length ?? 0;
+  const indent = lines[index].match(/^\s*/)?.[0]?.length ?? 0;
   for (let i = index + 1; i < lines.length; i += 1) {
     const line = lines[i];
     if (!line.trim()) {
       end = i;
       continue;
     }
-    const nextIndent = line.match(/^\\s*/)?.[0]?.length ?? 0;
-    if (nextIndent <= indent && /^\\s*(func|class|class_name|const|var|let)\\b/.test(line)) break;
+    const nextIndent = line.match(/^\s*/)?.[0]?.length ?? 0;
+    if (nextIndent <= indent && /^\s*(func|class|class_name|const|var|let)\b/.test(line)) break;
     end = i;
   }
 
