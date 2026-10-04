@@ -134,7 +134,7 @@ function normalizeContract(raw, expectedNodeType) {
   const interfaceIds = new Set();
   const interfaces = raw.interfaces.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(`${raw.nodeId}.interfaces[${index}] invalid`);
-    const keys = new Set(['id', 'type', 'visibility', 'contract']);
+    const keys = new Set(['id', 'type', 'visibility', 'contract', 'realization', 'verification']);
     for (const key of Object.keys(entry)) if (!keys.has(key)) fail(`${raw.nodeId}.interfaces[${index}].${key} unexpected`);
     if (typeof entry.id !== 'string' || !entry.id) fail(`${raw.nodeId}.interfaces[${index}].id required`);
     if (interfaceIds.has(entry.id)) fail(`${raw.nodeId}: duplicate interface ${entry.id}`);
@@ -142,7 +142,39 @@ function normalizeContract(raw, expectedNodeType) {
     if (!INTERFACE_TYPES.has(entry.type)) fail(`${raw.nodeId}.${entry.id}: invalid type ${entry.type}`);
     if (!VISIBILITIES.has(entry.visibility)) fail(`${raw.nodeId}.${entry.id}: invalid visibility ${entry.visibility}`);
     if (typeof entry.contract !== 'string' || !entry.contract.trim()) fail(`${raw.nodeId}.${entry.id}: contract required`);
-    return structuredClone(entry);
+
+    const normalizeAnchor = (anchor, anchorPath) => {
+      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) fail(`${anchorPath}: must be object`);
+      const allowed = new Set(['kind', 'file', 'symbol', 'startLine', 'endLine', 'role', 'boundAtCommit', 'fileHash']);
+      for (const key of Object.keys(anchor)) if (!allowed.has(key)) fail(`${anchorPath}.${key}: unexpected property`);
+      if (!['symbol', 'range'].includes(anchor.kind)) fail(`${anchorPath}.kind: must be symbol|range`);
+      if (typeof anchor.file !== 'string' || !anchor.file.trim()) fail(`${anchorPath}.file: required`);
+      if (anchor.kind === 'symbol' && (typeof anchor.symbol !== 'string' || !anchor.symbol.trim())) {
+        fail(`${anchorPath}.symbol: required for symbol anchor`);
+      }
+      if (anchor.kind === 'range') {
+        if (!Number.isInteger(anchor.startLine) || anchor.startLine < 1) fail(`${anchorPath}.startLine: positive integer required`);
+        if (!Number.isInteger(anchor.endLine) || anchor.endLine < anchor.startLine) fail(`${anchorPath}.endLine: must be >= startLine`);
+      }
+      return structuredClone(anchor);
+    };
+
+    const realization = entry.realization ?? [];
+    const verification = entry.verification ?? [];
+    if (!Array.isArray(realization)) fail(`${raw.nodeId}.${entry.id}.realization: must be array`);
+    if (!Array.isArray(verification)) fail(`${raw.nodeId}.${entry.id}.verification: must be array`);
+    return {
+      id: entry.id,
+      type: entry.type,
+      visibility: entry.visibility,
+      contract: entry.contract,
+      realization: realization.map((anchor, anchorIndex) =>
+        normalizeAnchor(anchor, `${raw.nodeId}.${entry.id}.realization[${anchorIndex}]`)
+      ),
+      verification: verification.map((anchor, anchorIndex) =>
+        normalizeAnchor(anchor, `${raw.nodeId}.${entry.id}.verification[${anchorIndex}]`)
+      ),
+    };
   });
 
   const imports = raw.imports.map((entry, index) => {
@@ -259,7 +291,12 @@ export function loadBoundaryContracts(artifactRoot, nodeType) {
 function exportedInterfaces(contract) {
   return contract.interfaces
     .filter(entry => entry.visibility === 'exported')
-    .map(entry => structuredClone(entry));
+    .map(entry => ({
+      id: entry.id,
+      type: entry.type,
+      visibility: entry.visibility,
+      contract: entry.contract,
+    }));
 }
 
 function loadFrozenExports(artifactRoot) {
@@ -435,6 +472,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     `Boundary contracts: ${contractDir}`,
     'Every node present in the hierarchy must have one boundary contract.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
+    'Each interface may carry realization:[symbol|range anchors] and verification:[symbol|range anchors]. These bindings are implementation metadata and may change without changing the frozen semantic interface contract.',
     'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}] DURING the feature frontier pass. These are canonical implementation/local-test task definitions.',
     'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces. integrationScenarios.uses can then reference them as {graph:"feature",nodeId:featureId,interfaceId}.',
     'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
