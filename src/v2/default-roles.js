@@ -17,6 +17,7 @@ import {
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
+import { sealDeveloperInterfaces } from './interface-seal.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -335,6 +336,7 @@ export function createDefaultV2Roles({
   executionCapabilities = [],
   executionProvenance = {},
   resolveRoleExecutionMetadata = null,
+  codeIntelligence = null,
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
 
@@ -431,8 +433,51 @@ export function createDefaultV2Roles({
     },
 
     developer: {
-      prepare: ({ task }) => prepareLlm(task, DEVELOPER_REUSE_PROMPT),
+      prepare: ({ task }) => prepareLlm(task, [
+        DEVELOPER_REUSE_PROMPT,
+        '',
+        'INTERFACE REALIZATION',
+        'If this task owns interfaceIds, include result.interfaceRealizations when you create or relocate implementation anchors.',
+        'Shape: [{interfaceId, anchors:[{kind:"symbol"|"range",file,symbol?,startLine?,endLine?}]}].',
+        'This is a hint only: Ariad independently resolves and seals anchors before Tester is allowed to proceed.',
+      ].join('\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
+      async afterPersist({ task, result }) {
+        const seal = await sealDeveloperInterfaces({
+          artifactRoot,
+          workspace,
+          task,
+          result,
+          codeIntelligence,
+        });
+        if (!seal.required) return null;
+        if (!seal.ok) {
+          return {
+            patch: {
+              stage: 'developer',
+              state: 'READY',
+              execution: null,
+            },
+            transitionHistory: {
+              type: 'INTERFACE_SEAL_FAILED',
+              role: 'interface_seal',
+              featureId: seal.featureId ?? null,
+              failures: seal.failures ?? [],
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        return {
+          transitionHistory: {
+            type: 'INTERFACE_SEALED',
+            role: 'interface_seal',
+            featureId: seal.featureId,
+            sealed: seal.sealed,
+            observedCommit: seal.observedCommit ?? null,
+            at: new Date().toISOString(),
+          },
+        };
+      },
     },
 
     tester: {
