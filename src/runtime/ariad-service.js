@@ -9,6 +9,11 @@ import { requireCompleteRoleModels } from './role-models.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
 import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
 import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
+import { join } from 'node:path';
+import {
+  migratePlanningModelDatabase,
+  planningModelMigrationStatus,
+} from '../v2/version-migration.js';
 
 export class AriadService {
   constructor({
@@ -125,9 +130,13 @@ export class AriadService {
       const store = new SQLiteV2Store(project.stateDb);
       try {
         const tasks = store.listTasks(project.id);
+        const durableProject = store.getProject(project.id);
         return {
           ...project,
           runtime: 'standalone',
+          storageVersion: durableProject?.storageVersion ?? 1,
+          planningModelVersion: durableProject?.planningModelVersion ?? 1,
+          planningModelMigration: planningModelMigrationStatus(durableProject),
           tasks: {
             total: tasks.length,
             ready: tasks.filter(task => task.state === 'READY').length,
@@ -143,6 +152,20 @@ export class AriadService {
       }
     }
     return { ...project, runtime: 'standalone' };
+  }
+
+  async migratePlanningModel(name) {
+    await this.ensureStopped(name);
+    const project = this.manager.status(name);
+    const migration = migratePlanningModelDatabase({
+      stateDb: project.stateDb,
+      projectId: project.id,
+      artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
+    });
+    if (!migration) return { ...this.status(name), migration: null };
+    this.manager.setExecutionState(name, 'IDLE');
+    this.wake('planning-model-migration');
+    return { ...this.status(name), migration };
   }
 
   async ensureRunning(name) {
