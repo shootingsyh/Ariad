@@ -22,6 +22,12 @@ import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { sealDeveloperInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
 import {
+  beginRevisionPass,
+  finishRevisionPass,
+  nextRevisionFrontier,
+  revisionInstructions,
+} from './revision-traversal.js';
+import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
   applyFeatureTreeDiff,
@@ -171,6 +177,10 @@ function latestFrontierCompletion(store, task) {
     }
   }
   return null;
+}
+
+function migrationRevisionRoot(store, projectId) {
+  return store.getProject(projectId)?.planningModelMigration?.legacyRevisionRoot ?? null;
 }
 
 function migrationPlanningRequest(store, task) {
@@ -338,10 +348,24 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
 
   if (purpose === 'PLANNER_DECOMPOSE') {
     const nodeType = task.input?.frontierPhase ?? 'feature';
+    const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
+    const revision = revisionRoot && task.input?.sourceComplete !== true
+      ? beginRevisionPass(revisionRoot, nodeType)
+      : null;
     const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       frontierArtifactInstructions(artifactRoot, nodeType),
+      revision && !revision.complete ? [
+        'VERSION MIGRATION SOURCE FRONTIER',
+        'The archived tree is the authoritative traversal source for this round.',
+        'Write exactly one KEEP|AMEND|REMOVE|REFINE revision decision for the legacy node before completing this round.',
+        'During planning-model migration, KEEP and AMEND should normally keep visitChildren=true because every legacy descendant must receive a fresh interface contract under the new schema.',
+        'Use REFINE with visitChildren=false when the old descendants should be replaced by a newly decomposed subtree.',
+        'REMOVE skips materializing this legacy node in the new tree.',
+        revisionInstructions(revisionRoot, nodeType),
+        JSON.stringify({ legacyRevisionFrontier: revision }, null, 2),
+      ].join('\n\n') : null,
       nodeType === 'feature'
         ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition, boundary contracts, and the canonical implementation/local-test tasks owned by every node created or finalized in this round. Do not defer task intent to a later global pass.'
         : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition, feature interface uses, additive links to feature tasks, and milestone-owned integration/E2E tasks for every node created or finalized in this round. Do not defer integration test ownership to a later global pass.',
@@ -356,6 +380,7 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       JSON.stringify({
         frontierPhase: nodeType,
         frontier,
+        legacyRevisionFrontier: revision,
       }, null, 2),
       nodeType === 'milestone'
         ? 'Milestone artifacts may keep legacy tasks=[] as a compatibility view; canonical task ownership now lives in the milestone boundary contract (featureUses/taskLinks/integrationTasks).'
@@ -903,7 +928,30 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
           if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
+            const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
+            const revisionPass = revisionRoot && task.input?.sourceComplete !== true
+              ? finishRevisionPass(revisionRoot, nodeType)
+              : null;
+            if (revisionPass?.decision?.action === 'REMOVE') {
+              return {
+                state: 'DONE',
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType,
+                  nodeId: revisionPass.decision.nodeId,
+                  disposition: 'remove',
+                  childIds: [],
+                  nextNodeId: revisionPass.next?.node?.id ?? null,
+                  revisionDecision: revisionPass.decision,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
             const pass = finishFrontierPass(artifactRoot, nodeType);
+            if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
+              throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
+            }
             const frontierHistory = {
               type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
               role: 'tech_lead',
@@ -912,6 +960,7 @@ export function createDefaultV2Roles({
               disposition: pass.targetDisposition,
               childIds: pass.childIds,
               nextNodeId: pass.next?.node?.id ?? null,
+              revisionDecision: revisionPass?.decision ?? null,
               at: new Date().toISOString(),
             };
             if (task.input?.singleFrontier === true) {
@@ -1044,12 +1093,16 @@ export function createDefaultV2Roles({
           }
           if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
             const phase = task.input?.frontierPhase ?? 'feature';
+            const revisionRoot = migrationRevisionRoot(store, task.projectId);
+            const sourceNext = revisionRoot ? nextRevisionFrontier(revisionRoot, phase) : null;
             const next = nextBoundaryFrontier(artifactRoot, phase);
             return {
               outcome: 'PASS',
               result: {
                 phase,
-                complete: next == null,
+                sourceComplete: sourceNext == null,
+                sourceNext: sourceNext == null ? null : { nodeId: sourceNext.node?.id ?? null },
+                complete: sourceNext == null && next == null,
                 next: next == null ? null : {
                   bootstrap: next.bootstrap === true,
                   nodeId: next.node?.id ?? null,
@@ -1118,6 +1171,7 @@ export function createDefaultV2Roles({
               request: {
                 purpose: 'VERSION_MIGRATION',
                 frontierPhase: phase,
+                sourceComplete: result.result?.sourceComplete === true,
               },
             });
             return { state: 'DONE' };
