@@ -12,4 +12,4 @@
     "test:legacy": "node --test test/*.test.js",
     "test:pydantic-runtime": "node --test test/pydantic-v2-provider.test.js test/ariad-service.test.js test/mock-project-state-transitions.test.js test/state-machine.test.js test/role-run-prompt.test.js test/interface-frontier.test.js test/planner-task-ownership.test.js test/revision-traversal.test.js test/role-boundary-context.test.js test/interface-seal.test.js test/godot-lsp-provider.test.js test/developer-interface-seal.test.js test/srpg-interface-context-theory.test.js"
   }
-}\n
+}
