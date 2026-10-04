@@ -182,9 +182,7 @@ function plannerFrontierTransport(request) {
             decomposition: { kind: 'leaf', reason: 'The E2E fixture is one atomic product capability.' },
             interfaces: [{
               id: 'health-status',
-              type: 'service',
-              visibility: 'exported',
-              contract: 'Produce the deterministic health status fixture used by the product flow.',
+              kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Produce the deterministic health status fixture used by the product flow.'], sideEffects: [] },
             }],
             imports: [],
             integrationScenarios: [],
@@ -232,9 +230,7 @@ function plannerFrontierTransport(request) {
           decomposition: { kind: 'leaf', reason: 'One integrated checkpoint is sufficient for the E2E fixture.' },
           interfaces: [{
             id: 'health-project',
-            type: 'journey',
-            visibility: 'exported',
-            contract: 'The complete health product can be executed and verified end to end.',
+            kind: 'executor', visibility: 'exported', contract: { input: [], output: ['The complete health product can be executed and verified end to end.'], sideEffects: [] },
           }],
           imports: [],
           integrationScenarios: [{
