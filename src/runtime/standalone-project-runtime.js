@@ -14,10 +14,7 @@ import {
   CURRENT_PLANNING_MODEL_VERSION,
   CURRENT_STORAGE_VERSION,
 } from '../v2/schema-version.js';
-import {
-  beginPlanningModelMigration,
-  planningModelMigrationStatus,
-} from '../v2/version-migration.js';
+import { planningModelMigrationStatus } from '../v2/version-migration.js';
 
 /**
  * Standalone Ariad execution composition for one project.
@@ -122,14 +119,6 @@ export class StandaloneProjectRuntime {
       incidentSink,
     });
     this.supervisor.recover(project.id);
-  }
-
-  migratePlanningModel() {
-    return beginPlanningModelMigration({
-      store: this.store,
-      projectId: this.projectId,
-      artifactRoot: this.artifactRoot,
-    });
   }
 
   async tick({ schedule = true } = {}) {
