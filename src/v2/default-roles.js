@@ -220,6 +220,78 @@ const REVIEWER_FRESH_EVIDENCE_PROMPT = [
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
 
+
+function deliveryRoleSuffix(role) {
+  if (role === 'developer') {
+    return [
+      "YOUR ROLE: DEVELOPER",
+      "Implement the assigned task and the interfaces listed in the shared task context.",
+      "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run appropriate local/unit/component checks and avoid unrelated refactors.",
+      "Interface ownership is already defined by the plan. Do not invent, remove, rename, or silently reassign interfaces.",
+      "When a required interface realization is newly created or relocated, return result.interfaceRealizations with {interfaceId, anchors:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}. These are hints only; Ariad independently resolves and seals them.",
+      "If an existing binding remains valid and unchanged, you do not need to restate it.",
+      "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
+      "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
+    ].join('\n');
+  }
+  if (role === 'tester') {
+    return [
+      "YOUR ROLE: TESTER",
+      "Verify that implemented behavior satisfies the required interface contracts and task acceptance criteria.",
+      "Ariad has already performed mechanical Interface Seal checks such as binding existence and anchor resolvability. Do not redo those checks as your primary task; verify behavior.",
+      "For each required Executor, derive verification from its input, output, and sideEffects. For each required Provider, verify both that the provider produces the promised thing and that the produced thing behaves according to its own input/output/sideEffects contract.",
+      "Use realistic entry points and state transitions. Prefer executable evidence over inspection-only reasoning. Add or update test code when needed, and do not bypass required product flow merely to make a test pass.",
+      "Associate fresh verification evidence with the exact interface whenever possible via result.interfaceVerifications [{interfaceId,evidence:[...]}].",
+      "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
+    ].join('\n');
+  }
+  if (role === 'reviewer') {
+    return [
+      "YOUR ROLE: REVIEWER",
+      "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
+      "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
+      "For every required interface, check that the implementation is appropriate for the owning Feature and abstraction level, the realization plausibly corresponds to the contract, and Tester evidence exercises the important inputs, outputs, and sideEffects.",
+      "For Providers, require evidence for both provider creation and behavior of the produced thing.",
+      "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
+      "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
+    ].join('\n');
+  }
+  return null;
+}
+
+function buildSharedTaskPrompt(task, roleBoundaryContext) {
+  const requiredInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
+  return [
+    "SHARED TASK CONTEXT",
+    "You are working on one Ariad delivery task. Developer, Tester, and Reviewer receive this same task-level context.",
+    JSON.stringify({
+      task: {
+        id: task.id,
+        title: task.title ?? null,
+        intent: task.intent ?? task.input?.intent ?? null,
+        acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+        owningFeatureRefs: task.logicalRefs ?? task.input?.logicalRefs ?? [],
+        milestoneId: task.milestoneId ?? task.input?.milestoneId ?? null,
+        requiredInterfaceIds,
+      },
+      boundaryContext: roleBoundaryContext,
+    }, null, 2),
+    "INTERFACE RULES",
+    "Interface ownership is defined by the plan, not invented after implementation. A task may own multiple interfaces; every required interface must be accounted for.",
+    "An Executor contract describes input, output, and sideEffects. A Provider contract describes provider input plus the produced thing and that thing's input, output, and sideEffects.",
+    "Parent Features own interfaces at their own abstraction level. Child interfaces may realize a parent interface but do not replace the parent contract. A facade may expose a child interface by reference only when that is genuinely the intended abstraction.",
+    "Use the supplied interface/binding context as the primary reasoning boundary. Expand outward only when it is demonstrably insufficient; do not perform unrelated repository-wide rediscovery.",
+    "Task completion requires the required contracts to be implemented, mechanically bindable to real code, behaviorally verified, and supported by reviewable evidence.",
+  ].join('\n\n');
+}
+
+function composeDeliveryRolePrompt(task, roleBoundaryContext, suffix) {
+  return [
+    buildSharedTaskPrompt(task, roleBoundaryContext),
+    suffix,
+  ].filter(Boolean).join('\n\n');
+}
+
 function plannerPublicPlan(plan) {
   if (!plan) return null;
   const { executionTasks, ...publicPlan } = plan;
@@ -381,7 +453,9 @@ export function createDefaultV2Roles({
         ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
         ...(roleBoundaryContext ? { roleBoundaryContext } : {}),
-        v2Prompt,
+        v2Prompt: ['developer', 'tester', 'reviewer'].includes(task.stage)
+          ? composeDeliveryRolePrompt(task, roleBoundaryContext, v2Prompt)
+          : v2Prompt,
         task: {
           id: task.id,
           title: task.title ?? null,
@@ -435,12 +509,8 @@ export function createDefaultV2Roles({
     developer: {
       prepare: ({ task }) => prepareLlm(task, [
         DEVELOPER_REUSE_PROMPT,
-        '',
-        'INTERFACE REALIZATION',
-        'If this task owns interfaceIds, include result.interfaceRealizations when you create or relocate implementation anchors.',
-        'Shape: [{interfaceId, anchors:[{kind:"symbol"|"range",file,symbol?,startLine?,endLine?}]}].',
-        'This is a hint only: Ariad independently resolves and seals anchors before Tester is allowed to proceed.',
-      ].join('\n')),
+        deliveryRoleSuffix('developer'),
+      ].join('\n\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
       async afterPersist({ task, result }) {
         const seal = await sealDeveloperInterfaces({
@@ -481,7 +551,10 @@ export function createDefaultV2Roles({
     },
 
     tester: {
-      prepare: ({ task }) => prepareLlm(task, TESTER_REUSE_PROMPT, {
+      prepare: ({ task }) => prepareLlm(task, [
+        TESTER_REUSE_PROMPT,
+        deliveryRoleSuffix('tester'),
+      ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition: ({ task, result }) => {
@@ -496,7 +569,10 @@ export function createDefaultV2Roles({
     },
 
     reviewer: {
-      prepare: ({ task }) => prepareLlm(task, REVIEWER_FRESH_EVIDENCE_PROMPT, {
+      prepare: ({ task }) => prepareLlm(task, [
+        REVIEWER_FRESH_EVIDENCE_PROMPT,
+        deliveryRoleSuffix('reviewer'),
+      ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition({ task, result }) {
