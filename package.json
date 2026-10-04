@@ -7,9 +7,9 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "test": "node --test test/event-driven-reconcile.test.js test/v2-minimal-runtime.test.js test/git-source-control-finalizer.test.js test/openclaw-project-manager.test.js test/role-spec-prompt-renderer.test.js test/art-capabilities.test.js test/normal-session-role-executor.test.js test/pydantic-v2-provider.test.js test/ariad-service.test.js test/mock-project-state-transitions.test.js test/state-machine.test.js test/role-run-prompt.test.js test/interface-frontier.test.js test/planner-task-ownership.test.js test/revision-traversal.test.js test/role-boundary-context.test.js test/interface-seal.test.js test/godot-lsp-provider.test.js test/developer-interface-seal.test.js",
+    "test": "node --test test/event-driven-reconcile.test.js test/v2-minimal-runtime.test.js test/git-source-control-finalizer.test.js test/openclaw-project-manager.test.js test/role-spec-prompt-renderer.test.js test/art-capabilities.test.js test/normal-session-role-executor.test.js test/pydantic-v2-provider.test.js test/ariad-service.test.js test/mock-project-state-transitions.test.js test/state-machine.test.js test/role-run-prompt.test.js test/interface-frontier.test.js test/planner-task-ownership.test.js test/revision-traversal.test.js test/role-boundary-context.test.js test/interface-seal.test.js test/godot-lsp-provider.test.js test/developer-interface-seal.test.js test/srpg-interface-context-theory.test.js",
     "test:llm": "node --test test/live-llm.test.js",
     "test:legacy": "node --test test/*.test.js",
-    "test:pydantic-runtime": "node --test test/pydantic-v2-provider.test.js test/ariad-service.test.js test/mock-project-state-transitions.test.js test/state-machine.test.js test/role-run-prompt.test.js test/interface-frontier.test.js test/planner-task-ownership.test.js test/revision-traversal.test.js test/role-boundary-context.test.js test/interface-seal.test.js test/godot-lsp-provider.test.js test/developer-interface-seal.test.js"
+    "test:pydantic-runtime": "node --test test/pydantic-v2-provider.test.js test/ariad-service.test.js test/mock-project-state-transitions.test.js test/state-machine.test.js test/role-run-prompt.test.js test/interface-frontier.test.js test/planner-task-ownership.test.js test/revision-traversal.test.js test/role-boundary-context.test.js test/interface-seal.test.js test/godot-lsp-provider.test.js test/developer-interface-seal.test.js test/srpg-interface-context-theory.test.js"
   }
-}
+}\n
