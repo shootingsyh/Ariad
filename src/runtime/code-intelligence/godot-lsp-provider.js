@@ -131,6 +131,24 @@ export class GodotLspProvider {
     return this.client.request('workspace/symbol', { query });
   }
 
+  async resolveSymbol({ file, symbol }) {
+    const absolute = resolve(this.projectPath, file);
+    const found = await this.findSymbol(absolute, String(symbol).split('.').pop());
+    if (!found) return null;
+    const range = found.selectionRange ?? found.range ?? null;
+    if (!range) return null;
+    return {
+      kind: 'symbol',
+      file,
+      symbol,
+      startLine: range.start.line + 1,
+      startCharacter: range.start.character,
+      endLine: range.end.line + 1,
+      endCharacter: range.end.character,
+      provider: 'godot-lsp',
+    };
+  }
+
   async close() {
     if (this.initialized) {
       try { await this.client.request('shutdown'); } catch {}
