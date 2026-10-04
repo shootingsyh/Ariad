@@ -177,6 +177,23 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     );
     assert.equal(JSON.stringify(tester).includes('load-save-internal'), false);
     assert.equal(JSON.stringify(tester).includes('entry-progression'), true);
+
+    const sharedDelivery = buildRoleBoundaryContext({
+      artifactRoot: root,
+      role: 'delivery',
+      task: { milestoneId: 'V2.1', logicalRefs: ['entry'], interfaceIds: ['new-game'] },
+      workspace: root,
+    });
+    assert.equal(sharedDelivery.role, 'delivery');
+    assert.deepEqual(sharedDelivery.owningFeatures.map(x => x.id), ['entry']);
+    assert.deepEqual(sharedDelivery.owningFeatures[0].interfaces.map(x => x.id), ['new-game']);
+    assert.deepEqual(
+      sharedDelivery.referencedFeatureInterfaces.map(x => x.id).sort(),
+      ['entry', 'progression'],
+    );
+    assert.equal(JSON.stringify(sharedDelivery).includes('entry-progression'), true);
+    assert.equal(JSON.stringify(sharedDelivery).includes('equip-persist'), true);
+    assert.equal(JSON.stringify(sharedDelivery).includes('battle'), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
