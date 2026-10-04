@@ -2,7 +2,92 @@ function taskId(batchId, name) {
   return `planner:${batchId}:${name}`;
 }
 
+function isVersionMigrationRequest(requests) {
+  return requests.length === 1 && requests[0]?.request?.purpose === 'VERSION_MIGRATION';
+}
+
+function migrationFrontierFlowTasks(batchId, requests) {
+  const request = requests[0]?.request ?? {};
+  const phase = request.frontierPhase ?? 'feature';
+  const id = name => taskId(batchId, name);
+  return [
+    {
+      id: id('frontier-decompose'),
+      stage: 'tech_lead',
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_DECOMPOSE',
+        requests: structuredClone(requests),
+        frontierPhase: phase,
+        singleFrontier: true,
+        versionMigration: true,
+      },
+    },
+    {
+      id: id('frontier-validate-1'),
+      stage: 'plan_validator',
+      dependsOn: [id('frontier-decompose')],
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_FRONTIER_VALIDATE',
+        frontierPhase: phase,
+        round: 1,
+        versionMigration: true,
+      },
+    },
+    {
+      id: id('frontier-critic'),
+      stage: 'tech_lead_critic',
+      dependsOn: [id('frontier-validate-1')],
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_FRONTIER_CRITIC',
+        frontierPhase: phase,
+        round: 1,
+        versionMigration: true,
+      },
+    },
+    {
+      id: id('frontier-repair'),
+      stage: 'tech_lead',
+      dependsOn: [id('frontier-critic')],
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_FRONTIER_REPAIR',
+        frontierPhase: phase,
+        versionMigration: true,
+      },
+    },
+    {
+      id: id('frontier-validate-2'),
+      stage: 'plan_validator',
+      dependsOn: [id('frontier-repair')],
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_FRONTIER_VALIDATE',
+        frontierPhase: phase,
+        round: 2,
+        versionMigration: true,
+      },
+    },
+    {
+      id: id('frontier-finalize'),
+      stage: 'plan_validator',
+      dependsOn: [id('frontier-critic'), id('frontier-validate-2')],
+      input: {
+        planningBatchId: batchId,
+        purpose: 'PLANNER_FRONTIER_FINALIZE',
+        frontierPhase: phase,
+        versionMigration: true,
+      },
+    },
+  ];
+}
+
 export function plannerFlowTasks(batchId, requests) {
+  if (isVersionMigrationRequest(requests)) {
+    return migrationFrontierFlowTasks(batchId, requests);
+  }
   const ids = {
     decompose: taskId(batchId, 'decompose'),
     dependencies: taskId(batchId, 'dependencies'),
