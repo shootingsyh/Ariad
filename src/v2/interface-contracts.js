@@ -274,7 +274,7 @@ function normalizeContract(raw, expectedNodeType) {
 
   function normalizeBaseTask(task, path) {
     if (!task || typeof task !== 'object' || Array.isArray(task)) fail(`${path}: task must be object`);
-    const allowed = new Set(['id', 'title', 'intent', 'acceptanceCriteria', 'testStrategy', 'verification']);
+    const allowed = new Set(['id', 'title', 'intent', 'acceptanceCriteria', 'testStrategy', 'verification', 'interfaceIds']);
     for (const key of Object.keys(task)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
     for (const key of ['id', 'title', 'intent', 'testStrategy']) {
       if (typeof task[key] !== 'string' || !task[key].trim()) fail(`${path}.${key}: required`);
@@ -283,6 +283,12 @@ function normalizeContract(raw, expectedNodeType) {
       fail(`${path}.acceptanceCriteria: non-empty array required`);
     }
     if (task.verification != null && !Array.isArray(task.verification)) fail(`${path}.verification: must be array`);
+    if (task.interfaceIds != null && !Array.isArray(task.interfaceIds)) fail(`${path}.interfaceIds: must be array`);
+    for (const interfaceId of task.interfaceIds ?? []) {
+      if (typeof interfaceId !== 'string' || !interfaceIds.has(interfaceId)) {
+        fail(`${path}.interfaceIds contains unknown interface ${interfaceId}`);
+      }
+    }
     return {
       id: task.id,
       title: task.title,
@@ -290,6 +296,7 @@ function normalizeContract(raw, expectedNodeType) {
       acceptanceCriteria: [...task.acceptanceCriteria],
       testStrategy: task.testStrategy,
       verification: structuredClone(task.verification ?? []),
+      interfaceIds: [...(task.interfaceIds ?? [])],
     };
   }
 
@@ -524,7 +531,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     'Every node present in the hierarchy must have one boundary contract.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
     'Each interface may carry realization:[symbol|range anchors] and verification:[symbol|range anchors]. These bindings are implementation metadata and may change without changing the frozen semantic interface contract.',
-    'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}] DURING the feature frontier pass. These are canonical implementation/local-test task definitions.',
+    'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification,interfaceIds}] DURING the feature frontier pass. interfaceIds names the exact interfaces the task implements/seals.',
     'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces. integrationScenarios.uses can then reference them as {graph:"feature",nodeId:featureId,interfaceId}.',
     'bindings live in the same contract artifact but are runtime metadata, not part of the frozen semantic export: [{interfaceId,realizationAnchors,verificationAnchors}].',
     'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
@@ -618,6 +625,7 @@ export function buildOwnedExecutionTasks(artifactRoot) {
       acceptanceCriteria: structuredClone(base.acceptanceCriteria),
       testStrategy: base.testStrategy,
       verification: structuredClone(base.verification ?? []),
+      interfaceIds: structuredClone(base.interfaceIds ?? []),
       logicalRefs: [base.featureId],
       dependsOn: [],
       taskKind: 'feature',
