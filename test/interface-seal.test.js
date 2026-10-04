@@ -36,7 +36,7 @@ test('static GDScript interface seal resolves exact function range and fails aft
 
     const resolved = resolveAnchorStatically({ workspace: root, anchor });
     assert.equal(resolved.ok, true);
-    assert.deepEqual(resolved.range, { startLine: 3, endLine: 6 });
+    assert.deepEqual(resolved.range, { startLine: 3, endLine: 6, truncated: false });
     assert.equal(resolved.snippet.some(row => row.text.includes('reset_state')), true);
 
     const seal = await sealInterface({
