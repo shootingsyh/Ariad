@@ -69,6 +69,7 @@ test('planning model migration archives the whole old DB and starts from a fresh
   assert.equal(fs.existsSync(migration.legacyDatabasePath), true);
   assert.equal(fs.existsSync(migration.snapshotPath), true);
   assert.equal(fs.existsSync(migration.legacyPlannerPath), true);
+  assert.equal(fs.existsSync(path.join(migration.legacyRevisionRoot, 'planner', 'logical', 'legacy.json')), true);
 
   const archived = new SQLiteV2Store(migration.legacyDatabasePath);
   assert.equal(archived.getTask('OLD-TASK')?.state, 'DONE');
@@ -85,6 +86,7 @@ test('planning model migration archives the whole old DB and starts from a fresh
   assert.equal(requests.length, 1);
   assert.equal(requests[0].request.purpose, 'VERSION_MIGRATION');
   assert.equal(requests[0].context.humanDecisions[0].decision, 'preserve existing behavior');
+  assert.equal(requests[0].context.legacyRevisionRoot, migration.legacyRevisionRoot);
 
   completePlanningModelMigration(fresh, 'demo');
   assert.equal(fresh.getProject('demo').planningModelVersion, CURRENT_PLANNING_MODEL_VERSION);
