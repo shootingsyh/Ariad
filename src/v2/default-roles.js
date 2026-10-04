@@ -665,15 +665,75 @@ export function createDefaultV2Roles({
 
     project_debugger: {
       sessionPolicy: 'persistent',
-      prepare: ({ task }) => prepareLlm(task, task.input?.blockedTaskId ? [
-        "You are Ariad's unified Project Debugger.",
-        'Automatic execution retry has been exhausted for the blocked business task below.',
-        'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
-        'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
-        'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
-        JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
-      ].join('\n\n') : null),
+      prepare: ({ task }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
+          const critics = flowTasks(store, task)
+            .filter(item => item.input?.purpose === 'PLANNER_FRONTIER_CRITIC')
+            .map(item => ({
+              round: item.input?.round ?? null,
+              result: latestRoleResult(item),
+            }));
+          return prepareLlm(task, [
+            "You are Ariad's Project Debugger diagnosing one planning frontier after three failed semantic critic rounds.",
+            'Do not edit planner artifacts. Judge both the Tech Lead and the critics.',
+            'You may return OVERRIDE_CRITIC when the current frontier is sound and the critic objections are wrong, irrelevant, contradictory, or overreaching. Ariad will freeze the frontier and continue.',
+            'You may return RETRY_WITH_GUIDANCE when the frontier still needs work but a concrete Tech Lead correction is possible. Put precise corrective instructions in result.guidance. Ariad will start a fresh three-round TL/validator/critic cycle on the same frontier.',
+            'Use REQUIREMENT_DECISION_REQUIRED when the disagreement exposes a genuine product ambiguity that PM must resolve.',
+            'Use MODEL_CAPABILITY_MISMATCH or SYSTEM_RUNTIME_FAILURE only when execution/model/tooling is actually the cause.',
+            'Do not choose RETRY_WITH_GUIDANCE without giving actionable guidance, and do not choose OVERRIDE_CRITIC merely to make progress.',
+            JSON.stringify({
+              frontierPhase: task.input?.frontierPhase ?? null,
+              frontier: latestFrontierCompletion(store, task),
+              critics,
+            }, null, 2),
+          ].join('\n\n'));
+        }
+        return prepareLlm(task, task.input?.blockedTaskId ? [
+          "You are Ariad's unified Project Debugger.",
+          'Automatic execution retry has been exhausted for the blocked business task below.',
+          'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
+          'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
+          'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+          JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
+        ].join('\n\n') : null);
+      },
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
+          const batchId = task.input?.planningBatchId;
+          if (result.outcome === 'OVERRIDE_CRITIC') {
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN',
+                role: 'project_debugger',
+                frontierPhase: task.input?.frontierPhase ?? null,
+                summary: result.summary ?? result.result?.reason ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'RETRY_WITH_GUIDANCE') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: task.input?.frontierPhase ?? 'feature',
+                debuggerGuidance: result.result?.guidance ?? result.summary ?? null,
+                retryOfPlanningBatchId: batchId ?? null,
+              },
+            });
+            return {
+              state: 'DONE',
+              skipTaskIds: batchId ? [`planner:${batchId}:frontier-finalize`] : [],
+              transitionHistory: {
+                type: 'PLANNER_FRONTIER_DEBUGGER_RETRY',
+                role: 'project_debugger',
+                frontierPhase: task.input?.frontierPhase ?? null,
+                guidance: result.result?.guidance ?? result.summary ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+        }
         const blockedTaskId = task.input?.blockedTaskId ?? null;
         const blocked = blockedTaskId ? store.getTask(blockedTaskId) : null;
         const routeBlocked = (patch, history) => {
@@ -911,13 +971,31 @@ export function createDefaultV2Roles({
       transition: ({ task, result }) => {
         if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
           const batchId = task.input?.planningBatchId;
+          const round = task.input?.round ?? 1;
           if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
+            const skipByRound = {
+              1: [
+                `planner:${batchId}:frontier-repair-1`,
+                `planner:${batchId}:frontier-validate-2`,
+                `planner:${batchId}:frontier-critic-2`,
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              2: [
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              3: [
+                `planner:${batchId}:frontier-debugger`,
+              ],
+            };
             return {
               state: 'DONE',
-              skipTaskIds: [
-                `planner:${batchId}:frontier-repair`,
-                `planner:${batchId}:frontier-validate-2`,
-              ],
+              skipTaskIds: skipByRound[round] ?? [],
             };
           }
           return { state: 'DONE' };
