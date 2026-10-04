@@ -8,6 +8,7 @@ import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
 import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
+import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 
 export class AriadService {
   constructor({
@@ -90,10 +91,20 @@ export class AriadService {
   runtimeFor(project) {
     let runtime = this.runtimes.get(project.id);
     if (!runtime) {
+      const godotProject = project.workspace && existsSync(`${project.workspace}/project.godot`);
+      const lspPort = 6100 + [...String(project.id)].reduce((sum, ch) => (sum + ch.charCodeAt(0)) % 1000, 0);
+      const codeIntelligence = godotProject
+        ? new GodotLspProvider({
+            projectPath: project.workspace,
+            port: lspPort,
+            launch: true,
+          })
+        : null;
       runtime = new StandaloneProjectRuntime({
         project,
         provider: this.provider,
         sharedResources: this.sharedResources,
+        codeIntelligence,
         resolveRoleModel: role => this.manager.status(project.id).roleModels?.[role] ?? null,
       });
       this.runtimes.set(project.id, runtime);
