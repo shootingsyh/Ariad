@@ -356,20 +356,6 @@ export class SQLiteV2Store {
     }
   }
 
-
-  resetControlPlaneForPlanningMigration(projectId) {
-    if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      this.db.prepare('DELETE FROM v2_tasks WHERE project_id = ?').run(projectId);
-      this.db.prepare('DELETE FROM v2_planning_requests WHERE project_id = ?').run(projectId);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-  }
-
   enqueuePlanningRequest({ id, projectId, request, context = null }) {
     if (!id) throw new Error('planning request id is required');
     if (!projectId) throw new Error('planning request projectId is required');
