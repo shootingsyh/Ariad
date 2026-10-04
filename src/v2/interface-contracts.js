@@ -95,7 +95,7 @@ function normalizeContract(raw, expectedNodeType) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('contract must be object');
   const allowed = new Set([
     'version', 'nodeId', 'nodeType', 'decomposition',
-    'interfaces', 'imports', 'integrationScenarios', 'featureUses',
+    'interfaces', 'imports', 'integrationScenarios', 'featureUses', 'bindings',
     'featureTasks', 'taskLinks', 'integrationTasks',
   ]);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`${raw.nodeId ?? '?'}: unexpected property ${key}`);
@@ -117,10 +117,12 @@ function normalizeContract(raw, expectedNodeType) {
   if (!Array.isArray(raw.imports)) fail(`${raw.nodeId}: imports must be array`);
   if (!Array.isArray(raw.integrationScenarios)) fail(`${raw.nodeId}: integrationScenarios must be array`);
   const featureUsesRaw = raw.featureUses ?? [];
+  const bindingsRaw = raw.bindings ?? [];
   const featureTasksRaw = raw.featureTasks ?? [];
   const taskLinksRaw = raw.taskLinks ?? [];
   const integrationTasksRaw = raw.integrationTasks ?? [];
   if (!Array.isArray(featureUsesRaw)) fail(`${raw.nodeId}: featureUses must be array`);
+  if (!Array.isArray(bindingsRaw)) fail(`${raw.nodeId}: bindings must be array`);
   if (!Array.isArray(featureTasksRaw)) fail(`${raw.nodeId}: featureTasks must be array`);
   if (!Array.isArray(taskLinksRaw)) fail(`${raw.nodeId}: taskLinks must be array`);
   if (!Array.isArray(integrationTasksRaw)) fail(`${raw.nodeId}: integrationTasks must be array`);
@@ -211,6 +213,54 @@ function normalizeContract(raw, expectedNodeType) {
     };
   });
 
+  function normalizeAnchor(anchor, path) {
+    if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) fail(`${path}: anchor must be object`);
+    const allowed = new Set([
+      'kind', 'file', 'symbol', 'startLine', 'startCharacter', 'endLine', 'endCharacter',
+      'provider', 'fileHash', 'observedCommit', 'status',
+    ]);
+    for (const key of Object.keys(anchor)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
+    if (!['symbol', 'range'].includes(anchor.kind)) fail(`${path}.kind must be symbol|range`);
+    if (typeof anchor.file !== 'string' || !anchor.file.trim()) fail(`${path}.file required`);
+    if (anchor.kind === 'symbol' && (typeof anchor.symbol !== 'string' || !anchor.symbol.trim())) {
+      fail(`${path}.symbol required for symbol anchor`);
+    }
+    if (anchor.startLine != null && (!Number.isInteger(anchor.startLine) || anchor.startLine < 1)) {
+      fail(`${path}.startLine must be positive integer`);
+    }
+    if (anchor.endLine != null && (!Number.isInteger(anchor.endLine) || anchor.endLine < 1)) {
+      fail(`${path}.endLine must be positive integer`);
+    }
+    if (anchor.startLine != null && anchor.endLine != null && anchor.endLine < anchor.startLine) {
+      fail(`${path}: endLine must be >= startLine`);
+    }
+    if (anchor.status != null && !['VALID', 'DIRTY', 'BROKEN'].includes(anchor.status)) {
+      fail(`${path}.status must be VALID|DIRTY|BROKEN`);
+    }
+    return structuredClone(anchor);
+  }
+
+  const bindingsSeen = new Set();
+  const bindings = bindingsRaw.map((binding, index) => {
+    const path = `${raw.nodeId}.bindings[${index}]`;
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding)) fail(`${path}: binding must be object`);
+    const allowed = new Set(['interfaceId', 'realizationAnchors', 'verificationAnchors']);
+    for (const key of Object.keys(binding)) if (!allowed.has(key)) fail(`${path}.${key}: unexpected property`);
+    if (typeof binding.interfaceId !== 'string' || !binding.interfaceId.trim()) fail(`${path}.interfaceId required`);
+    if (!interfaceIds.has(binding.interfaceId)) fail(`${path}: unknown interface ${binding.interfaceId}`);
+    if (bindingsSeen.has(binding.interfaceId)) fail(`${raw.nodeId}: duplicate binding for interface ${binding.interfaceId}`);
+    bindingsSeen.add(binding.interfaceId);
+    const realizationAnchors = binding.realizationAnchors ?? [];
+    const verificationAnchors = binding.verificationAnchors ?? [];
+    if (!Array.isArray(realizationAnchors)) fail(`${path}.realizationAnchors must be array`);
+    if (!Array.isArray(verificationAnchors)) fail(`${path}.verificationAnchors must be array`);
+    return {
+      interfaceId: binding.interfaceId,
+      realizationAnchors: realizationAnchors.map((anchor, i) => normalizeAnchor(anchor, `${path}.realizationAnchors[${i}]`)),
+      verificationAnchors: verificationAnchors.map((anchor, i) => normalizeAnchor(anchor, `${path}.verificationAnchors[${i}]`)),
+    };
+  });
+
   const featureUses = featureUsesRaw.map((use, index) => {
     const path = `${raw.nodeId}.featureUses[${index}]`;
     if (!use || typeof use !== 'object' || Array.isArray(use)) fail(`${path}: must be object`);
@@ -275,6 +325,7 @@ function normalizeContract(raw, expectedNodeType) {
     imports,
     integrationScenarios,
     featureUses,
+    bindings,
     featureTasks,
     taskLinks,
     integrationTasks,
@@ -475,6 +526,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     'Each interface may carry realization:[symbol|range anchors] and verification:[symbol|range anchors]. These bindings are implementation metadata and may change without changing the frozen semantic interface contract.',
     'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification}] DURING the feature frontier pass. These are canonical implementation/local-test task definitions.',
     'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces. integrationScenarios.uses can then reference them as {graph:"feature",nodeId:featureId,interfaceId}.',
+    'bindings live in the same contract artifact but are runtime metadata, not part of the frozen semantic export: [{interfaceId,realizationAnchors,verificationAnchors}].',
     'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
     'Milestones have no schema field capable of overriding a linked feature task title, intent, acceptanceCriteria, or ownership.',
     'TOP-DOWN RULE: define a node boundary before looking below it.',
@@ -681,4 +733,12 @@ export function hasBoundaryContracts(artifactRoot, nodeType = null) {
   if (nodeType === 'feature') return hasJson(featureDir);
   if (nodeType === 'milestone') return hasJson(milestoneDir);
   return hasJson(featureDir) || hasJson(milestoneDir);
+}
+
+
+export function interfaceBinding(artifactRoot, nodeType, nodeId, interfaceId) {
+  return loadBoundaryContracts(artifactRoot, nodeType)
+    .get(nodeId)
+    ?.bindings
+    ?.find(binding => binding.interfaceId === interfaceId) ?? null;
 }
