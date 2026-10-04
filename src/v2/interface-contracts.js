@@ -641,6 +641,7 @@ export function buildOwnedExecutionTasks(artifactRoot) {
       acceptanceCriteria: structuredClone(base.acceptanceCriteria),
       testStrategy: base.testStrategy,
       verification: structuredClone(base.verification ?? []),
+      interfaceIds: structuredClone(base.interfaceIds ?? []),
       logicalRefs: [],
       dependsOn: [],
       taskKind: 'integration',
