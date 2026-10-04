@@ -18,6 +18,7 @@ import {
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { sealDeveloperInterfaces } from './interface-seal.js';
+import { completePlanningModelMigration } from './version-migration.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -1067,6 +1068,7 @@ export function createDefaultV2Roles({
             ? validatePlannerArtifactPlan(rawArtifactPlan)
             : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
           store.applyDeliveryPlan(task.projectId, validated.plan);
+          completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           const setDeliveryEnabled = (enabled) => {
