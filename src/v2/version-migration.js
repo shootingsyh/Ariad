@@ -2,11 +2,13 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
+import { SQLiteV2Store } from './sqlite-store.js';
 import {
   CURRENT_PLANNING_MODEL_VERSION,
   CURRENT_STORAGE_VERSION,
@@ -45,48 +47,61 @@ export function planningModelMigrationStatus(project) {
   };
 }
 
-export function beginPlanningModelMigration({
-  store,
+export function migratePlanningModelDatabase({
+  stateDb,
   projectId,
   artifactRoot,
   now = () => new Date(),
 }) {
-  let project = store.getProject(projectId);
-  if (!project) throw new Error(`unknown project: ${projectId}`);
+  const oldStore = new SQLiteV2Store(stateDb);
+  let project;
+  let snapshot;
+  try {
+    project = oldStore.getProject(projectId);
+    if (!project) throw new Error(`unknown project: ${projectId}`);
 
-  const fromVersion = projectPlanningModelVersion(project);
-  const toVersion = CURRENT_PLANNING_MODEL_VERSION;
-  if (fromVersion > toVersion) {
-    throw new Error(`project planning model v${fromVersion} is newer than runtime v${toVersion}`);
-  }
-  if (projectStorageVersion(project) > CURRENT_STORAGE_VERSION) {
-    throw new Error(`project storage v${projectStorageVersion(project)} is newer than runtime v${CURRENT_STORAGE_VERSION}`);
-  }
-  if (project?.planningModelMigration?.status === 'REBUILDING') {
-    return structuredClone(project.planningModelMigration);
-  }
-  if (fromVersion === toVersion) return null;
+    const fromVersion = projectPlanningModelVersion(project);
+    const toVersion = CURRENT_PLANNING_MODEL_VERSION;
+    if (fromVersion > toVersion) {
+      throw new Error(`project planning model v${fromVersion} is newer than runtime v${toVersion}`);
+    }
+    if (projectStorageVersion(project) > CURRENT_STORAGE_VERSION) {
+      throw new Error(`project storage v${projectStorageVersion(project)} is newer than runtime v${CURRENT_STORAGE_VERSION}`);
+    }
+    if (fromVersion === toVersion) return null;
 
-  const tasks = store.listTasks(projectId);
-  const active = tasks.filter(task => ['WORKING', 'RESULT_READY'].includes(task.state));
-  if (active.length > 0) {
-    throw new Error(`planning-model migration requires no active role runs; active tasks: ${active.map(task => task.id).join(', ')}`);
+    const tasks = oldStore.listTasks(projectId);
+    const active = tasks.filter(task => ['WORKING', 'RESULT_READY'].includes(task.state));
+    if (active.length > 0) {
+      throw new Error(`planning-model migration requires no active role runs; active tasks: ${active.map(task => task.id).join(', ')}`);
+    }
+
+    snapshot = {
+      version: 1,
+      migration: {
+        id: migrationId(fromVersion, toVersion),
+        fromVersion,
+        toVersion,
+      },
+      project: structuredClone(project),
+      tasks: structuredClone(tasks),
+      planningRequests: structuredClone(oldStore.listPlanningRequests(projectId)),
+      incidents: structuredClone(oldStore.listIncidents(projectId)),
+      humanDecisions: humanDecisions(tasks),
+    };
+    oldStore.checkpoint();
+  } finally {
+    oldStore.close();
   }
 
   const at = now().toISOString();
+  const fromVersion = projectPlanningModelVersion(project);
+  const toVersion = CURRENT_PLANNING_MODEL_VERSION;
   const id = migrationId(fromVersion, toVersion);
   const migrationRoot = join(artifactRoot, 'migrations', `${id}-${at.replace(/[:.]/g, '-')}`);
   mkdirSync(migrationRoot, { recursive: true });
 
-  const snapshot = {
-    version: 1,
-    migration: { id, fromVersion, toVersion, startedAt: at },
-    project: structuredClone(project),
-    tasks: structuredClone(tasks),
-    planningRequests: structuredClone(store.listPlanningRequests(projectId)),
-    incidents: structuredClone(store.listIncidents(projectId)),
-    humanDecisions: humanDecisions(tasks),
-  };
+  snapshot.migration.startedAt = at;
   const snapshotPath = join(migrationRoot, 'control-plane-snapshot.json');
   writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + '\n', 'utf8');
 
@@ -97,9 +112,16 @@ export function beginPlanningModelMigration({
     rmSync(plannerRoot, { recursive: true, force: true });
   }
 
-  store.resetControlPlaneForPlanningMigration(projectId);
+  const legacyDbPath = join(migrationRoot, 'state.db');
+  mkdirSync(dirname(legacyDbPath), { recursive: true });
+  renameSync(stateDb, legacyDbPath);
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    const sidecar = `${stateDb}${suffix}`;
+    if (existsSync(sidecar)) {
+      renameSync(sidecar, `${legacyDbPath}${suffix}`);
+    }
+  }
 
-  project = store.getProject(projectId);
   const migration = {
     id,
     status: 'REBUILDING',
@@ -107,37 +129,56 @@ export function beginPlanningModelMigration({
     toVersion,
     startedAt: at,
     snapshotPath,
+    legacyDatabasePath: legacyDbPath,
     legacyPlannerPath: existsSync(legacyPlannerPath) ? legacyPlannerPath : null,
     strategy: 'reconstruct-and-reconcile',
   };
-  project = store.updateProject(projectId, project.version, {
-    deliveryEnabled: false,
-    storageVersion: CURRENT_STORAGE_VERSION,
-    planningModelMigration: migration,
-  });
 
-  store.enqueuePlanningRequest({
-    id: `${projectId}:version-migration:${fromVersion}-${toVersion}`,
-    projectId,
-    request: {
-      purpose: 'VERSION_MIGRATION',
-      fromPlanningModelVersion: fromVersion,
-      toPlanningModelVersion: toVersion,
-      strategy: 'reconstruct-and-reconcile',
-      instruction: [
-        'Reconstruct the project under the current planning model from the durable product intent and current workspace.',
-        'Treat the legacy control-plane snapshot as evidence, not as authoritative current task state.',
-        'Preserve completed implementation in the workspace; do not rewrite working code merely because tasks are being reconstructed.',
-        'Create current Feature/Milestone/Interface ownership and canonical tasks, then reconcile existing implementation against those contracts.',
-        'Existing implementation that satisfies a new interface should be adopted and freshly verified rather than unnecessarily reimplemented.',
-      ].join(' '),
-    },
-    context: {
-      migrationSnapshotPath: snapshotPath,
-      legacyPlannerPath: migration.legacyPlannerPath,
-      humanDecisions: snapshot.humanDecisions,
-    },
-  });
+  const freshStore = new SQLiteV2Store(stateDb);
+  try {
+    freshStore.createProject({
+      id: project.id,
+      spec: project.spec ?? null,
+      mode: project.mode ?? 'NEW',
+      sourcePath: project.sourcePath ?? null,
+      workspace: project.workspace ?? null,
+      pmBinding: project.pmBinding ?? `pm:${project.id}`,
+      deliveryEnabled: false,
+      takeoverReviewRequired: false,
+      projectVersion: project.projectVersion ?? 0,
+      activeVersion: project.activeVersion ?? 1,
+      versionHistory: structuredClone(project.versionHistory ?? []),
+      storageVersion: CURRENT_STORAGE_VERSION,
+      planningModelVersion: fromVersion,
+      planningModelMigration: migration,
+    });
+
+    freshStore.enqueuePlanningRequest({
+      id: `${projectId}:version-migration:${fromVersion}-${toVersion}`,
+      projectId,
+      request: {
+        purpose: 'VERSION_MIGRATION',
+        fromPlanningModelVersion: fromVersion,
+        toPlanningModelVersion: toVersion,
+        strategy: 'reconstruct-and-reconcile',
+        instruction: [
+          'Reconstruct the project under the current planning model from durable product intent and the current workspace.',
+          'Treat the legacy database and planner snapshot as evidence, not authoritative current control state.',
+          'Preserve completed implementation in the workspace; do not rewrite working code merely because tasks are reconstructed.',
+          'Create current Feature/Milestone/Interface ownership and canonical tasks, then reconcile existing implementation against those contracts.',
+          'Existing implementation that satisfies a new interface should be adopted and freshly verified rather than unnecessarily reimplemented.',
+        ].join(' '),
+      },
+      context: {
+        migrationSnapshotPath: snapshotPath,
+        legacyDatabasePath: legacyDbPath,
+        legacyPlannerPath: migration.legacyPlannerPath,
+        humanDecisions: snapshot.humanDecisions,
+      },
+    });
+  } finally {
+    freshStore.close();
+  }
 
   return structuredClone(migration);
 }
