@@ -21,6 +21,9 @@ function migrationFrontierFlowTasks(batchId, requests) {
         frontierPhase: phase,
         singleFrontier: true,
         versionMigration: true,
+        sourceComplete: request.sourceComplete === true,
+        debuggerGuidance: request.debuggerGuidance ?? null,
+        retryOfPlanningBatchId: request.retryOfPlanningBatchId ?? null,
       },
     },
     {
