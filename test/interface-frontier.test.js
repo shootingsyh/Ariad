@@ -73,6 +73,51 @@ test('planner flow keeps one iterative decompose task before dependency planning
   assert.equal(tasks.some(task => task.input?.purpose === 'PLANNER_MILESTONE_INTERFACES'), false);
 });
 
+
+test('version migration planning handles one frontier before critic and repair', () => {
+  const tasks = plannerFlowTasks('batch-migrate', [{
+    request: { purpose: 'VERSION_MIGRATION', frontierPhase: 'feature' },
+  }]);
+
+  assert.deepEqual(
+    tasks.map(task => task.input?.purpose),
+    [
+      'PLANNER_DECOMPOSE',
+      'PLANNER_FRONTIER_VALIDATE',
+      'PLANNER_FRONTIER_CRITIC',
+      'PLANNER_FRONTIER_REPAIR',
+      'PLANNER_FRONTIER_VALIDATE',
+      'PLANNER_FRONTIER_FINALIZE',
+    ],
+  );
+  assert.equal(tasks[0].input.singleFrontier, true);
+  assert.equal(tasks[0].input.frontierPhase, 'feature');
+  assert.deepEqual(tasks[1].dependsOn, [tasks[0].id]);
+  assert.deepEqual(tasks[2].dependsOn, [tasks[1].id]);
+  assert.deepEqual(tasks[3].dependsOn, [tasks[2].id]);
+  assert.deepEqual(tasks[4].dependsOn, [tasks[3].id]);
+  assert.deepEqual(tasks[5].dependsOn, [tasks[2].id, tasks[4].id]);
+});
+
+test('version migration finalization compiles the frozen tree before PM review', () => {
+  const tasks = plannerFlowTasks('batch-finalize', [{
+    request: { purpose: 'VERSION_MIGRATION_FINALIZE' },
+  }]);
+  assert.deepEqual(
+    tasks.map(task => task.input?.purpose),
+    [
+      'PLANNER_DEPENDENCIES',
+      'PLANNER_VALIDATE',
+      'PLANNER_CRITIC',
+      'PLANNER_REPAIR',
+      'PLANNER_FINAL_VALIDATE',
+      'PLANNER_PM_REVIEW',
+    ],
+  );
+  assert.equal(tasks[0].input.versionMigration, true);
+  assert.equal(tasks.at(-1).input.versionMigration, true);
+});
+
 test('top-down feature frontier selects BFS first expandable leaf and expands one layer only', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-'));
   try {
