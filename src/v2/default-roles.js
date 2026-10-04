@@ -11,6 +11,8 @@ import {
   buildOwnedExecutionTasks,
   finishFrontierPass,
   frontierArtifactInstructions,
+  nextBoundaryFrontier,
+  validateFrontierPass,
   hasBoundaryContracts,
   validateBoundaryContracts,
   validateTaskOwnershipCompilation,
@@ -157,6 +159,24 @@ function planningBatchRequests(store, task) {
 function isTakeoverPlanningTask(store, task) {
   const project = ensureTakeoverReviewState(store, task.projectId);
   return project.mode === 'TAKEOVER' && project.takeoverReviewRequired === true;
+}
+
+
+function latestFrontierCompletion(store, task) {
+  const tasks = flowTasks(store, task);
+  for (let i = tasks.length - 1; i >= 0; i -= 1) {
+    const history = tasks[i]?.history ?? [];
+    for (let j = history.length - 1; j >= 0; j -= 1) {
+      if (history[j]?.type === 'PLANNER_FRONTIER_LAYER_COMPLETE') return history[j];
+    }
+  }
+  return null;
+}
+
+function migrationPlanningRequest(store, task) {
+  return planningBatchRequests(store, task).find(
+    item => ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
+  ) ?? null;
 }
 
 function iterationRequest(store, task) {
@@ -365,6 +385,22 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
     ].filter(Boolean).join('\n\n');
   }
 
+  if (purpose === 'PLANNER_FRONTIER_REPAIR') {
+    const previous = predecessorResults(store, task)[0] ?? null;
+    const frontier = latestFrontierCompletion(store, task);
+    return [
+      "You are Ariad's Tech Lead repairing exactly one migration frontier.",
+      'Repair only the current frontier artifacts identified below. Do not alter already-frozen ancestor exports or unrelated siblings.',
+      'Address only concrete critic issues. Preserve accepted node identity and product intent.',
+      JSON.stringify({
+        context,
+        frontier,
+        critic: previous?.result ?? previous ?? null,
+      }, null, 2),
+      frontierArtifactInstructions(artifactRoot, task.input?.frontierPhase ?? 'feature'),
+    ].join('\n\n');
+  }
+
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     return [
@@ -381,6 +417,20 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
 
 function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
+  if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
+    const frontier = latestFrontierCompletion(store, task);
+    return [
+      "You are Ariad's semantic critic for exactly one top-down migration frontier.",
+      'Review only the frontier just produced, plus the parent contract needed to judge it.',
+      'Check: correct abstraction level, interface quality, Executor/Provider semantics where applicable, stable parent boundary, sensible child decomposition, task/interface ownership, and whether the frontier preserves project intent.',
+      'Do not request unrelated tree-wide cleanup. Return CLEAN when this frontier is acceptable; otherwise ISSUES with precise, locally repairable findings.',
+      JSON.stringify({
+        project: { id: project.id, spec: project.spec ?? null },
+        frontier,
+        validation,
+      }, null, 2),
+    ].join('\n\n');
+  }
   return [
     'You are Ariad\'s delivery-plan critic.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
@@ -794,6 +844,22 @@ export function createDefaultV2Roles({
           if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
             const pass = finishFrontierPass(artifactRoot, nodeType);
+            const frontierHistory = {
+              type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+              role: 'tech_lead',
+              nodeType,
+              nodeId: pass.targetNodeId,
+              disposition: pass.targetDisposition,
+              childIds: pass.childIds,
+              nextNodeId: pass.next?.node?.id ?? null,
+              at: new Date().toISOString(),
+            };
+            if (task.input?.singleFrontier === true) {
+              return {
+                state: 'DONE',
+                transitionHistory: frontierHistory,
+              };
+            }
             if (pass.next) {
               return {
                 state: 'READY',
@@ -801,16 +867,7 @@ export function createDefaultV2Roles({
                   ...task.input,
                   frontierPhase: nodeType,
                 },
-                transitionHistory: {
-                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
-                  role: 'tech_lead',
-                  nodeType,
-                  nodeId: pass.targetNodeId,
-                  disposition: pass.targetDisposition,
-                  childIds: pass.childIds,
-                  nextNodeId: pass.next.node?.id ?? null,
-                  at: new Date().toISOString(),
-                },
+                transitionHistory: frontierHistory,
               };
             }
             if (nodeType === 'feature') {
@@ -852,6 +909,19 @@ export function createDefaultV2Roles({
     tech_lead_critic: {
       prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
+          const batchId = task.input?.planningBatchId;
+          if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
+            return {
+              state: 'DONE',
+              skipTaskIds: [
+                `planner:${batchId}:frontier-repair`,
+                `planner:${batchId}:frontier-validate-2`,
+              ],
+            };
+          }
+          return { state: 'DONE' };
+        }
         if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
           return {
             state: 'DONE',
@@ -867,6 +937,48 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          if (task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE') {
+            const frontier = latestFrontierCompletion(store, task);
+            const nodeType = task.input?.frontierPhase ?? frontier?.nodeType ?? 'feature';
+            try {
+              const validated = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: true });
+              return {
+                outcome: 'PASS',
+                result: {
+                  valid: true,
+                  frontier,
+                  boundary: validated,
+                  error: null,
+                  errorCode: null,
+                },
+              };
+            } catch (error) {
+              return {
+                outcome: 'NOT_PASS',
+                result: {
+                  valid: false,
+                  frontier,
+                  error: error?.message ?? String(error),
+                  errorCode: error?.code ?? null,
+                },
+              };
+            }
+          }
+          if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
+            const phase = task.input?.frontierPhase ?? 'feature';
+            const next = nextBoundaryFrontier(artifactRoot, phase);
+            return {
+              outcome: 'PASS',
+              result: {
+                phase,
+                complete: next == null,
+                next: next == null ? null : {
+                  bootstrap: next.bootstrap === true,
+                  nodeId: next.node?.id ?? null,
+                },
+              },
+            };
+          }
           try {
             materializeIterationFeatureTree(store, task, artifactRoot);
           } catch (error) {
@@ -920,6 +1032,34 @@ export function createDefaultV2Roles({
         },
       }),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
+          const phase = task.input?.frontierPhase ?? 'feature';
+          const complete = result.result?.complete === true;
+          if (!complete) {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: phase,
+              },
+            });
+            return { state: 'DONE' };
+          }
+          if (phase === 'feature') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: 'milestone',
+              },
+            });
+            return { state: 'DONE' };
+          }
+          enqueuePlanning?.({
+            request: {
+              purpose: 'VERSION_MIGRATION_FINALIZE',
+            },
+          });
+          return { state: 'DONE' };
+        }
         if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
           if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
             enqueuePlanning?.({
