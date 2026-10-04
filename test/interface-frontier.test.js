@@ -53,9 +53,9 @@ function contract(root, nodeType, nodeId, {
     decomposition: { kind: decomposition, reason: `${decomposition} ${nodeId}` },
     interfaces: exports.map(id => ({
       id,
-      type: 'service',
+      kind: 'executor',
       visibility: 'exported',
-      contract: `${id} contract`,
+      contract: { input: [], output: [`${id} contract`], sideEffects: [] },
     })),
     imports,
     integrationScenarios: scenarios,
@@ -306,9 +306,7 @@ test('milestone may consume exported feature interfaces but not feature internal
       decomposition: { kind: 'leaf', reason: 'single integration boundary' },
       interfaces: [{
         id: 'm0-journey',
-        type: 'journey',
-        visibility: 'exported',
-        contract: 'Player can start the supported journey.',
+        kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Player can start the supported journey.'], sideEffects: [] },
       }],
       imports: [],
       featureUses: [{
