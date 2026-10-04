@@ -107,8 +107,11 @@ export function migratePlanningModelDatabase({
 
   const plannerRoot = join(artifactRoot, 'planner');
   const legacyPlannerPath = join(migrationRoot, 'planner');
+  const legacyRevisionRoot = join(migrationRoot, 'revision-source');
   if (existsSync(plannerRoot)) {
     cpSync(plannerRoot, legacyPlannerPath, { recursive: true });
+    mkdirSync(legacyRevisionRoot, { recursive: true });
+    cpSync(plannerRoot, join(legacyRevisionRoot, 'planner'), { recursive: true });
     rmSync(plannerRoot, { recursive: true, force: true });
   }
 
@@ -131,6 +134,7 @@ export function migratePlanningModelDatabase({
     snapshotPath,
     legacyDatabasePath: legacyDbPath,
     legacyPlannerPath: existsSync(legacyPlannerPath) ? legacyPlannerPath : null,
+    legacyRevisionRoot: existsSync(join(legacyRevisionRoot, 'planner')) ? legacyRevisionRoot : null,
     strategy: 'reconstruct-and-reconcile',
   };
 
@@ -173,6 +177,7 @@ export function migratePlanningModelDatabase({
         migrationSnapshotPath: snapshotPath,
         legacyDatabasePath: legacyDbPath,
         legacyPlannerPath: migration.legacyPlannerPath,
+        legacyRevisionRoot: migration.legacyRevisionRoot,
         humanDecisions: snapshot.humanDecisions,
       },
     });
