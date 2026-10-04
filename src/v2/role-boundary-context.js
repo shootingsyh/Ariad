@@ -2,7 +2,7 @@ import {
   loadBoundaryContracts,
   loadPlannerHierarchy,
 } from './interface-contracts.js';
-import { resolveAnchorStatically } from '../runtime/code-intelligence/interface-seal.js';
+import { resolveAnchorStatically } from './interface-seal.js';
 
 function exported(contract) {
   return (contract?.interfaces ?? []).filter(entry => entry.visibility === 'exported');
