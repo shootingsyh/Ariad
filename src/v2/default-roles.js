@@ -425,10 +425,11 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
+    const sharedDeliveryContext = ['developer', 'tester', 'reviewer'].includes(task.stage);
     const roleBoundaryContext = buildRoleBoundaryContext({
       artifactRoot,
       task,
-      role: task.stage,
+      role: sharedDeliveryContext ? 'delivery' : task.stage,
       workspace,
     });
     const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
