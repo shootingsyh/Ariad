@@ -49,8 +49,15 @@ function contract(root, nodeType, id, extra = {}) {
 test('SRPG-style developer context stays on its feature boundary while tester sees milestone composition', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-role-context-'));
   try {
-    write(path.join(root, 'scripts', 'entry.gd'), "extends Node\n\nfunc new_game():\n\treturn true\n\nfunc internal_load():\n\treturn true\n");
-    write(path.join(root, 'scripts', 'progression.gd'), "extends Node\n\nfunc equip_persist():\n\treturn true\n");
+    fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'scripts', 'entry.gd'),
+      "extends Node\n\nfunc new_game():\n\treturn true\n\nfunc internal_load():\n\treturn true\n",
+    );
+    fs.writeFileSync(
+      path.join(root, 'scripts', 'progression.gd'),
+      "extends Node\n\nfunc equip_persist():\n\treturn true\n",
+    );
 
     featureNode(root, 'srpg', null, 'SRPG');
     featureNode(root, 'entry', 'srpg', 'Entry lifecycle');
