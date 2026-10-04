@@ -84,9 +84,54 @@ function migrationFrontierFlowTasks(batchId, requests) {
   ];
 }
 
+
+function migrationFinalizeFlowTasks(batchId) {
+  const id = name => taskId(batchId, name);
+  return [
+    {
+      id: id('dependencies'),
+      stage: 'tech_lead',
+      input: { planningBatchId: batchId, purpose: 'PLANNER_DEPENDENCIES', versionMigration: true },
+    },
+    {
+      id: id('validate-1'),
+      stage: 'plan_validator',
+      dependsOn: [id('dependencies')],
+      input: { planningBatchId: batchId, purpose: 'PLANNER_VALIDATE', round: 1, versionMigration: true },
+    },
+    {
+      id: id('critic-1'),
+      stage: 'tech_lead_critic',
+      dependsOn: [id('validate-1')],
+      input: { planningBatchId: batchId, purpose: 'PLANNER_CRITIC', round: 1, versionMigration: true },
+    },
+    {
+      id: id('repair-1'),
+      stage: 'tech_lead',
+      dependsOn: [id('critic-1')],
+      input: { planningBatchId: batchId, purpose: 'PLANNER_REPAIR', round: 1, versionMigration: true },
+    },
+    {
+      id: id('final-validate'),
+      stage: 'plan_validator',
+      dependsOn: [id('critic-1'), id('repair-1')],
+      input: { planningBatchId: batchId, purpose: 'PLANNER_FINAL_VALIDATE', versionMigration: true },
+    },
+    {
+      id: id('pm-review'),
+      stage: 'pm',
+      dependsOn: [id('final-validate')],
+      input: { planningBatchId: batchId, purpose: 'PLANNER_PM_REVIEW', versionMigration: true },
+    },
+  ];
+}
+
 export function plannerFlowTasks(batchId, requests) {
   if (isVersionMigrationRequest(requests)) {
     return migrationFrontierFlowTasks(batchId, requests);
+  }
+  if (requests.length === 1 && requests[0]?.request?.purpose === 'VERSION_MIGRATION_FINALIZE') {
+    return migrationFinalizeFlowTasks(batchId);
   }
   const ids = {
     decompose: taskId(batchId, 'decompose'),
