@@ -42,6 +42,7 @@ export class StandaloneProjectRuntime {
     this.projectId = project.id;
     this.provider = provider;
     this.resolveRoleModel = resolveRoleModel;
+    this.codeIntelligence = codeIntelligence;
     this.store = new SQLiteV2Store(project.stateDb);
     this.resources = new ScopedResourcePool(sharedResources, project.id);
     this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
@@ -212,6 +213,7 @@ export class StandaloneProjectRuntime {
   }
 
   close() {
+    this.codeIntelligence?.close?.();
     this.store.close();
   }
 }
