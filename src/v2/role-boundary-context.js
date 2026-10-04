@@ -107,6 +107,60 @@ function compactMilestone(milestoneId, tree, contracts) {
   };
 }
 
+
+function buildSharedDeliveryContext({
+  featureIds,
+  milestoneIds,
+  featureTree,
+  milestoneTree,
+  featureContracts,
+  milestoneContracts,
+  task,
+  workspace,
+}) {
+  const milestones = milestoneIds
+    .map(id => compactMilestone(id, milestoneTree, milestoneContracts))
+    .filter(Boolean);
+
+  const selected = new Map();
+  const localInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
+  for (const featureId of featureIds) {
+    selected.set(featureId, new Set(localInterfaceIds));
+  }
+  for (const milestone of milestones) {
+    for (const use of milestone.featureUses ?? []) {
+      if (!selected.has(use.featureId)) selected.set(use.featureId, new Set());
+      selected.get(use.featureId).add(use.interfaceId);
+    }
+  }
+
+  const owningFeatures = featureIds
+    .map(id => compactFeature(id, featureTree, featureContracts, {
+      includeInternals: true,
+      interfaceIds: localInterfaceIds,
+      workspace,
+    }))
+    .filter(Boolean);
+
+  const referencedFeatureInterfaces = [...selected.entries()]
+    .map(([id, ids]) => compactFeature(id, featureTree, featureContracts, {
+      includeInternals: false,
+      interfaceIds: [...ids],
+      workspace,
+    }))
+    .filter(Boolean);
+
+  return {
+    role: 'delivery',
+    principle: 'Developer, Tester, and Reviewer operate on the same task context, interface set, bindings, diff boundary, and evidence surface. Their responsibilities differ only by role instructions.',
+    owningFeatures,
+    referencedFeatureInterfaces,
+    milestones,
+    parentExpectations: featureIds.flatMap(id => findFeatureConsumers(id, featureContracts)),
+    milestoneUses: milestoneFeatureUses(featureIds, milestoneContracts),
+  };
+}
+
 export function buildRoleBoundaryContext({ artifactRoot, task, role, workspace = null }) {
   if (!artifactRoot) return null;
 
@@ -135,6 +189,19 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role, workspace =
     task.input?.milestoneId,
     ...(task.milestoneRefs ?? []),
   ].filter(id => id && milestoneContracts.has(id)))];
+
+  if (role === 'delivery') {
+    return buildSharedDeliveryContext({
+      featureIds,
+      milestoneIds,
+      featureTree,
+      milestoneTree,
+      featureContracts,
+      milestoneContracts,
+      task,
+      workspace,
+    });
+  }
 
   if (role === 'developer') {
     const requestedInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
