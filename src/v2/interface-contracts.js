@@ -7,7 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-const INTERFACE_TYPES = new Set(['service', 'ui', 'journey', 'event', 'data']);
+const INTERFACE_KINDS = new Set(['executor', 'provider']);
 const VISIBILITIES = new Set(['internal', 'exported']);
 const DECOMPOSITION_KINDS = new Set(['leaf', 'expand']);
 
@@ -136,14 +136,74 @@ function normalizeContract(raw, expectedNodeType) {
   const interfaceIds = new Set();
   const interfaces = raw.interfaces.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(`${raw.nodeId}.interfaces[${index}] invalid`);
-    const keys = new Set(['id', 'type', 'visibility', 'contract', 'realization', 'verification']);
+    const keys = new Set(['id', 'kind', 'visibility', 'contract', 'verificationSketch', 'realization', 'verification']);
     for (const key of Object.keys(entry)) if (!keys.has(key)) fail(`${raw.nodeId}.interfaces[${index}].${key} unexpected`);
     if (typeof entry.id !== 'string' || !entry.id) fail(`${raw.nodeId}.interfaces[${index}].id required`);
     if (interfaceIds.has(entry.id)) fail(`${raw.nodeId}: duplicate interface ${entry.id}`);
     interfaceIds.add(entry.id);
-    if (!INTERFACE_TYPES.has(entry.type)) fail(`${raw.nodeId}.${entry.id}: invalid type ${entry.type}`);
+    if (!INTERFACE_KINDS.has(entry.kind)) fail(`${raw.nodeId}.${entry.id}: kind must be executor|provider`);
     if (!VISIBILITIES.has(entry.visibility)) fail(`${raw.nodeId}.${entry.id}: invalid visibility ${entry.visibility}`);
-    if (typeof entry.contract !== 'string' || !entry.contract.trim()) fail(`${raw.nodeId}.${entry.id}: contract required`);
+
+    const normalizeTextList = (value, fieldPath) => {
+      const values = typeof value === 'string' ? [value] : value;
+      if (!Array.isArray(values)) fail(`${fieldPath}: must be string|string[]`);
+      const normalized = values.map((item, itemIndex) => {
+        if (typeof item !== 'string' || !item.trim()) fail(`${fieldPath}[${itemIndex}]: non-empty string required`);
+        return item.trim();
+      });
+      return normalized;
+    };
+
+    if (!entry.contract || typeof entry.contract !== 'object' || Array.isArray(entry.contract)) {
+      fail(`${raw.nodeId}.${entry.id}: contract must be object`);
+    }
+    let normalizedSemanticContract;
+    if (entry.kind === 'executor') {
+      const allowed = new Set(['input', 'output', 'sideEffects']);
+      for (const key of Object.keys(entry.contract)) {
+        if (!allowed.has(key)) fail(`${raw.nodeId}.${entry.id}.contract.${key}: unexpected property`);
+      }
+      for (const key of ['input', 'output', 'sideEffects']) {
+        if (!(key in entry.contract)) fail(`${raw.nodeId}.${entry.id}.contract.${key}: required`);
+      }
+      normalizedSemanticContract = {
+        input: normalizeTextList(entry.contract.input, `${raw.nodeId}.${entry.id}.contract.input`),
+        output: normalizeTextList(entry.contract.output, `${raw.nodeId}.${entry.id}.contract.output`),
+        sideEffects: normalizeTextList(entry.contract.sideEffects, `${raw.nodeId}.${entry.id}.contract.sideEffects`),
+      };
+    } else {
+      const allowed = new Set(['input', 'produces']);
+      for (const key of Object.keys(entry.contract)) {
+        if (!allowed.has(key)) fail(`${raw.nodeId}.${entry.id}.contract.${key}: unexpected property`);
+      }
+      if (!('input' in entry.contract)) fail(`${raw.nodeId}.${entry.id}.contract.input: required`);
+      const produces = entry.contract.produces;
+      if (!produces || typeof produces !== 'object' || Array.isArray(produces)) {
+        fail(`${raw.nodeId}.${entry.id}.contract.produces: required object`);
+      }
+      const allowedProduces = new Set(['thing', 'input', 'output', 'sideEffects']);
+      for (const key of Object.keys(produces)) {
+        if (!allowedProduces.has(key)) fail(`${raw.nodeId}.${entry.id}.contract.produces.${key}: unexpected property`);
+      }
+      if (typeof produces.thing !== 'string' || !produces.thing.trim()) {
+        fail(`${raw.nodeId}.${entry.id}.contract.produces.thing: non-empty string required`);
+      }
+      for (const key of ['input', 'output', 'sideEffects']) {
+        if (!(key in produces)) fail(`${raw.nodeId}.${entry.id}.contract.produces.${key}: required`);
+      }
+      normalizedSemanticContract = {
+        input: normalizeTextList(entry.contract.input, `${raw.nodeId}.${entry.id}.contract.input`),
+        produces: {
+          thing: produces.thing.trim(),
+          input: normalizeTextList(produces.input, `${raw.nodeId}.${entry.id}.contract.produces.input`),
+          output: normalizeTextList(produces.output, `${raw.nodeId}.${entry.id}.contract.produces.output`),
+          sideEffects: normalizeTextList(produces.sideEffects, `${raw.nodeId}.${entry.id}.contract.produces.sideEffects`),
+        },
+      };
+    }
+    if (entry.verificationSketch != null && (typeof entry.verificationSketch !== 'string' || !entry.verificationSketch.trim())) {
+      fail(`${raw.nodeId}.${entry.id}.verificationSketch: must be a non-empty string when present`);
+    }
 
     const normalizeAnchor = (anchor, anchorPath) => {
       if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) fail(`${anchorPath}: must be object`);
@@ -167,9 +227,10 @@ function normalizeContract(raw, expectedNodeType) {
     if (!Array.isArray(verification)) fail(`${raw.nodeId}.${entry.id}.verification: must be array`);
     return {
       id: entry.id,
-      type: entry.type,
+      kind: entry.kind,
       visibility: entry.visibility,
-      contract: entry.contract,
+      contract: normalizedSemanticContract,
+      ...(entry.verificationSketch ? { verificationSketch: entry.verificationSketch.trim() } : {}),
       realization: realization.map((anchor, anchorIndex) =>
         normalizeAnchor(anchor, `${raw.nodeId}.${entry.id}.realization[${anchorIndex}]`)
       ),
@@ -351,9 +412,9 @@ function exportedInterfaces(contract) {
     .filter(entry => entry.visibility === 'exported')
     .map(entry => ({
       id: entry.id,
-      type: entry.type,
+      kind: entry.kind,
       visibility: entry.visibility,
-      contract: entry.contract,
+      contract: structuredClone(entry.contract),
     }));
 }
 
@@ -530,6 +591,10 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     `Boundary contracts: ${contractDir}`,
     'Every node present in the hierarchy must have one boundary contract.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
+    'Interface primitive model is ONLY executor|provider. Do not emit legacy service/ui/journey/event/data types.',
+    'Executor shape: {id,kind:"executor",visibility,contract:{input:string|string[],output:string|string[],sideEffects:string|string[]},verificationSketch?}.',
+    'Provider shape: {id,kind:"provider",visibility,contract:{input:string|string[],produces:{thing:string,input:string|string[],output:string|string[],sideEffects:string|string[]}},verificationSketch?}.',
+    'Use [] for semantically empty input/output/sideEffects. Provider is appropriate for UI/rendered/interactive surfaces because it produces a thing with its own interaction contract.',
     'Each interface may carry realization:[symbol|range anchors] and verification:[symbol|range anchors]. These bindings are implementation metadata and may change without changing the frozen semantic interface contract.',
     'Feature contracts may define featureTasks:[{id,title,intent,acceptanceCriteria,testStrategy,verification,interfaceIds}] DURING the feature frontier pass. interfaceIds names the exact interfaces the task implements/seals.',
     'Milestone contracts may define featureUses:[{featureId,interfaceId,purpose}] referencing exported Feature interfaces. integrationScenarios.uses can then reference them as {graph:"feature",nodeId:featureId,interfaceId}.',
