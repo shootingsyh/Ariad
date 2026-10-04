@@ -10,6 +10,14 @@ import { FunctionProvider } from '../v2/function-provider.js';
 import { createDefaultV2Roles } from '../v2/default-roles.js';
 import { ensureTakeoverReviewState } from '../v2/takeover-gate.js';
 import { applyTaskEvent } from '../v2/state-machine.js';
+import {
+  CURRENT_PLANNING_MODEL_VERSION,
+  CURRENT_STORAGE_VERSION,
+} from '../v2/schema-version.js';
+import {
+  beginPlanningModelMigration,
+  planningModelMigrationStatus,
+} from '../v2/version-migration.js';
 
 /**
  * Standalone Ariad execution composition for one project.
@@ -61,6 +69,9 @@ export class StandaloneProjectRuntime {
         projectVersion: project.projectVersion ?? 0,
         activeVersion: project.activeVersion ?? 1,
         versionHistory: [],
+        storageVersion: CURRENT_STORAGE_VERSION,
+        planningModelVersion: CURRENT_PLANNING_MODEL_VERSION,
+        planningModelMigration: null,
       });
     }
     ensureTakeoverReviewState(this.store, project.id);
@@ -111,6 +122,14 @@ export class StandaloneProjectRuntime {
       incidentSink,
     });
     this.supervisor.recover(project.id);
+  }
+
+  migratePlanningModel() {
+    return beginPlanningModelMigration({
+      store: this.store,
+      projectId: this.projectId,
+      artifactRoot: this.artifactRoot,
+    });
   }
 
   async tick({ schedule = true } = {}) {
@@ -197,6 +216,9 @@ export class StandaloneProjectRuntime {
     return {
       projectId: this.projectId,
       deliveryEnabled: project?.deliveryEnabled === true,
+      storageVersion: project?.storageVersion ?? 1,
+      planningModelVersion: project?.planningModelVersion ?? 1,
+      planningModelMigration: planningModelMigrationStatus(project),
       tasks: {
         total: tasks.length,
         ready: tasks.filter(task => task.state === 'READY').length,
