@@ -100,7 +100,7 @@ test('SRPG interface graph preloads bounded code and excludes unrelated repo-sca
 
     contract(artifactRoot, 'feature', 'srpg', {
       decomposition: { kind: 'expand', reason: 'product capabilities' },
-      interfaces: [{ id: 'playable', type: 'journey', visibility: 'exported', contract: 'Playable product.' }],
+      interfaces: [{ id: 'playable', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Playable product.'], sideEffects: [] } }],
       imports: [
         { fromNodeId: 'entry', interfaceId: 'new-game', purpose: 'start journey' },
         { fromNodeId: 'chapter_progression', interfaceId: 'chapter-unlock', purpose: 'advance journey' },
@@ -108,7 +108,7 @@ test('SRPG interface graph preloads bounded code and excludes unrelated repo-sca
       ],
     });
     contract(artifactRoot, 'feature', 'entry', {
-      interfaces: [{ id: 'new-game', type: 'ui', visibility: 'exported', contract: 'Start clean game from title.' }],
+      interfaces: [{ id: 'new-game', kind: 'provider', visibility: 'exported', contract: { input: [], produces: { thing: 'interactive surface', input: [], output: [], sideEffects: ['Start clean game from title.'] } } }],
       bindings: [{
         interfaceId: 'new-game',
         realizationAnchors: [
@@ -119,7 +119,7 @@ test('SRPG interface graph preloads bounded code and excludes unrelated repo-sca
       }],
     });
     contract(artifactRoot, 'feature', 'chapter_progression', {
-      interfaces: [{ id: 'chapter-unlock', type: 'service', visibility: 'exported', contract: 'Victory unlocks only valid next chapter.' }],
+      interfaces: [{ id: 'chapter-unlock', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Victory unlocks only valid next chapter.'], sideEffects: [] } }],
       bindings: [{
         interfaceId: 'chapter-unlock',
         realizationAnchors: [
@@ -130,7 +130,7 @@ test('SRPG interface graph preloads bounded code and excludes unrelated repo-sca
       }],
     });
     contract(artifactRoot, 'feature', 'progression', {
-      interfaces: [{ id: 'equip-persist', type: 'journey', visibility: 'exported', contract: 'Equipment persists through save/continue.' }],
+      interfaces: [{ id: 'equip-persist', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Equipment persists through save/continue.'], sideEffects: [] } }],
       bindings: [{
         interfaceId: 'equip-persist',
         realizationAnchors: [
@@ -144,11 +144,11 @@ test('SRPG interface graph preloads bounded code and excludes unrelated repo-sca
     milestone(workspace, 'V2.1', 'V2');
     contract(artifactRoot, 'milestone', 'V2', {
       decomposition: { kind: 'expand', reason: 'delivery hierarchy' },
-      interfaces: [{ id: 'release', type: 'journey', visibility: 'exported', contract: 'V2 release.' }],
+      interfaces: [{ id: 'release', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['V2 release.'], sideEffects: [] } }],
       imports: [{ fromNodeId: 'V2.1', interfaceId: 'entry-progression', purpose: 'integrate V2.1' }],
     });
     contract(artifactRoot, 'milestone', 'V2.1', {
-      interfaces: [{ id: 'entry-progression', type: 'journey', visibility: 'exported', contract: 'New game to persisted progression.' }],
+      interfaces: [{ id: 'entry-progression', kind: 'executor', visibility: 'exported', contract: { input: [], output: ['New game to persisted progression.'], sideEffects: [] } }],
       featureUses: [
         { featureId: 'entry', interfaceId: 'new-game', purpose: 'start' },
         { featureId: 'chapter_progression', interfaceId: 'chapter-unlock', purpose: 'advance' },
