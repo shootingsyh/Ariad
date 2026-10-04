@@ -255,3 +255,36 @@ export async function sealDeveloperInterfaces({
     observedCommit,
   };
 }
+
+
+export function resolveAnchorStatically({ workspace, anchor, maxLines = 120 }) {
+  const absolute = resolve(workspace, anchor.file);
+  if (!existsSync(absolute)) {
+    return { ok: false, reason: 'FILE_MISSING' };
+  }
+  const fileHash = sha256File(absolute);
+  let resolved = anchor;
+  if (anchor.kind === 'symbol') {
+    resolved = localResolveSymbol(workspace, anchor);
+    if (!resolved) return { ok: false, reason: 'SYMBOL_UNRESOLVED', fileHash };
+  }
+  if (!Number.isInteger(resolved.startLine) || !Number.isInteger(resolved.endLine)) {
+    return { ok: false, reason: 'RANGE_UNRESOLVED', fileHash };
+  }
+  const lines = readFileSync(absolute, 'utf8').split(/\r?\n/);
+  if (resolved.startLine < 1 || resolved.endLine < resolved.startLine || resolved.endLine > lines.length) {
+    return { ok: false, reason: 'RANGE_INVALID', fileHash };
+  }
+  const end = Math.min(resolved.endLine, resolved.startLine + Math.max(1, maxLines) - 1);
+  return {
+    ok: true,
+    fileHash,
+    range: {
+      startLine: resolved.startLine,
+      endLine: resolved.endLine,
+      truncated: end < resolved.endLine,
+    },
+    snippet: lines.slice(resolved.startLine - 1, end)
+      .map((text, index) => ({ line: resolved.startLine + index, text })),
+  };
+}
