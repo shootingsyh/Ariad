@@ -355,6 +355,7 @@ export function createDefaultV2Roles({
       artifactRoot,
       task,
       role: task.stage,
+      workspace,
     });
     const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
       ? `${task.stage}:${task.projectId}`
