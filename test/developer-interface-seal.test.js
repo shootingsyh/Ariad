@@ -20,9 +20,7 @@ function featureContract({ binding = null } = {}) {
     decomposition: { kind: 'leaf', reason: 'entry is bounded' },
     interfaces: [{
       id: 'new-game',
-      type: 'ui',
-      visibility: 'exported',
-      contract: 'New Game starts a clean run.',
+      kind: 'provider', visibility: 'exported', contract: { input: [], produces: { thing: 'interactive surface', input: [], output: [], sideEffects: ['New Game starts a clean run.'] } },
     }],
     imports: [],
     integrationScenarios: [],
