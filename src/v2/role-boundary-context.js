@@ -158,17 +158,25 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role, workspace =
     const milestones = milestoneIds
       .map(id => compactMilestone(id, milestoneTree, milestoneContracts))
       .filter(Boolean);
-    const directlyUsedFeatureIds = new Set([
-      ...featureIds,
-      ...milestones.flatMap(m => (m.featureUses ?? []).map(use => use.featureId)),
-    ]);
+    const selected = new Map();
+    const localInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
+    for (const featureId of featureIds) {
+      selected.set(featureId, new Set(localInterfaceIds));
+    }
+    for (const milestone of milestones) {
+      for (const use of milestone.featureUses ?? []) {
+        if (!selected.has(use.featureId)) selected.set(use.featureId, new Set());
+        selected.get(use.featureId).add(use.interfaceId);
+      }
+    }
     return {
       role: 'tester',
       principle: 'Author and execute integration/contract/UI-journey/E2E verification from declared interfaces. Drill into implementation only when an interface fails.',
       milestones,
-      featureInterfaces: [...directlyUsedFeatureIds]
-        .map(id => compactFeature(id, featureTree, featureContracts, {
+      featureInterfaces: [...selected.entries()]
+        .map(([id, ids]) => compactFeature(id, featureTree, featureContracts, {
           includeInternals: false,
+          interfaceIds: [...ids],
           workspace,
         }))
         .filter(Boolean),
@@ -179,13 +187,25 @@ export function buildRoleBoundaryContext({ artifactRoot, task, role, workspace =
     const milestones = milestoneIds
       .map(id => compactMilestone(id, milestoneTree, milestoneContracts))
       .filter(Boolean);
+    const selected = new Map();
+    const localInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
+    for (const featureId of featureIds) {
+      selected.set(featureId, new Set(localInterfaceIds));
+    }
+    for (const milestone of milestones) {
+      for (const use of milestone.featureUses ?? []) {
+        if (!selected.has(use.featureId)) selected.set(use.featureId, new Set());
+        selected.get(use.featureId).add(use.interfaceId);
+      }
+    }
     return {
       role: 'reviewer',
       principle: 'Review contract satisfaction and fresh evidence. Do not redo repository-wide discovery; drill down only to validate disputed evidence.',
       milestones,
-      featureInterfaces: featureIds
-        .map(id => compactFeature(id, featureTree, featureContracts, {
+      featureInterfaces: [...selected.entries()]
+        .map(([id, ids]) => compactFeature(id, featureTree, featureContracts, {
           includeInternals: false,
+          interfaceIds: [...ids],
           workspace,
         }))
         .filter(Boolean),
