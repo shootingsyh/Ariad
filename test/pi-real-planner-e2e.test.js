@@ -307,7 +307,25 @@ async function drive(store, scheduler, supervisor, projectId, predicate, limit =
     if (predicate()) return;
     await sleep(5);
   }
-  throw new Error('real planner Pi E2E did not settle');
+  const project = store.getProject(projectId);
+  const tasks = store.listTasks(projectId).map(task => ({
+    id: task.id,
+    stage: task.stage,
+    state: task.state,
+    flowId: task.flowId ?? null,
+    purpose: task.input?.purpose ?? null,
+    dependsOn: task.dependsOn ?? [],
+    lastHistory: (task.history ?? []).slice(-3),
+  }));
+  const requests = store.listPlanningRequests(projectId);
+  throw new Error('real planner Pi E2E did not settle: ' + JSON.stringify({
+    project: {
+      deliveryEnabled: project?.deliveryEnabled,
+      planningModelVersion: project?.planningModelVersion,
+    },
+    requests,
+    tasks,
+  }));
 }
 
 test('real Ariad planner runs critic repair, PM replan, delivery, test, and review through Pi', async () => {
