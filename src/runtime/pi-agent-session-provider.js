@@ -11,6 +11,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
+import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 
 import {
   ARIAD_PI_DEFAULT_TOOLS,
@@ -162,6 +163,9 @@ export async function createDefaultPiRunSession(spec) {
   const target = resolveAriadPiModelRef(modelRef);
   const paths = ariadPiPaths(workspace);
   mkdirSync(paths.root, { recursive: true });
+  if (!spec.context?.preservePiConfig) {
+    migrateLegacyPiAuth(paths.authPath, { providers: [target.provider] });
+  }
   if (!spec.context?.preservePiConfig) {
     ensureJson(paths.modelsPath, buildAriadPiModelsConfig(roleModels));
   }
