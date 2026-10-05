@@ -203,7 +203,7 @@ function makeRealPlannerPiFactory(workspace) {
       if (n === 1) {
         workCalls = [fauxToolCall('write', {
           path: 'feature.js',
-          content: "export const projectRun = () => 'implemented';\n",
+          content: "const projectRun = () => 'implemented';\n",
         })];
         result = {};
       } else {
@@ -452,7 +452,7 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
     }]);
     assert.equal(
       fs.readFileSync(path.join(workspace, 'feature.js'), 'utf8'),
-      "export const projectRun = () => 'implemented';\n",
+      "const projectRun = () => 'implemented';\n",
     );
     const featureContract = JSON.parse(
       fs.readFileSync(path.join(artifactRoot, 'planner', 'interfaces', 'features', 'project.json'), 'utf8'),
