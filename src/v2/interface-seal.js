@@ -295,7 +295,7 @@ export async function sealTesterInterfaces({
     return { required: false, ok: true, reason: 'TESTER_DID_NOT_CLAIM_PASS' };
   }
 
-  const owner = ownerForTask(artifactRoot, task.id);
+  let owner = ownerForTask(artifactRoot, task.id);
   if (!owner) return { required: false, ok: true, reason: 'NO_CANONICAL_FEATURE_TASK' };
   const requiredInterfaceIds = owner.featureTask.interfaceIds ?? [];
   if (requiredInterfaceIds.length === 0) {
@@ -322,6 +322,7 @@ export async function sealTesterInterfaces({
     };
   }
 
+  owner = ownerForTask(artifactRoot, task.id);
   const hints = verificationHints(result);
   const bindings = new Map(
     (owner.contract.bindings ?? []).map(binding => [binding.interfaceId, structuredClone(binding)])
