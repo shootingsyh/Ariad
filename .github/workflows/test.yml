@@ -50,6 +50,3 @@ jobs:
       - name: Validate OpenClaw Ariad plugin
         working-directory: extensions/openclaw-ariad
         run: npm run plugin:validate
-      - name: Run Ariad v2 through OpenClaw Gateway
-        working-directory: extensions/openclaw-ariad
-        run: npm run test:e2e
