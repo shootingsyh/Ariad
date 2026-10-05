@@ -7,6 +7,9 @@ import { spawn } from 'node:child_process';
 
 import { ProjectMemoryStore } from '../src/runtime/project-memory.js';
 import { codeSearch, interfaceSearch } from '../src/runtime/project-search-tools.js';
+import { sessionHistory } from '../src/runtime/session-history.js';
+import { ariadPiPaths } from '../src/runtime/pi-runtime-config.js';
+import { piSessionManagerForSpec } from '../src/runtime/pi-agent-session-provider.js';
 import { ARIAD_PROJECT_TOOL_NAMES, registerAriadProjectTools } from '../src/runtime/pi-project-tools.js';
 import { AriadControlTools } from '../src/runtime/control-tools.js';
 import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';
@@ -64,6 +67,10 @@ test('code and interface search read current workspace facts', () => {
     const code = codeSearch(workspace, 'PolicyGuard');
     assert.equal(code[0].file, 'policy.js');
     assert.match(code[0].text, /PolicyGuard/);
+    fs.writeFileSync(path.join(workspace, 'use.js'), 'console.log(PolicyGuard({ allowed: true }));\n');
+    const symbols = codeSearch(workspace, 'PolicyGuard', { mode: 'symbol' });
+    assert.equal(symbols[0].matchKind, 'declaration');
+    assert.equal(symbols[0].file, 'policy.js');
 
     const interfaces = interfaceSearch(workspace, 'policy.guard');
     assert.equal(interfaces[0].interfaceId, 'policy.guard');
@@ -80,7 +87,47 @@ test('Pi project tools expose code, interface, memory search and memory write', 
     const registered = new Map();
     registerAriadProjectTools({ registerTool(tool) { registered.set(tool.name, tool); } }, { workspace });
     assert.deepEqual([...registered.keys()].sort(), [...ARIAD_PROJECT_TOOL_NAMES].sort());
+    assert.equal(registered.has('ariad_session_history'), true);
     assert.equal(typeof registered.get('ariad_memory_search').execute, 'function');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+
+
+test('fresh Pi sessions persist history without sharing context and history reader can filter them', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-history-'));
+  try {
+    const paths = ariadPiPaths(workspace);
+    const first = piSessionManagerForSpec({
+      projectId: 'P-history',
+      taskId: 'T-one',
+      attemptId: 'P-history:T-one:developer:1',
+      role: 'developer',
+      sessionPolicy: 'fresh',
+    }, paths, workspace);
+    first.appendMessage({ role: 'user', content: 'implement alpha memory marker', timestamp: Date.now() });
+    first.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'alpha implementation completed' }], timestamp: Date.now() });
+    assert.ok(first.getSessionFile());
+
+    const second = piSessionManagerForSpec({
+      projectId: 'P-history',
+      taskId: 'T-two',
+      attemptId: 'P-history:T-two:tester:1',
+      role: 'tester',
+      sessionPolicy: 'fresh',
+    }, paths, workspace);
+    second.appendMessage({ role: 'user', content: 'verify beta memory marker', timestamp: Date.now() });
+
+    const developer = sessionHistory(workspace, { role: 'developer', sinceHours: 1 });
+    assert.equal(developer.some(event => event.taskId === 'T-one' && event.text.includes('alpha memory marker')), true);
+    assert.equal(developer.some(event => event.taskId === 'T-two'), false);
+
+    const task = sessionHistory(workspace, { taskId: 'T-two', sinceHours: 1 });
+    assert.equal(task.length, 1);
+    assert.equal(task[0].role, 'tester');
+    assert.match(task[0].text, /beta memory marker/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
