@@ -22,12 +22,10 @@ const ROLE_MODEL_REF_VERSION = 2;
 function migrateLegacyRoleModelRefs(manifest) {
   if ((manifest.roleModelRefVersion ?? 1) >= ROLE_MODEL_REF_VERSION) return { manifest, changed: false };
   const roleModels = { ...(manifest.roleModels ?? {}) };
-  let changed = false;
   for (const [role, ref] of Object.entries(roleModels)) {
     const value = String(ref ?? '').trim();
     if (value.startsWith('openai/')) {
       roleModels[role] = `openai-codex/${value.slice('openai/'.length)}`;
-      changed = true;
     }
   }
   return {
@@ -36,7 +34,7 @@ function migrateLegacyRoleModelRefs(manifest) {
       roleModels,
       roleModelRefVersion: ROLE_MODEL_REF_VERSION,
     },
-    changed: true || changed,
+    changed: true,
   };
 }
 
