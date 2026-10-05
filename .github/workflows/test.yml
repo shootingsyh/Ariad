@@ -34,8 +34,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install Node runtime dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
       - name: Install bundled Node runtime dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Install standalone Pydantic runtime dependencies
