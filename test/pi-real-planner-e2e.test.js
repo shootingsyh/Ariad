@@ -200,26 +200,40 @@ function makeRealPlannerPiFactory(workspace) {
       workCalls = [fauxToolCall('read', { path: '.ariad/artifacts/planner/milestones/M1.json' })];
     } else if (spec.role === 'developer') {
       outcome = 'PASS';
-      workCalls = [fauxToolCall('write', {
-        path: 'feature.txt',
-        content: 'implemented\n',
-      })];
-      result = {};
+      if (n === 1) {
+        workCalls = [fauxToolCall('write', {
+          path: 'feature.js',
+          content: "export const projectRun = () => 'implemented';\n",
+        })];
+        result = {};
+      } else {
+        workCalls = [fauxToolCall('read', { path: 'feature.js' })];
+        result = {
+          interfaceRealizations: [{
+            interfaceId: 'project-run',
+            anchors: [{
+              kind: 'symbol',
+              file: 'feature.js',
+              symbol: 'projectRun',
+            }],
+          }],
+        };
+      }
     } else if (spec.role === 'tester') {
       outcome = 'PASS';
-      workCalls = [fauxToolCall('read', { path: 'feature.txt' })];
+      workCalls = [fauxToolCall('read', { path: 'feature.js' })];
       result = {
         criteria: [{
           criterionId: 'AC-1',
           status: 'SATISFIED',
           evidenceType: 'behavioral',
-          evidence: ['feature.txt contains implemented'],
+          evidence: ['feature.js exports projectRun'],
           reason: 'Observed the implemented behavior.',
         }],
       };
     } else if (spec.role === 'reviewer') {
       outcome = 'PASS';
-      workCalls = [fauxToolCall('read', { path: 'feature.txt' })];
+      workCalls = [fauxToolCall('read', { path: 'feature.js' })];
     }
 
     faux.setResponses([
@@ -425,11 +439,27 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
         .map(entry => [entry.role, entry.outcome]),
       [
         ['developer', 'PASS'],
+        ['developer', 'PASS'],
         ['tester', 'PASS'],
         ['reviewer', 'PASS'],
       ],
     );
-    assert.equal(fs.readFileSync(path.join(workspace, 'feature.txt'), 'utf8'), 'implemented\n');
+    const sealFailures = delivery.history.filter(entry => entry.type === 'INTERFACE_SEAL_FAILED');
+    assert.equal(sealFailures.length, 1);
+    assert.deepEqual(sealFailures[0].failures, [{
+      interfaceId: 'project-run',
+      reason: 'MISSING_REALIZATION_BINDING',
+    }]);
+    assert.equal(
+      fs.readFileSync(path.join(workspace, 'feature.js'), 'utf8'),
+      "export const projectRun = () => 'implemented';\n",
+    );
+    const featureContract = JSON.parse(
+      fs.readFileSync(path.join(artifactRoot, 'planner', 'interfaces', 'features', 'project.json'), 'utf8'),
+    );
+    assert.equal(featureContract.bindings[0].interfaceId, 'project-run');
+    assert.equal(featureContract.bindings[0].realizationAnchors[0].status, 'VALID');
+    assert.equal(featureContract.bindings[0].realizationAnchors[0].symbol, 'projectRun');
 
     const pmRuns = providerHarness.invocations.filter(item => item.role === 'pm');
     const tlRuns = providerHarness.invocations.filter(item => item.role === 'tech_lead');
