@@ -289,7 +289,13 @@ export class PiAgentSessionProvider {
         record.session = run.session;
         await run.session.prompt(prompt);
         const result = run.getTerminalResult?.() ?? null;
-        if (!result) throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
+        if (!result) {
+          const last = Array.isArray(run.session?.messages) ? run.session.messages.at(-1) : null;
+          if (last?.role === 'assistant' && last?.stopReason === 'error' && last?.errorMessage) {
+            throw new Error(`PI_PROVIDER_ERROR: ${last.errorMessage}`);
+          }
+          throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
+        }
         record.result = result;
         record.state = 'COMPLETED';
       } catch (error) {
