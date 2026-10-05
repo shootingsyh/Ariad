@@ -446,3 +446,44 @@ test('Pi cancellation preserves cancellation diagnosis when abort ends prompt wi
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('Pi provider errors are preserved instead of misreported as missing role results', async () => {
+  const { root, workspace } = tempProject();
+  const provider = new PiAgentSessionProvider({
+    createRunSession: async () => ({
+      session: {
+        messages: [],
+        async prompt() {
+          this.messages.push({
+            role: 'assistant',
+            stopReason: 'error',
+            errorMessage: '404: model not found',
+          });
+        },
+        dispose() {},
+      },
+      getTerminalResult: () => null,
+    }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-provider-error',
+      taskId: 'T-provider-error',
+      role: 'developer',
+      workspace,
+      context: {
+        role: 'developer',
+        task: { id: 'T-provider-error', history: [] },
+      },
+    });
+    const record = provider.runs.get(handle.externalId);
+    await record.promise;
+    assert.equal(record.state, 'FAILED');
+    assert.equal(record.failure, 'PI_PROVIDER_ERROR: 404: model not found');
+  } finally {
+    await provider.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
