@@ -47,11 +47,28 @@ export class PydanticRuntimeClient {
     this.stderr = '';
   }
 
+  static withLoopbackProxyBypass(env) {
+    const childEnv = { ...(env ?? {}) };
+    const loopback = ['127.0.0.1', 'localhost', '::1'];
+    const existing = [childEnv.NO_PROXY, childEnv.no_proxy]
+      .filter(Boolean)
+      .join(',')
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean);
+    for (const host of loopback) {
+      if (!existing.includes(host)) existing.push(host);
+    }
+    childEnv.NO_PROXY = existing.join(',');
+    childEnv.no_proxy = existing.join(',');
+    return childEnv;
+  }
+
   startWorker() {
     if (this.child) return;
     const child = spawn(this.python, [this.workerPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: this.env,
+      env: PydanticRuntimeClient.withLoopbackProxyBypass(this.env),
     });
     this.child = child;
     createInterface({ input: child.stdout }).on('line', line => {
