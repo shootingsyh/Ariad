@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ensureInterfaceArtifactLayout } from '../src/v2/interface-contracts.js';
+import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { sealDeveloperInterfaces } from '../src/v2/interface-seal.js';
 
 function writeJson(file, value) {
@@ -109,6 +110,45 @@ test('developer binding hint is independently resolved and persisted before seal
     assert.equal(anchor.symbol, 'new_game');
     assert.equal(typeof anchor.fileHash, 'string');
     assert.equal(anchor.fileHash.length, 64);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('developer escalates to project debugger after three interface-seal repair attempts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-dev-seal-budget-'));
+  try {
+    const artifactRoot = path.join(root, '.ariad', 'artifacts');
+    const layout = ensureInterfaceArtifactLayout(artifactRoot);
+    writeJson(path.join(layout.featureDir, 'entry.json'), featureContract());
+
+    const roles = createDefaultV2Roles({
+      store: {},
+      workspace: root,
+      artifactRoot,
+    });
+    const task = {
+      id: 'entry-impl',
+      projectId: 'P-seal',
+      stage: 'tester',
+      history: [
+        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+      ],
+    };
+
+    const followUp = await roles.developer.afterPersist({
+      task,
+      result: { outcome: 'PASS', result: {} },
+    });
+
+    assert.equal(followUp.patch.stage, 'project_debugger');
+    assert.equal(followUp.patch.state, 'READY');
+    assert.equal(followUp.transitionHistory.type, 'INTERFACE_SEAL_FAILED');
+    assert.equal(followUp.transitionHistory.repairBudget, 3);
+    assert.equal(followUp.transitionHistory.escalatedTo, 'project_debugger');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
