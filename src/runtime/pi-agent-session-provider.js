@@ -145,14 +145,27 @@ function ensureJson(path, value) {
 
 export function piSessionManagerForSpec(spec, paths, workspace) {
   const persistent = spec.sessionPolicy === 'persistent';
-  if (!persistent) return SessionManager.inMemory(workspace);
+  const identity = persistent
+    ? String(spec.sessionKey ?? spec.context?.sessionKey ?? '').trim()
+    : String(spec.attemptId ?? spec.runId ?? `${spec.projectId ?? 'project'}:${spec.taskId ?? 'task'}:${spec.role ?? 'role'}:${Date.now()}`);
+  if (persistent && !identity) throw new Error(`Persistent Pi role ${spec.role} requires sessionKey`);
 
-  const sessionKey = String(spec.sessionKey ?? spec.context?.sessionKey ?? '').trim();
-  if (!sessionKey) throw new Error(`Persistent Pi role ${spec.role} requires sessionKey`);
-  const sessionHash = createHash('sha256').update(sessionKey).digest('hex').slice(0, 24);
-  const sessionDir = join(paths.sessionsDir, sessionHash);
+  const sessionHash = createHash('sha256').update(identity).digest('hex').slice(0, 24);
+  const scope = persistent ? 'persistent' : 'fresh';
+  const sessionDir = join(paths.sessionsDir, scope, sessionHash);
   mkdirSync(sessionDir, { recursive: true });
-  return SessionManager.continueRecent(workspace, sessionDir);
+  writeFileSync(join(sessionDir, 'ariad-session.json'), JSON.stringify({
+    projectId: spec.projectId ?? null,
+    taskId: spec.taskId ?? null,
+    role: spec.role ?? null,
+    attemptId: spec.attemptId ?? null,
+    sessionPolicy: persistent ? 'persistent' : 'fresh',
+    sessionKey: persistent ? identity : null,
+  }, null, 2) + '\n', 'utf8');
+
+  return persistent
+    ? SessionManager.continueRecent(workspace, sessionDir)
+    : SessionManager.create(workspace, sessionDir);
 }
 
 export async function createDefaultPiRunSession(spec) {
