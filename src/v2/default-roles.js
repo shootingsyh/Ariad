@@ -542,6 +542,7 @@ export function createDefaultV2Roles({
       },
       workspace,
       context: {
+        role: task.stage,
         executionCapabilities: [...executionCapabilities],
         ...(modelRef ? { roleModelRef: modelRef } : {}),
         ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
@@ -701,14 +702,14 @@ export function createDefaultV2Roles({
           if (sealFollowUp.patch) return sealFollowUp;
           if (!sourceControl || task.state !== 'DONE') return sealFollowUp;
         }
-        if (!sourceControl || task.state !== 'DONE') return null;
+        if (!sourceControl || task.state !== 'DONE') return sealFollowUp;
         store.checkpoint?.();
         const finalized = await sourceControl.finalize({
           taskId: task.id,
           strategyEpoch: strategyEpoch(task),
           devCycle: Math.max(1, failureCount(task) + 1),
         });
-        if (finalized.ok) return null;
+        if (finalized.ok) return sealFollowUp;
         const sourceControlFailures = (task.history ?? []).filter(
           entry => entry?.type === 'SYSTEM_INTERRUPTION' && entry?.role === 'source_control'
         ).length;
