@@ -9,6 +9,7 @@ import {
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 
 import {
   ARIAD_PI_DEFAULT_TOOLS,
@@ -147,8 +148,9 @@ export class PiAgentSessionProvider {
     };
     this.runs.set(externalId, record);
 
+    const rolePrompt = buildStandaloneRolePrompt(spec.context ?? {}, spec.prompt ?? '');
     const prompt = [
-      spec.prompt ?? '',
+      rolePrompt,
       '',
       'ARIAD RUNTIME CONTEXT',
       JSON.stringify({
