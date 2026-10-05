@@ -460,7 +460,7 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
         ['reviewer', 'PASS'],
       ],
     );
-    const sealFailures = delivery.history.filter(entry => entry.type === 'INTERFACE_SEAL_FAILED');
+    const sealFailures = delivery.history.filter(entry => entry.type === 'ROLE_SEAL_FAILED' && entry.ownerRole === 'developer');
     assert.equal(sealFailures.length, 1);
     assert.deepEqual(sealFailures[0].failures, [{
       interfaceId: 'project-run',
