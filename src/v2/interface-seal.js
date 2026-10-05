@@ -249,7 +249,8 @@ export async function sealDeveloperInterfaces({
       continue;
     }
 
-    const nextAnchors = [];
+    const validAnchors = [];
+    const invalidAnchors = [];
     let validCount = 0;
     for (const anchor of binding.realizationAnchors) {
       const checked = await validateAnchor({
@@ -258,10 +259,14 @@ export async function sealDeveloperInterfaces({
         anchor,
         observedCommit,
       });
-      nextAnchors.push(checked.anchor);
-      if (checked.ok) validCount += 1;
+      if (checked.ok) {
+        validAnchors.push(checked.anchor);
+        validCount += 1;
+      } else {
+        invalidAnchors.push(checked.anchor);
+      }
     }
-    binding.realizationAnchors = nextAnchors;
+    binding.realizationAnchors = validCount > 0 ? validAnchors : invalidAnchors;
     bindings.set(interfaceId, binding);
 
     if (validCount === 0) failures.push({ interfaceId, reason: 'NO_VALID_REALIZATION_ANCHOR' });
@@ -345,7 +350,8 @@ export async function sealTesterInterfaces({
         realizationAnchors: [],
         verificationAnchors: [],
       };
-      const nextAnchors = [];
+      const nextValidAnchors = [];
+      const nextInvalidAnchors = [];
       for (const anchor of hint.anchors) {
         const checked = await validateAnchor({
           workspace,
@@ -353,10 +359,14 @@ export async function sealTesterInterfaces({
           anchor,
           observedCommit,
         });
-        nextAnchors.push(checked.anchor);
-        if (checked.ok) validAnchors += 1;
+        if (checked.ok) {
+          nextValidAnchors.push(checked.anchor);
+          validAnchors += 1;
+        } else {
+          nextInvalidAnchors.push(checked.anchor);
+        }
       }
-      binding.verificationAnchors = nextAnchors;
+      binding.verificationAnchors = validAnchors > 0 ? nextValidAnchors : nextInvalidAnchors;
       bindings.set(interfaceId, binding);
       if (validAnchors === 0) {
         failures.push({ interfaceId, reason: 'NO_VALID_VERIFICATION_ANCHOR' });
