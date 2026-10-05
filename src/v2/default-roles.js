@@ -132,6 +132,20 @@ function failureCount(task) {
   return count;
 }
 
+function interfaceSealFailureCount(task) {
+  const history = task.history ?? [];
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (
+      (entry?.type === 'ROLE_RESULT' && entry.role === 'project_debugger')
+      || entry?.type === 'DEBUGGER_ROUTE'
+    ) break;
+    if (entry?.type === 'INTERFACE_SEAL_FAILED') count += 1;
+  }
+  return count;
+}
+
 function strategyEpoch(task) {
   return 1 + (task.history ?? []).filter(
     entry => entry?.type === 'ROLE_RESULT'
@@ -600,9 +614,11 @@ export function createDefaultV2Roles({
         });
         if (!seal.required) return null;
         if (!seal.ok) {
+          const priorSealFailures = interfaceSealFailureCount(task);
+          const exhaustedRepairBudget = priorSealFailures >= 3;
           return {
             patch: {
-              stage: 'developer',
+              stage: exhaustedRepairBudget ? 'project_debugger' : 'developer',
               state: 'READY',
               execution: null,
             },
@@ -611,6 +627,9 @@ export function createDefaultV2Roles({
               role: 'interface_seal',
               featureId: seal.featureId ?? null,
               failures: seal.failures ?? [],
+              repairAttempt: Math.max(0, priorSealFailures),
+              repairBudget: 3,
+              ...(exhaustedRepairBudget ? { escalatedTo: 'project_debugger' } : {}),
               at: new Date().toISOString(),
             },
           };
