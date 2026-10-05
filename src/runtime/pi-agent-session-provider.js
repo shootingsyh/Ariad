@@ -20,13 +20,118 @@ import {
 
 const RESULT_TOOL = 'ariad_role_result';
 
-function resultToolSchema() {
+const ROLE_RESULT_OUTCOMES = Object.freeze({
+  artist: ['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY'],
+  developer: ['PASS', 'NOT_PASS'],
+  tester: ['PASS', 'NOT_PASS'],
+  reviewer: ['PASS', 'NOT_PASS'],
+  project_debugger: [
+    'WRONG_IMPLEMENTATION_APPROACH',
+    'TASK_TOO_LARGE',
+    'ASSET_ISSUE',
+    'REQUIREMENT_DECISION_REQUIRED',
+    'SYSTEM_RUNTIME_FAILURE',
+    'MODEL_CAPABILITY_MISMATCH',
+    'UNKNOWN_PROJECT_CAUSE',
+  ],
+  tech_lead: ['PLANNED', 'REPLANNED'],
+  tech_lead_critic: ['CLEAN', 'MINOR_ONLY', 'ISSUES'],
+  pm: ['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN'],
+});
+
+const anchorSchema = Type.Object({
+  kind: Type.Union([Type.Literal('symbol'), Type.Literal('range')]),
+  file: Type.String({ minLength: 1 }),
+  symbol: Type.Optional(Type.String({ minLength: 1 })),
+  startLine: Type.Optional(Type.Integer({ minimum: 1 })),
+  endLine: Type.Optional(Type.Integer({ minimum: 1 })),
+}, { additionalProperties: false });
+
+const commonFields = {
+  summary: Type.String({ minLength: 1 }),
+  keyPoints: Type.Optional(Type.Array(Type.String())),
+  artifacts: Type.Optional(Type.Array(Type.String())),
+};
+
+function openResult(fields = {}) {
+  return Type.Object(fields, { additionalProperties: true });
+}
+
+export function piRoleResultToolSchema(role) {
+  const outcomes = ROLE_RESULT_OUTCOMES[role];
+  const outcome = outcomes
+    ? Type.Union(outcomes.map(value => Type.Literal(value)))
+    : Type.String({ minLength: 1 });
+
+  let result = Type.Optional(openResult());
+  if (role === 'developer') {
+    result = Type.Optional(openResult({
+      interfaceRealizations: Type.Optional(Type.Array(Type.Object({
+        interfaceId: Type.String({ minLength: 1 }),
+        anchors: Type.Array(anchorSchema),
+      }, { additionalProperties: false }))),
+    }));
+  } else if (role === 'tester') {
+    result = Type.Object({
+      criteria: Type.Array(Type.Object({
+        criterionId: Type.String({ minLength: 1 }),
+        status: Type.Union([
+          Type.Literal('SATISFIED'),
+          Type.Literal('FAILED'),
+          Type.Literal('UNVERIFIED'),
+          Type.Literal('BLOCKED'),
+        ]),
+        evidenceType: Type.Union([
+          Type.Literal('runtime'),
+          Type.Literal('static'),
+          Type.Literal('behavioral'),
+          Type.Literal('proxy'),
+          Type.Literal('manual'),
+        ]),
+        evidence: Type.Array(Type.Any()),
+        reason: Type.String({ minLength: 1 }),
+      }, { additionalProperties: false })),
+      interfaceVerifications: Type.Optional(Type.Array(Type.Object({
+        interfaceId: Type.String({ minLength: 1 }),
+        evidence: Type.Array(Type.Any()),
+        anchors: Type.Optional(Type.Array(anchorSchema)),
+      }, { additionalProperties: false }))),
+    }, { additionalProperties: true });
+  } else if (role === 'reviewer') {
+    result = Type.Optional(openResult({
+      interfaceReviews: Type.Optional(Type.Array(Type.Object({
+        interfaceId: Type.String({ minLength: 1 }),
+        status: Type.Literal('APPROVED'),
+        reason: Type.String({ minLength: 1 }),
+      }, { additionalProperties: false }))),
+    }));
+  } else if (role === 'tech_lead_critic') {
+    result = Type.Object({
+      issues: Type.Array(Type.Object({
+        severity: Type.Union([
+          Type.Literal('error'),
+          Type.Literal('major'),
+          Type.Literal('minor'),
+        ]),
+        message: Type.String({ minLength: 1 }),
+      }, { additionalProperties: false })),
+      summary: Type.String({ minLength: 1 }),
+    }, { additionalProperties: true });
+  } else if (role === 'pm') {
+    result = Type.Object({
+      reason: Type.String({ minLength: 1 }),
+      startDelivery: Type.Optional(Type.Boolean()),
+      guidance: Type.Optional(Type.String()),
+      decision: Type.Optional(Type.String()),
+      customerOutcomeSummary: Type.Optional(Type.String()),
+      questions: Type.Optional(Type.Array(Type.String())),
+    }, { additionalProperties: true });
+  }
+
   return Type.Object({
-    outcome: Type.String({ minLength: 1 }),
-    summary: Type.String({ minLength: 1 }),
-    keyPoints: Type.Optional(Type.Array(Type.String())),
-    artifacts: Type.Optional(Type.Array(Type.String())),
-    result: Type.Optional(Type.Any()),
+    outcome,
+    ...commonFields,
+    result,
   }, { additionalProperties: false });
 }
 
@@ -82,8 +187,8 @@ export async function createDefaultPiRunSession(spec) {
       pi.registerTool({
         name: RESULT_TOOL,
         label: 'Ariad role result',
-        description: 'Submit the authoritative structured result for this Ariad role. This must be the final action.',
-        parameters: resultToolSchema(),
+        description: 'Submit the authoritative structured result for this Ariad role. Arguments are strictly validated. Use only the outcome values and result shape allowed by this tool schema. This must be the final action.',
+        parameters: piRoleResultToolSchema(spec.role),
         async execute(_toolCallId, params) {
           terminalResult = {
             outcome: params.outcome,
