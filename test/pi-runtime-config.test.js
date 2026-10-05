@@ -20,7 +20,10 @@ import {
   createAriadPiTerminalTool,
   resolveAriadPiModelRef,
 } from '../src/runtime/pi-runtime-config.js';
-import { piRoleResultToolSchema } from '../src/runtime/pi-agent-session-provider.js';
+import {
+  piRoleResultToolSchema,
+  piSessionManagerForSpec,
+} from '../src/runtime/pi-agent-session-provider.js';
 
 test('Ariad bundles the Pi coding-agent SDK surface it depends on', () => {
   assert.equal(typeof createAgentSession, 'function');
@@ -167,4 +170,62 @@ test('Pi role result tool preserves Ariad strict role outcomes and structured de
   const reviewer = piRoleResultToolSchema('reviewer');
   assert.equal(reviewer.properties.result.type, 'object');
   assert.equal(reviewer.properties.result.properties.interfaceReviews.type, 'array');
+});
+
+
+test('persistent Pi role sessions resume by session key while fresh roles remain ephemeral', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pi-session-policy-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace, { recursive: true });
+  const paths = ariadPiPaths(workspace);
+
+  try {
+    const first = piSessionManagerForSpec({
+      role: 'pm',
+      sessionPolicy: 'persistent',
+      sessionKey: 'pm:P-session',
+    }, paths, workspace);
+    first.appendMessage({
+      role: 'user',
+      content: 'remember persistent-token-123',
+      timestamp: Date.now(),
+    });
+    const firstFile = first.getSessionFile();
+    assert.ok(firstFile);
+
+    const resumed = piSessionManagerForSpec({
+      role: 'pm',
+      sessionPolicy: 'persistent',
+      sessionKey: 'pm:P-session',
+    }, paths, workspace);
+    assert.equal(resumed.getSessionFile(), firstFile);
+    assert.equal(
+      resumed.buildSessionContext().messages.some(message =>
+        message.role === 'user'
+        && typeof message.content === 'string'
+        && message.content.includes('persistent-token-123')),
+      true,
+    );
+
+    const isolated = piSessionManagerForSpec({
+      role: 'tech_lead',
+      sessionPolicy: 'persistent',
+      sessionKey: 'tl:P-session',
+    }, paths, workspace);
+    assert.notEqual(isolated.getSessionDir(), resumed.getSessionDir());
+    assert.equal(isolated.buildSessionContext().messages.length, 0);
+
+    const fresh = piSessionManagerForSpec({
+      role: 'developer',
+      sessionPolicy: 'fresh',
+    }, paths, workspace);
+    fresh.appendMessage({
+      role: 'user',
+      content: 'fresh-token',
+      timestamp: Date.now(),
+    });
+    assert.equal(fresh.getSessionFile(), undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
