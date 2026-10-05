@@ -123,3 +123,44 @@ export function buildAriadPiSessionConfig({
     modelsConfig: buildAriadPiModelsConfig(roleModels),
   };
 }
+
+export function createAriadPiTerminalTool({
+  name,
+  label = name,
+  description,
+  parameters,
+  submit,
+}) {
+  if (!name || !parameters || typeof submit !== 'function') {
+    throw new Error('Pi terminal result tool requires name, parameters, and submit');
+  }
+  return {
+    name,
+    label,
+    description: description ?? 'Submit the authoritative Ariad role result. This must be the final action.',
+    parameters,
+    executionMode: 'sequential',
+    async execute(_toolCallId, params) {
+      const details = await submit(params);
+      return {
+        content: [{
+          type: 'text',
+          text: 'Ariad role result accepted and sealed.',
+        }],
+        details,
+        terminate: true,
+      };
+    },
+  };
+}
+
+export const ARIAD_PI_SPECIAL_NEEDS = Object.freeze({
+  headlessSession: 'createAgentSession',
+  workspaceTools: [...ARIAD_PI_DEFAULT_TOOLS],
+  persistentSessions: 'SessionManager',
+  cancellation: 'AgentSession.abort',
+  terminalStructuredResult: 'custom ToolDefinition result with terminate=true',
+  hostedProviders: ['openai-codex', 'meta'],
+  localProvider: 'generated llamacpp OpenAI-compatible provider',
+  providerFallback: false,
+});
