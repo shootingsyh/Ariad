@@ -279,8 +279,12 @@ export class PiAgentSessionProvider {
         record.result = result;
         record.state = 'COMPLETED';
       } catch (error) {
-        record.failure = error instanceof Error ? error.message : String(error);
-        record.state = record.state === 'CANCELLED' ? 'CANCELLED' : 'FAILED';
+        if (record.state === 'CANCELLED') {
+          record.failure = record.failure ?? 'PI_RUN_CANCELLED';
+        } else {
+          record.failure = error instanceof Error ? error.message : String(error);
+          record.state = 'FAILED';
+        }
       } finally {
         try { record.session?.dispose?.(); } catch {}
       }
