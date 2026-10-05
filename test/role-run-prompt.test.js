@@ -84,3 +84,29 @@ test('execution handoff deduplicates and bounds concrete tool-derived anchors', 
     ],
   });
 });
+
+
+test('standalone role prompt carries durable interface seal feedback into the next fresh role run', () => {
+  const prompt = buildStandaloneRolePrompt({
+    v2Prompt: 'You are the developer.',
+    task: {
+      id: 'T-seal',
+      title: 'Implement project interface',
+      history: [{
+        type: 'INTERFACE_SEAL_FAILED',
+        role: 'interface_seal',
+        featureId: 'project',
+        failures: [{
+          interfaceId: 'project-run',
+          reason: 'MISSING_REALIZATION_BINDING',
+        }],
+      }],
+    },
+  });
+
+  assert.match(prompt, /INTERFACE SEAL FEEDBACK/);
+  assert.match(prompt, /project-run/);
+  assert.match(prompt, /MISSING_REALIZATION_BINDING/);
+  assert.match(prompt, /Preserve completed implementation work/);
+  assert.match(prompt, /result\.interfaceRealizations/);
+});
