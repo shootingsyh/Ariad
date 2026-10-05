@@ -54,9 +54,7 @@ export function interfaceSearch(workspace, query, { limit = 20 } = {}) {
   return hits;
 }
 
-export function codeSearch(workspace, query, { limit = 40 } = {}) {
-  const needle = String(query ?? '').trim();
-  if (!needle) throw new Error('code search query is required');
+function rgHits(workspace, needle, limit) {
   try {
     const stdout = execFileSync('rg', [
       '--json', '--smart-case', '--hidden',
@@ -85,4 +83,38 @@ export function codeSearch(workspace, query, { limit = 40 } = {}) {
     if (error?.status === 1) return [];
     throw new Error(`code_search failed: ${error?.message ?? String(error)}`);
   }
+}
+
+function declarationRegex(symbol) {
+  const escaped = String(symbol).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    '\\b(?:class|function|interface|type|enum|struct|def|fn|func|const|let|var)\\s+' + escaped +
+      '\\b|\\b' + escaped + '\\s*[:=]\\s*(?:async\\s*)?(?:function|\\(|class)',
+    'i',
+  );
+}
+
+export function codeSearch(workspace, query, { limit = 40, mode = 'text' } = {}) {
+  const needle = String(query ?? '').trim();
+  if (!needle) throw new Error('code search query is required');
+  const hits = rgHits(workspace, needle, mode === 'symbol' ? Math.max(limit * 3, limit) : limit);
+  if (mode !== 'symbol') return hits.slice(0, limit);
+
+  const declaration = declarationRegex(needle);
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const exactWord = new RegExp('\\b' + escaped + '\\b');
+  const rank = { declaration: 0, 'symbol-reference': 1, text: 2 };
+  return hits
+    .map(hit => ({
+      ...hit,
+      matchKind: declaration.test(hit.text)
+        ? 'declaration'
+        : (exactWord.test(hit.text) ? 'symbol-reference' : 'text'),
+    }))
+    .sort((a, b) =>
+      rank[a.matchKind] - rank[b.matchKind]
+      || String(a.file).localeCompare(String(b.file))
+      || (a.line ?? 0) - (b.line ?? 0)
+    )
+    .slice(0, limit);
 }
