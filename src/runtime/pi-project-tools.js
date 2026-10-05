@@ -1,6 +1,7 @@
 import { Type } from 'typebox';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
+import { sessionHistory } from './session-history.js';
 
 function textResult(value) {
   return {
@@ -14,6 +15,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_interface_search',
   'ariad_memory_search',
   'ariad_memory_write',
+  'ariad_session_history',
 ]);
 
 export function registerAriadProjectTools(pi, { workspace }) {
@@ -24,9 +26,13 @@ export function registerAriadProjectTools(pi, { workspace }) {
     parameters: Type.Object({
       query: Type.String({ minLength: 1 }),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      mode: Type.Optional(Type.Union([Type.Literal('text'), Type.Literal('symbol')])),
     }, { additionalProperties: false }),
     async execute(_id, params) {
-      return textResult({ hits: codeSearch(workspace, params.query, { limit: params.limit ?? 40 }) });
+      return textResult({ hits: codeSearch(workspace, params.query, {
+        limit: params.limit ?? 40,
+        mode: params.mode ?? 'text',
+      }) });
     },
   });
 
@@ -61,6 +67,23 @@ export function registerAriadProjectTools(pi, { workspace }) {
       } finally {
         store.close();
       }
+    },
+  });
+
+
+  pi.registerTool({
+    name: 'ariad_session_history',
+    label: 'Ariad session history',
+    description: 'Read recent persisted Pi session history for this project. Use this for memory curation or historical debugging; it does not modify memory.',
+    parameters: Type.Object({
+      sinceHours: Type.Optional(Type.Number({ minimum: 0, maximum: 720 })),
+      role: Type.Optional(Type.String()),
+      taskId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+      maxChars: Type.Optional(Type.Integer({ minimum: 1000, maximum: 100000 })),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      return textResult({ events: sessionHistory(workspace, params) });
     },
   });
 
