@@ -544,7 +544,10 @@ export function createDefaultV2Roles({
       context: {
         role: task.stage,
         executionCapabilities: [...executionCapabilities],
-        ...(modelRef ? { roleModelRef: modelRef } : {}),
+        ...(modelRef ? {
+          roleModelRef: modelRef,
+          roleModels: { [task.stage]: modelRef },
+        } : {}),
         ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
         ...(roleBoundaryContext ? { roleBoundaryContext } : {}),
