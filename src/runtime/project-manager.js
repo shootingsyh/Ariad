@@ -17,6 +17,29 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+const ROLE_MODEL_REF_VERSION = 2;
+
+function migrateLegacyRoleModelRefs(manifest) {
+  if ((manifest.roleModelRefVersion ?? 1) >= ROLE_MODEL_REF_VERSION) return { manifest, changed: false };
+  const roleModels = { ...(manifest.roleModels ?? {}) };
+  let changed = false;
+  for (const [role, ref] of Object.entries(roleModels)) {
+    const value = String(ref ?? '').trim();
+    if (value.startsWith('openai/')) {
+      roleModels[role] = `openai-codex/${value.slice('openai/'.length)}`;
+      changed = true;
+    }
+  }
+  return {
+    manifest: {
+      ...manifest,
+      roleModels,
+      roleModelRefVersion: ROLE_MODEL_REF_VERSION,
+    },
+    changed: true || changed,
+  };
+}
+
 function ensureAriadGitignore(ariadDir) {
   const file = join(ariadDir, '.gitignore');
   if (!existsSync(file)) {
@@ -154,6 +177,7 @@ export class AriadProjectManager {
       projectVersion: 0,
       activeVersion: 1,
       roleModels: completeRoleModels,
+      roleModelRefVersion: ROLE_MODEL_REF_VERSION,
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {
@@ -238,7 +262,12 @@ export class AriadProjectManager {
   status(name) {
     const p = this.migrateLegacyLayout(name);
     if (!existsSync(p.manifest)) throw new Error(`unknown Ariad project: ${p.id}`);
-    const manifest = readJson(p.manifest);
+    let manifest = readJson(p.manifest);
+    const migrated = migrateLegacyRoleModelRefs(manifest);
+    if (migrated.changed) {
+      manifest = migrated.manifest;
+      writeJson(p.manifest, manifest);
+    }
     const frontdeskBinding = manifest.frontdeskBinding ?? manifest.projectAgent ?? null;
     const { projectAgent: _legacyProjectAgent, ...rest } = manifest;
     return {
