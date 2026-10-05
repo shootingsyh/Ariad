@@ -141,6 +141,18 @@ function ensureJson(path, value) {
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
 }
 
+export function piSessionManagerForSpec(spec, paths, workspace) {
+  const persistent = spec.sessionPolicy === 'persistent';
+  if (!persistent) return SessionManager.inMemory(workspace);
+
+  const sessionKey = String(spec.sessionKey ?? spec.context?.sessionKey ?? '').trim();
+  if (!sessionKey) throw new Error(`Persistent Pi role ${spec.role} requires sessionKey`);
+  const sessionHash = createHash('sha256').update(sessionKey).digest('hex').slice(0, 24);
+  const sessionDir = join(paths.sessionsDir, sessionHash);
+  mkdirSync(sessionDir, { recursive: true });
+  return SessionManager.continueRecent(workspace, sessionDir);
+}
+
 export async function createDefaultPiRunSession(spec) {
   const workspace = spec.workspace || process.cwd();
   const roleModels = spec.context?.roleModels ?? {};
@@ -209,18 +221,7 @@ export async function createDefaultPiRunSession(spec) {
   });
   await loader.reload();
 
-  const persistent = spec.sessionPolicy === 'persistent';
-  let sessionManager;
-  if (persistent) {
-    const sessionKey = String(spec.sessionKey ?? spec.context?.sessionKey ?? '').trim();
-    if (!sessionKey) throw new Error(`Persistent Pi role ${spec.role} requires sessionKey`);
-    const sessionHash = createHash('sha256').update(sessionKey).digest('hex').slice(0, 24);
-    const sessionDir = join(paths.sessionsDir, sessionHash);
-    mkdirSync(sessionDir, { recursive: true });
-    sessionManager = SessionManager.continueRecent(workspace, sessionDir);
-  } else {
-    sessionManager = SessionManager.inMemory(workspace);
-  }
+  const sessionManager = piSessionManagerForSpec(spec, paths, workspace);
 
   const { session } = await createAgentSession({
     cwd: workspace,
