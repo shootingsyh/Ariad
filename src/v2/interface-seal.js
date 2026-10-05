@@ -90,6 +90,33 @@ function resultHints(result) {
   return map;
 }
 
+function verificationHints(result) {
+  const payload = result?.result ?? result ?? {};
+  const items = payload?.interfaceVerifications;
+  if (!Array.isArray(items)) return new Map();
+  const map = new Map();
+  for (const item of items) {
+    if (!item || typeof item.interfaceId !== 'string') continue;
+    const anchors = Array.isArray(item.anchors)
+      ? item.anchors.map(normalizeHintAnchor).filter(Boolean)
+      : [];
+    map.set(item.interfaceId, {
+      evidence: Array.isArray(item.evidence) ? structuredClone(item.evidence) : [],
+      anchors,
+    });
+  }
+  return map;
+}
+
+function reviewerHints(result) {
+  const payload = result?.result ?? result ?? {};
+  const items = payload?.interfaceReviews;
+  if (!Array.isArray(items)) return new Map();
+  return new Map(items
+    .filter(item => item && typeof item.interfaceId === 'string')
+    .map(item => [item.interfaceId, structuredClone(item)]));
+}
+
 function ownerForTask(artifactRoot, taskId) {
   const contracts = loadBoundaryContracts(artifactRoot, 'feature');
   for (const [featureId, contract] of contracts) {
@@ -254,6 +281,209 @@ export async function sealDeveloperInterfaces({
     failures,
     observedCommit,
   };
+}
+
+
+export async function sealTesterInterfaces({
+  artifactRoot,
+  workspace,
+  task,
+  result = null,
+  codeIntelligence = null,
+}) {
+  if (result?.outcome && result.outcome !== 'PASS') {
+    return { required: false, ok: true, reason: 'TESTER_DID_NOT_CLAIM_PASS' };
+  }
+
+  const owner = ownerForTask(artifactRoot, task.id);
+  if (!owner) return { required: false, ok: true, reason: 'NO_CANONICAL_FEATURE_TASK' };
+  const requiredInterfaceIds = owner.featureTask.interfaceIds ?? [];
+  if (requiredInterfaceIds.length === 0) {
+    return { required: false, ok: true, reason: 'FEATURE_TASK_HAS_NO_INTERFACE_IDS' };
+  }
+
+  const realizationSeal = await sealDeveloperInterfaces({
+    artifactRoot,
+    workspace,
+    task,
+    result: null,
+    codeIntelligence,
+  });
+  if (realizationSeal.required && !realizationSeal.ok) {
+    return {
+      required: true,
+      ok: false,
+      featureId: owner.featureId,
+      repairRole: 'developer',
+      failures: realizationSeal.failures.map(failure => ({
+        ...failure,
+        reason: `REALIZATION_${failure.reason}`,
+      })),
+    };
+  }
+
+  const hints = verificationHints(result);
+  const bindings = new Map(
+    (owner.contract.bindings ?? []).map(binding => [binding.interfaceId, structuredClone(binding)])
+  );
+  const observedCommit = headCommit(workspace);
+  const failures = [];
+  const sealed = [];
+
+  for (const interfaceId of requiredInterfaceIds) {
+    const hint = hints.get(interfaceId);
+    if (!hint || hint.evidence.length === 0) {
+      failures.push({ interfaceId, reason: 'MISSING_INTERFACE_VERIFICATION_EVIDENCE' });
+      continue;
+    }
+
+    let validAnchors = 0;
+    if (hint.anchors.length > 0) {
+      const binding = bindings.get(interfaceId) ?? {
+        interfaceId,
+        realizationAnchors: [],
+        verificationAnchors: [],
+      };
+      const nextAnchors = [];
+      for (const anchor of hint.anchors) {
+        const checked = await validateAnchor({
+          workspace,
+          codeIntelligence,
+          anchor,
+          observedCommit,
+        });
+        nextAnchors.push(checked.anchor);
+        if (checked.ok) validAnchors += 1;
+      }
+      binding.verificationAnchors = nextAnchors;
+      bindings.set(interfaceId, binding);
+      if (validAnchors === 0) {
+        failures.push({ interfaceId, reason: 'NO_VALID_VERIFICATION_ANCHOR' });
+        continue;
+      }
+    }
+
+    sealed.push({
+      interfaceId,
+      evidenceCount: hint.evidence.length,
+      validAnchors,
+    });
+  }
+
+  owner.contract.bindings = [...bindings.values()].sort((a, b) =>
+    a.interfaceId.localeCompare(b.interfaceId)
+  );
+  writeContract(artifactRoot, owner.featureId, owner.contract);
+
+  return {
+    required: true,
+    ok: failures.length === 0,
+    featureId: owner.featureId,
+    repairRole: failures.some(failure => failure.reason.startsWith('REALIZATION_'))
+      ? 'developer'
+      : 'tester',
+    sealed,
+    failures,
+    observedCommit,
+  };
+}
+
+export async function sealReviewerInterfaces({
+  artifactRoot,
+  workspace,
+  task,
+  result = null,
+  codeIntelligence = null,
+}) {
+  if (result?.outcome && result.outcome !== 'PASS') {
+    return { required: false, ok: true, reason: 'REVIEWER_DID_NOT_CLAIM_PASS' };
+  }
+
+  const owner = ownerForTask(artifactRoot, task.id);
+  if (!owner) return { required: false, ok: true, reason: 'NO_CANONICAL_FEATURE_TASK' };
+  const requiredInterfaceIds = owner.featureTask.interfaceIds ?? [];
+  if (requiredInterfaceIds.length === 0) {
+    return { required: false, ok: true, reason: 'FEATURE_TASK_HAS_NO_INTERFACE_IDS' };
+  }
+
+  const realizationSeal = await sealDeveloperInterfaces({
+    artifactRoot,
+    workspace,
+    task,
+    result: null,
+    codeIntelligence,
+  });
+  if (realizationSeal.required && !realizationSeal.ok) {
+    return {
+      required: true,
+      ok: false,
+      featureId: owner.featureId,
+      repairRole: 'developer',
+      failures: realizationSeal.failures.map(failure => ({
+        ...failure,
+        reason: `REALIZATION_${failure.reason}`,
+      })),
+    };
+  }
+
+  const testerResult = [...(task.history ?? [])].reverse().find(
+    entry => entry?.type === 'ROLE_RESULT' && entry?.role === 'tester'
+  ) ?? null;
+  const testerSeal = await sealTesterInterfaces({
+    artifactRoot,
+    workspace,
+    task,
+    result: testerResult,
+    codeIntelligence,
+  });
+  if (testerSeal.required && !testerSeal.ok) {
+    return {
+      required: true,
+      ok: false,
+      featureId: owner.featureId,
+      repairRole: testerSeal.repairRole ?? 'tester',
+      failures: testerSeal.failures,
+    };
+  }
+
+  const reviews = reviewerHints(result);
+  const failures = [];
+  const sealed = [];
+  for (const interfaceId of requiredInterfaceIds) {
+    const review = reviews.get(interfaceId);
+    if (!review) {
+      failures.push({ interfaceId, reason: 'MISSING_INTERFACE_REVIEW' });
+      continue;
+    }
+    if (review.status !== 'APPROVED') {
+      failures.push({
+        interfaceId,
+        reason: 'INTERFACE_REVIEW_NOT_APPROVED',
+        status: review.status ?? null,
+      });
+      continue;
+    }
+    sealed.push({ interfaceId, status: 'APPROVED' });
+  }
+
+  return {
+    required: true,
+    ok: failures.length === 0,
+    featureId: owner.featureId,
+    repairRole: 'reviewer',
+    sealed,
+    failures,
+  };
+}
+
+export async function sealRoleInterfaces({
+  role,
+  ...args
+}) {
+  if (role === 'developer') return sealDeveloperInterfaces(args);
+  if (role === 'tester') return sealTesterInterfaces(args);
+  if (role === 'reviewer') return sealReviewerInterfaces(args);
+  return { required: false, ok: true, reason: 'ROLE_HAS_NO_INTERFACE_SEAL' };
 }
 
 
