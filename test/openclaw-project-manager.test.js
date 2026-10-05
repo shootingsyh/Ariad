@@ -471,3 +471,45 @@ test('adopt can register an untracked existing repository as a TAKEOVER project'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('legacy OpenAI role refs migrate once to Codex while new OpenAI refs remain API refs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-openai-ref-migration-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(dir, 'projects') });
+  try {
+    const legacyPaths = manager.paths('Legacy OpenAI');
+    mkdirSync(join(legacyPaths.workspace, '.ariad'), { recursive: true });
+    const legacyModels = testRoleModels();
+    legacyModels.pm = 'openai/gpt-5.6-sol';
+    writeFileSync(legacyPaths.manifest, JSON.stringify({
+      id: legacyPaths.id,
+      name: 'Legacy OpenAI',
+      desiredState: 'STOPPED',
+      executionState: 'IDLE',
+      projectVersion: 0,
+      activeVersion: 1,
+      workspace: legacyPaths.workspace,
+      stateDb: legacyPaths.db,
+      roleModels: legacyModels,
+    }, null, 2) + '\n');
+
+    const migrated = manager.status('Legacy OpenAI');
+    assert.equal(migrated.roleModels.pm, 'openai-codex/gpt-5.6-sol');
+    assert.equal(migrated.roleModelRefVersion, 2);
+    const persisted = JSON.parse(readFileSync(legacyPaths.manifest, 'utf8'));
+    assert.equal(persisted.roleModels.pm, 'openai-codex/gpt-5.6-sol');
+    assert.equal(persisted.roleModelRefVersion, 2);
+
+    const newModels = testRoleModels();
+    newModels.pm = 'openai/gpt-5.6-sol';
+    const created = manager.create('New OpenAI API', {
+      goal: 'Use API semantics explicitly',
+      roleModels: newModels,
+    });
+    assert.equal(created.roleModels.pm, 'openai/gpt-5.6-sol');
+    assert.equal(created.roleModelRefVersion, 2);
+    assert.equal(manager.status('New OpenAI API').roleModels.pm, 'openai/gpt-5.6-sol');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
