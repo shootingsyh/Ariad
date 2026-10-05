@@ -227,13 +227,29 @@ function makeRealPlannerPiFactory(workspace) {
           criterionId: 'AC-1',
           status: 'SATISFIED',
           evidenceType: 'behavioral',
-          evidence: ['feature.js exports projectRun'],
+          evidence: ['feature.js defines projectRun'],
           reason: 'Observed the implemented behavior.',
+        }],
+        interfaceVerifications: [{
+          interfaceId: 'project-run',
+          evidence: ['feature.js defines projectRun and returns implemented'],
+          anchors: [{
+            kind: 'symbol',
+            file: 'feature.js',
+            symbol: 'projectRun',
+          }],
         }],
       };
     } else if (spec.role === 'reviewer') {
       outcome = 'PASS';
       workCalls = [fauxToolCall('read', { path: 'feature.js' })];
+      result = {
+        interfaceReviews: [{
+          interfaceId: 'project-run',
+          status: 'APPROVED',
+          reason: 'Implementation and fresh tester evidence agree with the contract.',
+        }],
+      };
     }
 
     faux.setResponses([
@@ -460,6 +476,14 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
     assert.equal(featureContract.bindings[0].interfaceId, 'project-run');
     assert.equal(featureContract.bindings[0].realizationAnchors[0].status, 'VALID');
     assert.equal(featureContract.bindings[0].realizationAnchors[0].symbol, 'projectRun');
+    assert.equal(featureContract.bindings[0].verificationAnchors[0].status, 'VALID');
+    assert.equal(featureContract.bindings[0].verificationAnchors[0].symbol, 'projectRun');
+
+    const roleSeals = delivery.history.filter(entry => entry.type === 'ROLE_SEALED');
+    assert.deepEqual(
+      roleSeals.map(entry => entry.ownerRole),
+      ['developer', 'tester', 'reviewer'],
+    );
 
     const pmRuns = providerHarness.invocations.filter(item => item.role === 'pm');
     const tlRuns = providerHarness.invocations.filter(item => item.role === 'tech_lead');
