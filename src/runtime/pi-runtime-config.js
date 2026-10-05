@@ -1,0 +1,125 @@
+import { join } from 'node:path';
+
+export const ARIAD_PI_DEFAULT_TOOLS = Object.freeze([
+  'read',
+  'bash',
+  'edit',
+  'write',
+  'grep',
+  'find',
+  'ls',
+]);
+
+export function resolveAriadPiModelRef(modelRef) {
+  const value = String(modelRef ?? '').trim();
+  const slash = value.indexOf('/');
+  if (slash <= 0 || slash === value.length - 1) {
+    throw new Error(`Invalid Ariad model ref: ${modelRef}`);
+  }
+  const provider = value.slice(0, slash);
+  const model = value.slice(slash + 1);
+
+  if (provider === 'openai') {
+    return {
+      ariadRef: value,
+      provider: 'openai-codex',
+      model,
+      auth: 'subscription-or-pi-auth',
+    };
+  }
+  if (provider === 'meta') {
+    return {
+      ariadRef: value,
+      provider: 'meta',
+      model,
+      auth: 'META_API_KEY-or-pi-auth',
+    };
+  }
+  if (provider === 'llamacpp') {
+    return {
+      ariadRef: value,
+      provider: 'llamacpp',
+      model,
+      auth: 'none',
+    };
+  }
+
+  throw new Error(`MODEL_PROVIDER_UNAVAILABLE: no bundled Pi mapping for ${value}`);
+}
+
+export function piToolsForRole(_role) {
+  // Keep the same general-purpose coding-agent capability boundary that Ariad
+  // historically delegated to OpenClaw. Role semantics remain in Ariad prompts
+  // and state transitions; Pi owns the mechanics of executing one role session.
+  return [...ARIAD_PI_DEFAULT_TOOLS];
+}
+
+export function buildAriadPiModelsConfig(roleModels = {}, {
+  llamaCppBaseUrl = process.env.ARIAD_LLAMACPP_BASE_URL || 'http://127.0.0.1:18080/v1',
+} = {}) {
+  const localModels = [...new Set(
+    Object.values(roleModels)
+      .map(value => String(value ?? '').trim())
+      .filter(value => value.startsWith('llamacpp/'))
+      .map(value => value.slice('llamacpp/'.length))
+      .filter(Boolean),
+  )].sort();
+
+  if (localModels.length === 0) return { providers: {} };
+
+  return {
+    providers: {
+      llamacpp: {
+        baseUrl: llamaCppBaseUrl,
+        api: 'openai-completions',
+        apiKey: 'not-needed',
+        models: localModels.map(id => ({
+          id,
+          name: id,
+          reasoning: true,
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 131072,
+          maxTokens: 32768,
+        })),
+      },
+    },
+  };
+}
+
+export function ariadPiPaths(workspace) {
+  const root = join(workspace, '.ariad', 'pi');
+  return {
+    root,
+    authPath: join(root, 'auth.json'),
+    modelsPath: join(root, 'models.json'),
+    sessionsDir: join(root, 'sessions'),
+  };
+}
+
+export function buildAriadPiSessionConfig({
+  workspace,
+  role,
+  modelRef,
+  roleModels = {},
+  sessionPolicy = 'fresh',
+  sessionKey = null,
+} = {}) {
+  if (!workspace) throw new Error('Pi role runtime requires workspace');
+  if (!role) throw new Error('Pi role runtime requires role');
+  if (!modelRef) throw new Error('Pi role runtime requires explicit modelRef');
+
+  const model = resolveAriadPiModelRef(modelRef);
+  const paths = ariadPiPaths(workspace);
+
+  return {
+    cwd: workspace,
+    role,
+    model,
+    tools: piToolsForRole(role),
+    sessionPolicy,
+    sessionKey: sessionPolicy === 'persistent' ? sessionKey : null,
+    paths,
+    modelsConfig: buildAriadPiModelsConfig(roleModels),
+  };
+}
