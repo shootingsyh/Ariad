@@ -6,7 +6,11 @@ import path from 'node:path';
 
 import { ensureInterfaceArtifactLayout } from '../src/v2/interface-contracts.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
-import { sealDeveloperInterfaces } from '../src/v2/interface-seal.js';
+import {
+  sealDeveloperInterfaces,
+  sealReviewerInterfaces,
+  sealTesterInterfaces,
+} from '../src/v2/interface-seal.js';
 
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -133,9 +137,9 @@ test('developer escalates to project debugger after three interface-seal repair 
       projectId: 'P-seal',
       stage: 'tester',
       history: [
-        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
-        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
-        { type: 'INTERFACE_SEAL_FAILED', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+        { type: 'ROLE_SEAL_FAILED', ownerRole: 'developer', repairRole: 'developer', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+        { type: 'ROLE_SEAL_FAILED', ownerRole: 'developer', repairRole: 'developer', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
+        { type: 'ROLE_SEAL_FAILED', ownerRole: 'developer', repairRole: 'developer', failures: [{ interfaceId: 'new-game', reason: 'MISSING_REALIZATION_BINDING' }] },
       ],
     };
 
@@ -146,9 +150,152 @@ test('developer escalates to project debugger after three interface-seal repair 
 
     assert.equal(followUp.patch.stage, 'project_debugger');
     assert.equal(followUp.patch.state, 'READY');
-    assert.equal(followUp.transitionHistory.type, 'INTERFACE_SEAL_FAILED');
+    assert.equal(followUp.transitionHistory.type, 'ROLE_SEAL_FAILED');
+    assert.equal(followUp.transitionHistory.ownerRole, 'developer');
     assert.equal(followUp.transitionHistory.repairBudget, 3);
     assert.equal(followUp.transitionHistory.escalatedTo, 'project_debugger');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('tester seal requires per-interface fresh evidence and persists resolvable verification anchors', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-tester-seal-'));
+  try {
+    fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'scripts', 'entry.gd'),
+      'extends Node\n\nfunc new_game():\n\treturn true\n',
+    );
+    fs.writeFileSync(
+      path.join(root, 'scripts', 'entry_test.gd'),
+      'extends Node\n\nfunc test_new_game():\n\treturn true\n',
+    );
+
+    const artifactRoot = path.join(root, '.ariad', 'artifacts');
+    const layout = ensureInterfaceArtifactLayout(artifactRoot);
+    writeJson(path.join(layout.featureDir, 'entry.json'), featureContract({
+      binding: {
+        interfaceId: 'new-game',
+        realizationAnchors: [{
+          kind: 'symbol',
+          file: 'scripts/entry.gd',
+          symbol: 'new_game',
+        }],
+        verificationAnchors: [],
+      },
+    }));
+
+    const missing = await sealTesterInterfaces({
+      artifactRoot,
+      workspace: root,
+      task: { id: 'entry-impl' },
+      result: { outcome: 'PASS', result: {} },
+    });
+    assert.equal(missing.ok, false);
+    assert.deepEqual(missing.failures, [{
+      interfaceId: 'new-game',
+      reason: 'MISSING_INTERFACE_VERIFICATION_EVIDENCE',
+    }]);
+
+    const sealed = await sealTesterInterfaces({
+      artifactRoot,
+      workspace: root,
+      task: { id: 'entry-impl' },
+      result: {
+        outcome: 'PASS',
+        result: {
+          interfaceVerifications: [{
+            interfaceId: 'new-game',
+            evidence: ['fresh runtime verification passed'],
+            anchors: [{
+              kind: 'symbol',
+              file: 'scripts/entry_test.gd',
+              symbol: 'test_new_game',
+            }],
+          }],
+        },
+      },
+    });
+    assert.equal(sealed.ok, true);
+
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(layout.featureDir, 'entry.json'), 'utf8')
+    );
+    assert.equal(persisted.bindings[0].verificationAnchors[0].status, 'VALID');
+    assert.equal(persisted.bindings[0].verificationAnchors[0].symbol, 'test_new_game');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('reviewer seal requires approved review for every interface and checks tester chain', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-reviewer-seal-'));
+  try {
+    fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'scripts', 'entry.gd'),
+      'extends Node\n\nfunc new_game():\n\treturn true\n',
+    );
+
+    const artifactRoot = path.join(root, '.ariad', 'artifacts');
+    const layout = ensureInterfaceArtifactLayout(artifactRoot);
+    writeJson(path.join(layout.featureDir, 'entry.json'), featureContract({
+      binding: {
+        interfaceId: 'new-game',
+        realizationAnchors: [{
+          kind: 'symbol',
+          file: 'scripts/entry.gd',
+          symbol: 'new_game',
+        }],
+        verificationAnchors: [],
+      },
+    }));
+
+    const task = {
+      id: 'entry-impl',
+      history: [{
+        type: 'ROLE_RESULT',
+        role: 'tester',
+        outcome: 'PASS',
+        result: {
+          interfaceVerifications: [{
+            interfaceId: 'new-game',
+            evidence: ['fresh behavior passed'],
+          }],
+        },
+      }],
+    };
+
+    const missing = await sealReviewerInterfaces({
+      artifactRoot,
+      workspace: root,
+      task,
+      result: { outcome: 'PASS', result: {} },
+    });
+    assert.equal(missing.ok, false);
+    assert.deepEqual(missing.failures, [{
+      interfaceId: 'new-game',
+      reason: 'MISSING_INTERFACE_REVIEW',
+    }]);
+
+    const sealed = await sealReviewerInterfaces({
+      artifactRoot,
+      workspace: root,
+      task,
+      result: {
+        outcome: 'PASS',
+        result: {
+          interfaceReviews: [{
+            interfaceId: 'new-game',
+            status: 'APPROVED',
+            reason: 'Contract, realization, and fresh tester evidence agree.',
+          }],
+        },
+      },
+    });
+    assert.equal(sealed.ok, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
