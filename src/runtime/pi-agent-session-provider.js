@@ -12,6 +12,7 @@ import {
 import { Type } from 'typebox';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
+import { ARIAD_PROJECT_TOOL_NAMES, registerAriadProjectTools } from './pi-project-tools.js';
 
 import {
   ARIAD_PI_DEFAULT_TOOLS,
@@ -201,6 +202,7 @@ export async function createDefaultPiRunSession(spec) {
     noThemes: true,
     noContextFiles: true,
     extensionFactories: [(pi) => {
+      registerAriadProjectTools(pi, { workspace });
       pi.registerTool({
         name: RESULT_TOOL,
         label: 'Ariad role result',
@@ -235,7 +237,7 @@ export async function createDefaultPiRunSession(spec) {
     resourceLoader: loader,
     settingsManager,
     sessionManager,
-    tools: [...ARIAD_PI_DEFAULT_TOOLS, RESULT_TOOL],
+    tools: [...ARIAD_PI_DEFAULT_TOOLS, ...ARIAD_PROJECT_TOOL_NAMES, RESULT_TOOL],
   });
   await session.bindExtensions({ mode: 'json' });
 
