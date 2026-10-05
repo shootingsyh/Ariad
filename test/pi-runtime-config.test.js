@@ -180,7 +180,7 @@ test('Pi role result tool preserves Ariad strict role outcomes and structured de
 });
 
 
-test('persistent Pi role sessions resume by session key while fresh roles remain ephemeral', () => {
+test('persistent Pi role sessions resume by session key while fresh roles are isolated and persisted', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pi-session-policy-'));
   const workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace, { recursive: true });
@@ -223,6 +223,9 @@ test('persistent Pi role sessions resume by session key while fresh roles remain
     assert.equal(isolated.buildSessionContext().messages.length, 0);
 
     const fresh = piSessionManagerForSpec({
+      projectId: 'P-session',
+      taskId: 'T-fresh',
+      attemptId: 'P-session:T-fresh:developer:1',
       role: 'developer',
       sessionPolicy: 'fresh',
     }, paths, workspace);
@@ -231,7 +234,16 @@ test('persistent Pi role sessions resume by session key while fresh roles remain
       content: 'fresh-token',
       timestamp: Date.now(),
     });
-    assert.equal(fresh.getSessionFile(), undefined);
+    assert.ok(fresh.getSessionFile());
+    const freshAgain = piSessionManagerForSpec({
+      projectId: 'P-session',
+      taskId: 'T-fresh',
+      attemptId: 'P-session:T-fresh:developer:2',
+      role: 'developer',
+      sessionPolicy: 'fresh',
+    }, paths, workspace);
+    assert.notEqual(freshAgain.getSessionDir(), fresh.getSessionDir());
+    assert.equal(freshAgain.buildSessionContext().messages.length, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
