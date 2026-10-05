@@ -44,16 +44,20 @@ function compactHistory(history = []) {
       targetStage: entry.targetStage ?? null,
     }));
 
-  const interfaceSealFailures = history
-    .filter(entry => entry?.type === 'INTERFACE_SEAL_FAILED')
-    .slice(-4)
+  const roleSealFailures = history
+    .filter(entry => ['ROLE_SEAL_FAILED', 'INTERFACE_SEAL_FAILED'].includes(entry?.type))
+    .slice(-6)
     .map(entry => ({
       type: entry.type,
+      ownerRole: entry.ownerRole ?? (entry.type === 'INTERFACE_SEAL_FAILED' ? 'developer' : null),
+      repairRole: entry.repairRole ?? (entry.type === 'INTERFACE_SEAL_FAILED' ? 'developer' : null),
       featureId: entry.featureId ?? null,
       failures: Array.isArray(entry.failures) ? entry.failures : [],
+      repairAttempt: entry.repairAttempt ?? null,
+      repairBudget: entry.repairBudget ?? null,
     }));
 
-  return { takeoverNotes, roleResults, interruptions, routing, interfaceSealFailures };
+  return { takeoverNotes, roleResults, interruptions, routing, roleSealFailures };
 }
 
 function unique(items, limit) {
@@ -100,7 +104,11 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
   const history = task.history ?? [];
   const historySummary = compactHistory(history);
   const executionHandoff = context.executionHandoff ?? deriveExecutionHandoff(history);
-  const latestInterfaceSealFailure = historySummary.interfaceSealFailures.at(-1) ?? null;
+  const currentRole = context.role ?? null;
+  const latestRoleSealFailure = [...historySummary.roleSealFailures]
+    .reverse()
+    .find(entry => !currentRole || entry.repairRole === currentRole || entry.ownerRole === currentRole)
+    ?? null;
 
   const taskPayload = {
     id: task.id ?? null,
@@ -131,12 +139,15 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
     );
   }
 
-  if (latestInterfaceSealFailure) {
+  if (latestRoleSealFailure) {
+    const legacyDeveloperSeal = latestRoleSealFailure.type === 'INTERFACE_SEAL_FAILED';
     sections.push(
       '',
-      'INTERFACE SEAL FEEDBACK',
-      'The previous implementation could not be sealed. Preserve completed implementation work and do not redo unrelated work. Repair only the failed interface realization(s). Identify or create the concrete implementation and return result.interfaceRealizations with resolvable symbol/range anchors.',
-      JSON.stringify(latestInterfaceSealFailure, null, 2),
+      legacyDeveloperSeal ? 'INTERFACE SEAL FEEDBACK' : 'ROLE SEAL FEEDBACK',
+      legacyDeveloperSeal
+        ? 'The previous implementation could not be sealed. Preserve completed implementation work and do not redo unrelated work. Repair only the failed interface realization(s). Identify or create the concrete implementation and return result.interfaceRealizations with resolvable symbol/range anchors.'
+        : 'Ariad could not accept the previous role completion. Preserve completed work, do not redo unrelated work, and address only the listed seal failures. Follow the current role instructions for the exact structured evidence or bindings required before submitting the role result again.',
+      JSON.stringify(latestRoleSealFailure, null, 2),
     );
   }
 
