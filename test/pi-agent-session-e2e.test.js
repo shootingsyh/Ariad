@@ -391,3 +391,58 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('Pi cancellation preserves cancellation diagnosis when abort ends prompt without role result', async () => {
+  const { root, workspace } = tempProject();
+  let abortCalled = false;
+  let rejectPrompt = null;
+  const provider = new PiAgentSessionProvider({
+    createRunSession: async () => ({
+      session: {
+        prompt: async () => new Promise((_, reject) => {
+          rejectPrompt = reject;
+        }),
+        abort: async () => {
+          abortCalled = true;
+          rejectPrompt?.(new Error('aborted'));
+        },
+        dispose() {},
+      },
+      getTerminalResult: () => null,
+    }),
+  });
+
+  try {
+    const handle = await provider.start({
+      projectId: 'P-cancel',
+      taskId: 'T-cancel',
+      role: 'developer',
+      workspace,
+      context: {
+        role: 'developer',
+        task: { id: 'T-cancel', history: [] },
+      },
+    });
+
+    for (let i = 0; i < 100 && !rejectPrompt; i += 1) await sleep(1);
+    assert.equal(typeof rejectPrompt, 'function');
+
+    const cancelled = await provider.cancel(handle);
+    assert.deepEqual(cancelled, { state: 'CANCELLED', confirmed: true });
+
+    const record = provider.runs.get(handle.externalId);
+    await record.promise;
+    assert.equal(abortCalled, true);
+    assert.equal(record.state, 'CANCELLED');
+    assert.equal(record.failure, 'PI_RUN_CANCELLED');
+
+    assert.deepEqual(await provider.poll(handle), {
+      state: 'CANCELLED',
+      failure: 'PI_RUN_CANCELLED',
+    });
+  } finally {
+    await provider.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
