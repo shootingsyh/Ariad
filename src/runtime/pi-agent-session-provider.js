@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
 
 import {
   DefaultResourceLoader,
@@ -209,9 +210,17 @@ export async function createDefaultPiRunSession(spec) {
   await loader.reload();
 
   const persistent = spec.sessionPolicy === 'persistent';
-  const sessionManager = persistent
-    ? SessionManager.create(workspace)
-    : SessionManager.inMemory(workspace);
+  let sessionManager;
+  if (persistent) {
+    const sessionKey = String(spec.sessionKey ?? spec.context?.sessionKey ?? '').trim();
+    if (!sessionKey) throw new Error(`Persistent Pi role ${spec.role} requires sessionKey`);
+    const sessionHash = createHash('sha256').update(sessionKey).digest('hex').slice(0, 24);
+    const sessionDir = join(paths.sessionsDir, sessionHash);
+    mkdirSync(sessionDir, { recursive: true });
+    sessionManager = SessionManager.continueRecent(workspace, sessionDir);
+  } else {
+    sessionManager = SessionManager.inMemory(workspace);
+  }
 
   const { session } = await createAgentSession({
     cwd: workspace,
