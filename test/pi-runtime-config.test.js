@@ -20,6 +20,7 @@ import {
   createAriadPiTerminalTool,
   resolveAriadPiModelRef,
 } from '../src/runtime/pi-runtime-config.js';
+import { piRoleResultToolSchema } from '../src/runtime/pi-agent-session-provider.js';
 
 test('Ariad bundles the Pi coding-agent SDK surface it depends on', () => {
   assert.equal(typeof createAgentSession, 'function');
@@ -139,4 +140,31 @@ test('special-needs contract documents the OC-replacement capabilities Pi owns',
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.terminalStructuredResult.includes('terminate=true'), true);
   assert.deepEqual(ARIAD_PI_SPECIAL_NEEDS.hostedProviders, ['openai-codex', 'meta']);
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.providerFallback, false);
+});
+
+
+test('Pi role result tool preserves Ariad strict role outcomes and structured delivery payloads', () => {
+  const developer = piRoleResultToolSchema('developer');
+  assert.deepEqual(
+    developer.properties.outcome.anyOf.map(item => item.const),
+    ['PASS', 'NOT_PASS'],
+  );
+  assert.equal(developer.properties.result.type, 'object');
+  assert.equal(
+    developer.properties.result.properties.interfaceRealizations.type,
+    'array',
+  );
+
+  const tester = piRoleResultToolSchema('tester');
+  assert.deepEqual(
+    tester.properties.outcome.anyOf.map(item => item.const),
+    ['PASS', 'NOT_PASS'],
+  );
+  assert.equal(tester.properties.result.type, 'object');
+  assert.equal(tester.properties.result.properties.criteria.type, 'array');
+  assert.equal(tester.properties.result.properties.interfaceVerifications.type, 'array');
+
+  const reviewer = piRoleResultToolSchema('reviewer');
+  assert.equal(reviewer.properties.result.type, 'object');
+  assert.equal(reviewer.properties.result.properties.interfaceReviews.type, 'array');
 });
