@@ -22,6 +22,14 @@ export function resolveAriadPiModelRef(modelRef) {
   if (provider === 'openai') {
     return {
       ariadRef: value,
+      provider: 'openai',
+      model,
+      auth: 'OPENAI_API_KEY-or-pi-auth',
+    };
+  }
+  if (provider === 'openai-codex') {
+    return {
+      ariadRef: value,
       provider: 'openai-codex',
       model,
       auth: 'subscription-or-pi-auth',
@@ -160,7 +168,7 @@ export const ARIAD_PI_SPECIAL_NEEDS = Object.freeze({
   persistentSessions: 'SessionManager',
   cancellation: 'AgentSession.abort',
   terminalStructuredResult: 'custom ToolDefinition result with terminate=true',
-  hostedProviders: ['openai-codex', 'meta'],
+  hostedProviders: ['openai', 'openai-codex', 'meta'],
   localProvider: 'generated llamacpp OpenAI-compatible provider',
   providerFallback: false,
 });
