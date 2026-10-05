@@ -213,6 +213,11 @@ test('tester seal requires per-interface fresh evidence and persists resolvable 
               kind: 'symbol',
               file: 'scripts/entry_test.gd',
               symbol: 'test_new_game',
+            }, {
+              kind: 'range',
+              file: 'scripts/entry_test.gd',
+              startLine: 1,
+              endLine: 999,
             }],
           }],
         },
@@ -223,6 +228,7 @@ test('tester seal requires per-interface fresh evidence and persists resolvable 
     const persisted = JSON.parse(
       fs.readFileSync(path.join(layout.featureDir, 'entry.json'), 'utf8')
     );
+    assert.equal(persisted.bindings[0].verificationAnchors.length, 1);
     assert.equal(persisted.bindings[0].verificationAnchors[0].status, 'VALID');
     assert.equal(persisted.bindings[0].verificationAnchors[0].symbol, 'test_new_game');
   } finally {
