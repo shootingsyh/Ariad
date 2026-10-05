@@ -44,7 +44,16 @@ function compactHistory(history = []) {
       targetStage: entry.targetStage ?? null,
     }));
 
-  return { takeoverNotes, roleResults, interruptions, routing };
+  const interfaceSealFailures = history
+    .filter(entry => entry?.type === 'INTERFACE_SEAL_FAILED')
+    .slice(-4)
+    .map(entry => ({
+      type: entry.type,
+      featureId: entry.featureId ?? null,
+      failures: Array.isArray(entry.failures) ? entry.failures : [],
+    }));
+
+  return { takeoverNotes, roleResults, interruptions, routing, interfaceSealFailures };
 }
 
 function unique(items, limit) {
@@ -91,6 +100,7 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
   const history = task.history ?? [];
   const historySummary = compactHistory(history);
   const executionHandoff = context.executionHandoff ?? deriveExecutionHandoff(history);
+  const latestInterfaceSealFailure = historySummary.interfaceSealFailures.at(-1) ?? null;
 
   const taskPayload = {
     id: task.id ?? null,
@@ -118,6 +128,15 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
       '',
       'RELEVANT PRIOR TASK HISTORY',
       JSON.stringify(historySummary, null, 2),
+    );
+  }
+
+  if (latestInterfaceSealFailure) {
+    sections.push(
+      '',
+      'INTERFACE SEAL FEEDBACK',
+      'The previous implementation could not be sealed. Preserve completed implementation work and do not redo unrelated work. Repair only the failed interface realization(s). Identify or create the concrete implementation and return result.interfaceRealizations with resolvable symbol/range anchors.',
+      JSON.stringify(latestInterfaceSealFailure, null, 2),
     );
   }
 
