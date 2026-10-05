@@ -2626,8 +2626,10 @@ test('default LLM roles request the shared local-llm resource only for llamacpp 
     const remote = definitions.reviewer.prepare({ task: store.getTask('T-remote') });
     assert.deepEqual(local.resources, ['local-llm']);
     assert.equal(local.context.roleModelRef, 'llamacpp/qwen3.8-27b');
+    assert.deepEqual(local.context.roleModels, { developer: 'llamacpp/qwen3.8-27b' });
     assert.deepEqual(remote.resources, []);
     assert.equal(remote.context.roleModelRef, 'openai-codex/gpt-5.6-codex');
+    assert.deepEqual(remote.context.roleModels, { reviewer: 'openai-codex/gpt-5.6-codex' });
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
