@@ -19,7 +19,7 @@ import {
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
-import { sealDeveloperInterfaces } from './interface-seal.js';
+import { sealRoleInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
 import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
 import {
@@ -132,7 +132,7 @@ function failureCount(task) {
   return count;
 }
 
-function interfaceSealFailureCount(task) {
+function roleSealFailureCount(task, role) {
   const history = task.history ?? [];
   let count = 0;
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -141,7 +141,8 @@ function interfaceSealFailureCount(task) {
       (entry?.type === 'ROLE_RESULT' && entry.role === 'project_debugger')
       || entry?.type === 'DEBUGGER_ROUTE'
     ) break;
-    if (entry?.type === 'INTERFACE_SEAL_FAILED') count += 1;
+    if (entry?.type === 'ROLE_SEAL_FAILED' && entry.ownerRole === role) count += 1;
+    if (role === 'developer' && entry?.type === 'INTERFACE_SEAL_FAILED') count += 1;
   }
   return count;
 }
@@ -287,7 +288,7 @@ function deliveryRoleSuffix(role) {
       "Ariad has already performed mechanical Interface Seal checks such as binding existence and anchor resolvability. Do not redo those checks as your primary task; verify behavior.",
       "For each required Executor, derive verification from its input, output, and sideEffects. For each required Provider, verify both that the provider produces the promised thing and that the produced thing behaves according to its own input/output/sideEffects contract.",
       "Use realistic entry points and state transitions. Prefer executable evidence over inspection-only reasoning. Add or update test code when needed, and do not bypass required product flow merely to make a test pass.",
-      "Associate fresh verification evidence with the exact interface whenever possible via result.interfaceVerifications [{interfaceId,evidence:[...]}].",
+      "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
       "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
     ].join('\n');
   }
@@ -299,6 +300,7 @@ function deliveryRoleSuffix(role) {
       "For every required interface, check that the implementation is appropriate for the owning Feature and abstraction level, the realization plausibly corresponds to the contract, and Tester evidence exercises the important inputs, outputs, and sideEffects.",
       "For Providers, require evidence for both provider creation and behavior of the produced thing.",
       "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
+      "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
       "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
     ].join('\n');
   }
@@ -566,6 +568,53 @@ export function createDefaultV2Roles({
     };
   };
 
+  const sealAfterPersist = async (role, task, result) => {
+    const seal = await sealRoleInterfaces({
+      role,
+      artifactRoot,
+      workspace,
+      task,
+      result,
+      codeIntelligence,
+    });
+    if (!seal.required) return null;
+    if (!seal.ok) {
+      const repairRole = seal.repairRole ?? role;
+      const priorFailures = roleSealFailureCount(task, role);
+      const exhaustedRepairBudget = priorFailures >= 3;
+      return {
+        patch: {
+          stage: exhaustedRepairBudget ? 'project_debugger' : repairRole,
+          state: 'READY',
+          execution: null,
+        },
+        transitionHistory: {
+          type: 'ROLE_SEAL_FAILED',
+          role: 'interface_seal',
+          ownerRole: role,
+          repairRole,
+          featureId: seal.featureId ?? null,
+          failures: seal.failures ?? [],
+          repairAttempt: Math.max(0, priorFailures),
+          repairBudget: 3,
+          ...(exhaustedRepairBudget ? { escalatedTo: 'project_debugger' } : {}),
+          at: new Date().toISOString(),
+        },
+      };
+    }
+    return {
+      transitionHistory: {
+        type: 'ROLE_SEALED',
+        role: 'interface_seal',
+        ownerRole: role,
+        featureId: seal.featureId ?? null,
+        sealed: seal.sealed ?? [],
+        observedCommit: seal.observedCommit ?? null,
+        at: new Date().toISOString(),
+      },
+    };
+  };
+
   return {
     artist: {
       prepare: ({ task }) => {
@@ -605,45 +654,7 @@ export function createDefaultV2Roles({
       ].join('\n\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
       async afterPersist({ task, result }) {
-        const seal = await sealDeveloperInterfaces({
-          artifactRoot,
-          workspace,
-          task,
-          result,
-          codeIntelligence,
-        });
-        if (!seal.required) return null;
-        if (!seal.ok) {
-          const priorSealFailures = interfaceSealFailureCount(task);
-          const exhaustedRepairBudget = priorSealFailures >= 3;
-          return {
-            patch: {
-              stage: exhaustedRepairBudget ? 'project_debugger' : 'developer',
-              state: 'READY',
-              execution: null,
-            },
-            transitionHistory: {
-              type: 'INTERFACE_SEAL_FAILED',
-              role: 'interface_seal',
-              featureId: seal.featureId ?? null,
-              failures: seal.failures ?? [],
-              repairAttempt: Math.max(0, priorSealFailures),
-              repairBudget: 3,
-              ...(exhaustedRepairBudget ? { escalatedTo: 'project_debugger' } : {}),
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        return {
-          transitionHistory: {
-            type: 'INTERFACE_SEALED',
-            role: 'interface_seal',
-            featureId: seal.featureId,
-            sealed: seal.sealed,
-            observedCommit: seal.observedCommit ?? null,
-            at: new Date().toISOString(),
-          },
-        };
+        return sealAfterPersist('developer', task, result);
       },
     },
 
@@ -663,6 +674,9 @@ export function createDefaultV2Roles({
         }
         return { stage: 'project_debugger', state: 'READY' };
       },
+      async afterPersist({ task, result }) {
+        return sealAfterPersist('tester', task, result);
+      },
     },
 
     reviewer: {
@@ -681,7 +695,12 @@ export function createDefaultV2Roles({
         if (result.outcome !== 'PASS') return { stage: 'project_debugger', state: 'READY' };
         return { state: 'DONE' };
       },
-      async afterPersist({ task }) {
+      async afterPersist({ task, result }) {
+        const sealFollowUp = await sealAfterPersist('reviewer', task, result);
+        if (sealFollowUp) {
+          if (sealFollowUp.patch) return sealFollowUp;
+          if (!sourceControl || task.state !== 'DONE') return sealFollowUp;
+        }
         if (!sourceControl || task.state !== 'DONE') return null;
         store.checkpoint?.();
         const finalized = await sourceControl.finalize({
