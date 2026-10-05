@@ -34,6 +34,12 @@ test('Ariad bundles the Pi coding-agent SDK surface it depends on', () => {
 test('Ariad Pi model refs preserve production policy without fallback', () => {
   assert.deepEqual(resolveAriadPiModelRef('openai/gpt-5.6-terra'), {
     ariadRef: 'openai/gpt-5.6-terra',
+    provider: 'openai',
+    model: 'gpt-5.6-terra',
+    auth: 'OPENAI_API_KEY-or-pi-auth',
+  });
+  assert.deepEqual(resolveAriadPiModelRef('openai-codex/gpt-5.6-terra'), {
+    ariadRef: 'openai-codex/gpt-5.6-terra',
     provider: 'openai-codex',
     model: 'gpt-5.6-terra',
     auth: 'subscription-or-pi-auth',
@@ -88,6 +94,7 @@ test('Pi ModelRuntime contains Codex and Meta providers and consumes Ariad local
       refreshOnCreate: false,
     });
 
+    assert.ok(runtime.getProvider('openai'), 'Pi must bundle OpenAI API provider');
     assert.ok(runtime.getProvider('openai-codex'), 'Pi must bundle Codex subscription provider');
     assert.ok(runtime.getProvider('meta'), 'Pi must bundle Meta provider');
     assert.ok(runtime.getModel('llamacpp', 'qwen3.8-27b'), 'Ariad local model config must load');
@@ -101,8 +108,8 @@ test('Ariad Pi sessions enable coding tools and persistent-session coordinates',
   const config = buildAriadPiSessionConfig({
     workspace,
     role: 'tech_lead',
-    modelRef: 'openai/gpt-5.6-terra',
-    roleModels: { tech_lead: 'openai/gpt-5.6-terra' },
+    modelRef: 'openai-codex/gpt-5.6-terra',
+    roleModels: { tech_lead: 'openai-codex/gpt-5.6-terra' },
     sessionPolicy: 'persistent',
     sessionKey: 'tl:demo',
   });
@@ -141,7 +148,7 @@ test('special-needs contract documents the OC-replacement capabilities Pi owns',
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.headlessSession, 'createAgentSession');
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.cancellation, 'AgentSession.abort');
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.terminalStructuredResult.includes('terminate=true'), true);
-  assert.deepEqual(ARIAD_PI_SPECIAL_NEEDS.hostedProviders, ['openai-codex', 'meta']);
+  assert.deepEqual(ARIAD_PI_SPECIAL_NEEDS.hostedProviders, ['openai', 'openai-codex', 'meta']);
   assert.equal(ARIAD_PI_SPECIAL_NEEDS.providerFallback, false);
 });
 
