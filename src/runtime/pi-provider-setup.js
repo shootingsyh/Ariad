@@ -2,12 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 import { ariadPiAuthPath } from './pi-runtime-config.js';
+import { requireRuntimeDependencies } from './code-intelligence/project-capabilities.js';
 
 function readAuth(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return {}; }
 }
 
 export function setupPiProviders({ authPath = ariadPiAuthPath() } = {}) {
+  const runtimeDependencies = requireRuntimeDependencies();
   const migration = migrateLegacyPiAuth(authPath, {
     providers: ['openai-codex', 'meta'],
   });
@@ -33,6 +35,7 @@ export function setupPiProviders({ authPath = ariadPiAuthPath() } = {}) {
 
   return {
     authPath,
+    runtimeDependencies,
     migratedProviders: migration.added,
     providers,
   };
