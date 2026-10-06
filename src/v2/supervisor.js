@@ -91,12 +91,24 @@ export class V2Supervisor {
         continue;
       }
 
-      const provider = this.providers.get(execution.provider);
+      let provider = null;
       let status;
       try {
-        status = await provider.poll({ externalId: execution.externalId, taskId: task.id });
-      } catch (error) {
-        status = { state: 'LOST', failure: error?.message ?? String(error) };
+        provider = this.providers.get(execution.provider);
+      } catch {
+        status = {
+          state: 'LOST',
+          failure: `PROVIDER_UNAVAILABLE_AFTER_RESTART: ${execution.provider}`,
+          consumeAttempt: false,
+          restartOrphan: true,
+        };
+      }
+      if (!status) {
+        try {
+          status = await provider.poll({ externalId: execution.externalId, taskId: task.id });
+        } catch (error) {
+          status = { state: 'LOST', failure: error?.message ?? String(error) };
+        }
       }
 
       if (status?.state === 'RUNNING' || status?.state === 'QUEUED') continue;
