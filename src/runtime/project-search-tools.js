@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 function walkJson(dir, out = []) {
@@ -54,6 +54,53 @@ export function interfaceSearch(workspace, query, { limit = 20 } = {}) {
   return hits;
 }
 
+function fallbackHits(workspace, needle, limit) {
+  const hits = [];
+  const smartCase = /[A-Z]/.test(needle);
+  const wanted = smartCase ? needle : needle.toLowerCase();
+  const skipDirs = new Set(['.git', 'node_modules', '.venv', 'venv', 'dist', 'build']);
+  const maxFileBytes = 1024 * 1024;
+
+  function visit(dir) {
+    if (hits.length >= limit) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (hits.length >= limit) break;
+      if (entry.name === '.ariad' && relative(workspace, dir) === '') {
+        // Keep planner artifacts searchable through interface_search, not raw code search.
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!skipDirs.has(entry.name)) visit(join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const file = join(dir, entry.name);
+      try {
+        if (statSync(file).size > maxFileBytes) continue;
+        const content = readFileSync(file, 'utf8');
+        if (content.includes('\u0000')) continue;
+        const lines = content.split('\n');
+        for (let index = 0; index < lines.length && hits.length < limit; index += 1) {
+          const haystack = smartCase ? lines[index] : lines[index].toLowerCase();
+          const start = haystack.indexOf(wanted);
+          if (start < 0) continue;
+          hits.push({
+            file: relative(workspace, file),
+            line: index + 1,
+            text: lines[index],
+            submatches: [{ text: lines[index].slice(start, start + needle.length), start, end: start + needle.length }],
+          });
+        }
+      } catch {}
+    }
+  }
+
+  visit(workspace);
+  return hits;
+}
+
 function rgHits(workspace, needle, limit) {
   try {
     const stdout = execFileSync('rg', [
@@ -81,6 +128,7 @@ function rgHits(workspace, needle, limit) {
     return hits;
   } catch (error) {
     if (error?.status === 1) return [];
+    if (error?.code === 'ENOENT') return fallbackHits(workspace, needle, limit);
     throw new Error(`code_search failed: ${error?.message ?? String(error)}`);
   }
 }
