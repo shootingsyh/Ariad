@@ -514,3 +514,28 @@ test('existing one-layer hierarchy with no contracts enters contract bootstrap i
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("old multi-root milestone archive supplies parent evidence without invalidating live root", () => {
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), "ariad-milestone-live-"));
+  const legacy = fs.mkdtempSync(path.join(os.tmpdir(), "ariad-milestone-legacy-"));
+  try {
+    milestone(live, "V2", null);
+    milestone(live, "V2.GATE", "V2");
+    contract(live, "milestone", "V2", { decomposition: "expand", exports: ["release"] });
+    contract(live, "milestone", "V2.GATE", { exports: ["approval"] });
+    milestone(legacy, "V2", null);
+    milestone(legacy, "V2.GATE", null);
+    writeJson(path.join(live, "planner", "interfaces", "active-frontier.json"), {
+      version: 1, nodeType: "milestone", bootstrap: false, targetNodeId: "V2",
+    });
+    const result = finishFrontierPass(live, "milestone", {
+      expectedTargetNodeId: "V2", legacyBaselineRoot: legacy,
+    });
+    assert.equal(result.targetNodeId, "V2");
+    assert.deepEqual(result.childIds, ["V2.GATE"]);
+  } finally {
+    fs.rmSync(live, { recursive: true, force: true });
+    fs.rmSync(legacy, { recursive: true, force: true });
+  }
+});
