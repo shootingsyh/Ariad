@@ -6,6 +6,7 @@ import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { activateDeferredIterations } from '../v2/deferred-iterations.js';
+import { recoverPrematureMigrationApprovalGate } from '../v2/migration-gate-recovery.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
@@ -247,7 +248,8 @@ export class AriadService {
   deriveExecutionState(runtime) {
     const tasks = runtime.store.listTasks(runtime.projectId);
     const hasPlanning = runtime.store.hasUnplannedPlanningRequests(runtime.projectId);
-    return deriveProjectExecutionState({ tasks, hasPlanning });
+    const migration = runtime.store.getProject(runtime.projectId)?.planningModelMigration ?? null;
+    return deriveProjectExecutionState({ tasks, hasPlanning, migration });
   }
 
   async submitDecision(name, decision) {
@@ -272,12 +274,19 @@ export class AriadService {
       return;
     }
 
-    if (['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
-
     const runtime = this.runtimeFor(project);
+    const migrating = runtime.store.getProject(project.id)?.planningModelMigration?.status === 'REBUILDING';
+    if (!migrating && ['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
+
     const beforeState = project.executionState;
     try {
       if (project.desiredState === 'RUNNING') {
+        if (migrating) {
+          const recovered = recoverPrematureMigrationApprovalGate(runtime.store, project.id);
+          if (recovered.length) this.logger?.warn?.(
+            'Ariad rejected premature migration delivery gate: ' + recovered.map(item => item.taskId).join(', ')
+          );
+        }
         const activated = activateDeferredIterations({
           store: runtime.store,
           projectId: project.id,
