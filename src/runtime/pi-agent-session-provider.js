@@ -40,6 +40,7 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
   tech_lead: ['PLANNED', 'REPLANNED'],
   tech_lead_critic: ['CLEAN', 'MINOR_ONLY', 'ISSUES'],
   pm: ['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN'],
+  memory_curator: ['PASS', 'NOT_PASS'],
 });
 
 const anchorSchema = Type.Object({
