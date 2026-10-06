@@ -143,6 +143,22 @@ Session files live under the project workspace:
   fresh/<attempt-hash>/
 ```
 
+
+## Standalone Dashboard
+
+The web dashboard is hosted by Ariad itself; **OpenClaw is not required**.
+It preserves the read-only project explorer, version navigation, feature and milestone trees, and task/planning status from the former OpenClaw plugin. During migration the current version can also read partially rebuilt planner artifacts.
+
+```bash
+ariad dashboard start --port 18793
+ariad dashboard status
+ariad dashboard stop
+```
+
+Dashboard state persists across daemon restarts under `~/.ariad/projects/.runtime/config.json` (or the chosen project root); `ariad daemon start` automatically restores a dashboard configured as enabled. The web listener is restricted to `127.0.0.1` and is **read-only**. External HTTPS reverse proxies or Cloudflare Tunnels are configured separately.
+
+For the existing hosted instance, `https://ariad.shootingsyh.xyz` is routed to `http://127.0.0.1:18793` via Cloudflare Tunnel. An older OC listener on `18791` may remain for compatibility but is no longer on the public route.
+
 ## Testing
 
 Run the complete deterministic suite:
