@@ -649,7 +649,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
 }
 
 
-export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null) {
+export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null, { existingNodeParents = {} } = {}) {
   const validated = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: true });
   const tree = loadPlannerHierarchy(artifactRoot, nodeType);
   const contracts = loadBoundaryContracts(artifactRoot, nodeType);
@@ -671,8 +671,11 @@ export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null
       const childContract = contracts.get(childId);
       if (!childContract) fail(`${nodeType}:${childId}: new direct child requires boundary contract`);
       const grandchildren = tree.childrenById.get(childId) ?? [];
-      if (grandchildren.length > 0) {
-        fail(`${nodeType}:${target.id}: one-layer frontier pass illegally created grandchild under ${childId}`);
+      for (const grandchildId of grandchildren) {
+        if (!Object.hasOwn(existingNodeParents, grandchildId)
+          || existingNodeParents[grandchildId] !== childId) {
+          fail(`${nodeType}:${target.id}: one-layer frontier pass illegally created grandchild under ${childId}`);
+        }
       }
       if (child.parentId !== target.id) fail(`${nodeType}:${childId}: child parent mismatch`);
     }
@@ -696,22 +699,40 @@ export function beginFrontierPass(artifactRoot, nodeType) {
     nodeType,
     bootstrap: context.bootstrap === true,
     targetNodeId: context.bootstrap === true ? null : context.current?.node?.id ?? null,
+    existingNodeParents: Object.fromEntries(
+      loadPlannerHierarchy(artifactRoot, nodeType).items.map(node => [node.id, node.parentId ?? null]),
+    ),
   };
   writeFileSync(activeFrontierPath, JSON.stringify(state, null, 2) + '\n');
   return context;
 }
 
-export function finishFrontierPass(artifactRoot, expectedNodeType) {
+export function finishFrontierPass(artifactRoot, expectedNodeType, {
+  expectedTargetNodeId = null,
+  legacyBaselineRoot = null,
+} = {}) {
   const { activeFrontierPath } = ensureInterfaceArtifactLayout(artifactRoot);
   if (!existsSync(activeFrontierPath)) fail('frontier pass has no Ariad-owned active target');
   const state = JSON.parse(readFileSync(activeFrontierPath, 'utf8'));
   if (state.nodeType !== expectedNodeType) {
     fail(`frontier target type mismatch: expected ${expectedNodeType}, found ${state.nodeType}`);
   }
+  if (expectedTargetNodeId != null
+    && state.targetNodeId != null
+    && state.targetNodeId !== expectedTargetNodeId) {
+    fail(`${expectedNodeType}: durable frontier target ${expectedTargetNodeId} disagrees with active target ${state.targetNodeId}`);
+  }
+  const legacyNodeParents = legacyBaselineRoot
+    ? Object.fromEntries(
+        loadPlannerHierarchy(legacyBaselineRoot, expectedNodeType).items
+          .map(node => [node.id, node.parentId ?? null]),
+      )
+    : {};
   return validateFrontierPass(
     artifactRoot,
     expectedNodeType,
-    state.targetNodeId ?? null,
+    expectedTargetNodeId ?? state.targetNodeId ?? null,
+    { existingNodeParents: { ...legacyNodeParents, ...(state.existingNodeParents ?? {}) } },
   );
 }
 
