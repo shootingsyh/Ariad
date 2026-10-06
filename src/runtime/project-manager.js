@@ -336,7 +336,11 @@ export class AriadProjectManager {
 }
 
 export function defaultProjectsRoot(homeDir) {
-  return join(homeDir, '.openclaw', 'ariad', 'projects');
+  const standalone = join(homeDir, '.ariad', 'projects');
+  const legacy = join(homeDir, '.openclaw', 'ariad', 'projects');
+  if (existsSync(standalone)) return standalone;
+  if (existsSync(legacy)) return legacy;
+  return standalone;
 }
 
 export { slugify };
