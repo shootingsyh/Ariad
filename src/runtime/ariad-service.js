@@ -9,7 +9,11 @@ import { requireCompleteRoleModels } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
 import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
-import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
+import {
+  createProjectCodeIntelligence,
+  inspectProjectCodeCapabilities,
+  requireRuntimeDependencies,
+} from './code-intelligence/project-capabilities.js';
 import { join } from 'node:path';
 import {
   migratePlanningModelDatabase,
@@ -37,6 +41,7 @@ export class AriadService {
     this.memoryCurator = memoryCurator ?? (provider?.id === 'pi-agent-session' ? new MemoryCurator({ provider, logger }) : null);
     this.runtimes = new Map();
     this.signals = new Map();
+    this.codeCapabilities = new Map();
 
     this.externalWake = reconcileWakePath
       ? new FileReconcileWake(reconcileWakePath, {
@@ -100,15 +105,10 @@ export class AriadService {
   runtimeFor(project) {
     let runtime = this.runtimes.get(project.id);
     if (!runtime) {
-      const godotProject = project.workspace && existsSync(`${project.workspace}/project.godot`);
-      const lspPort = 6100 + [...String(project.id)].reduce((sum, ch) => (sum + ch.charCodeAt(0)) % 1000, 0);
-      const codeIntelligence = godotProject
-        ? new GodotLspProvider({
-            projectPath: project.workspace,
-            port: lspPort,
-            launch: true,
-          })
-        : null;
+      const capabilities = this.codeCapabilities.get(project.id)
+        ?? inspectProjectCodeCapabilities(project.workspace);
+      this.codeCapabilities.set(project.id, capabilities);
+      const codeIntelligence = createProjectCodeIntelligence(project, capabilities);
       runtime = new StandaloneProjectRuntime({
         project,
         provider: this.provider,
@@ -128,7 +128,12 @@ export class AriadService {
   status(name) {
     const project = this.manager.status(name);
     const runtime = this.runtimes.get(project.id);
-    if (runtime) return { ...project, runtime: 'standalone', ...runtime.status() };
+    if (runtime) return {
+      ...project,
+      runtime: 'standalone',
+      codeCapabilities: this.codeCapabilities.get(project.id) ?? null,
+      ...runtime.status(),
+    };
 
     if (project.stateDb && existsSync(project.stateDb)) {
       const store = new SQLiteV2Store(project.stateDb);
@@ -138,6 +143,7 @@ export class AriadService {
         return {
           ...project,
           runtime: 'standalone',
+          codeCapabilities: this.codeCapabilities.get(project.id) ?? null,
           storageVersion: durableProject?.storageVersion ?? 1,
           planningModelVersion: durableProject?.planningModelVersion ?? 1,
           planningModelMigration: planningModelMigrationStatus(durableProject),
@@ -155,7 +161,7 @@ export class AriadService {
         store.close();
       }
     }
-    return { ...project, runtime: 'standalone' };
+    return { ...project, runtime: 'standalone', codeCapabilities: this.codeCapabilities.get(project.id) ?? null };
   }
 
   async migratePlanningModel(name) {
@@ -175,6 +181,8 @@ export class AriadService {
   async ensureRunning(name) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
+    requireRuntimeDependencies();
+    this.codeCapabilities.set(current.id, inspectProjectCodeCapabilities(current.workspace));
     const project = this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'START'),
@@ -202,6 +210,8 @@ export class AriadService {
   async ensureResumed(name) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
+    requireRuntimeDependencies();
+    this.codeCapabilities.set(current.id, inspectProjectCodeCapabilities(current.workspace));
     this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'RESUME'),
