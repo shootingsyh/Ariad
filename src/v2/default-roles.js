@@ -992,7 +992,13 @@ export function createDefaultV2Roles({
                 },
               };
             }
-            const pass = finishFrontierPass(artifactRoot, nodeType);
+            const migration = task.input?.versionMigration
+              ? store.getProject(task.projectId)?.planningModelMigration
+              : null;
+            const pass = finishFrontierPass(artifactRoot, nodeType, {
+              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
+              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
+            });
             if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
               throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
             }
