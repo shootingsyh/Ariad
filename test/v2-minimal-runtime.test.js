@@ -2223,6 +2223,43 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
 });
 
 
+test('restart-orphan unknown legacy provider requeues without consuming an attempt', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-legacy-provider' });
+    store.createTask({
+      id: 'T-legacy-provider',
+      projectId: 'P-legacy-provider',
+      stage: 'tech_lead',
+      state: 'WORKING',
+      execution: {
+        provider: 'pydantic-v2',
+        externalId: 'legacy-runtime-handle',
+        attemptId: 'P-legacy-provider:T-legacy-provider:tech_lead:4',
+        resources: [],
+      },
+    });
+
+    const providers = new ProviderRegistry();
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-legacy-provider');
+    const task = store.getTask('T-legacy-provider');
+    assert.equal(task.state, 'READY');
+    assert.equal(task.stage, 'tech_lead');
+    assert.equal(task.execution, null);
+    assert.equal(task.history.at(-1)?.failure, 'PROVIDER_UNAVAILABLE_AFTER_RESTART: pydantic-v2');
+    assert.equal(task.history.at(-1)?.consumeAttempt, false);
+    assert.equal(task.history.at(-1)?.restartOrphan, true);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 test('restart-orphan human-gate recovery only matches the known debugger misclassification', () => {
   const base = {
     id: 'T-gate',
