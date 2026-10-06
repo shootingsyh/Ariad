@@ -22,6 +22,32 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
+const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.3-contributor';
+
+/** Only a confirmed account usage/quota exhaustion triggers provider failover. */
+export function isCodexQuotaExhaustion(error) {
+  const message = String(error?.message ?? error ?? '');
+  return /usage limit has been reached|usage limit reached|quota (?:has been )?exceeded|insufficient_quota|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:usage|weekly|monthly) limit/i.test(message);
+}
+
+function codexQuotaFallbackSpec(spec) {
+  if (!String(spec.context?.roleModelRef ?? '').startsWith('openai-codex/')) return null;
+  const alternate = process.env.ARIAD_CODEX_QUOTA_FALLBACK || DEFAULT_CODEX_QUOTA_FALLBACK;
+  if (!alternate || alternate === spec.context.roleModelRef) return null;
+  resolveAriadPiModelRef(alternate);
+  return {
+    ...spec,
+    sessionPolicy: 'fresh', // Never poison the primary model's persistent session.
+    attemptId: String(spec.attemptId ?? spec.taskId) + ':quota-fallback',
+    context: {
+      ...spec.context,
+      roleModelRef: alternate,
+      roleModels: { ...(spec.context?.roleModels ?? {}), [spec.role]: alternate },
+      sessionKey: null,
+    },
+  };
+}
+
 
 const ROLE_RESULT_OUTCOMES = Object.freeze({
   artist: ['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY'],
@@ -254,10 +280,26 @@ export async function createDefaultPiRunSession(spec) {
     tools: [...ARIAD_PI_DEFAULT_TOOLS, ...ARIAD_PROJECT_TOOL_NAMES, RESULT_TOOL],
   });
   await session.bindExtensions({ mode: 'json' });
+  // A persistent session may have ended with a Muse quota fallback.
+  // Every NEW role run still uses Ariad's configured primary model.
+  if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
+    await session.setModel(model, { persist: false });
+  }
 
   return {
     session,
     getTerminalResult: () => terminalResult,
+    async switchModel(modelRef) {
+      const target = resolveAriadPiModelRef(modelRef);
+      if (target.provider === 'meta' && process.env.META_API_KEY) {
+        await modelRuntime.setRuntimeApiKey('meta', process.env.META_API_KEY);
+      }
+      const nextModel = modelRuntime.getModel(target.provider, target.model);
+      if (!nextModel) throw new Error(`MODEL_PROVIDER_UNAVAILABLE: fallback ${modelRef}`);
+      // Pi persists the model change inside the SAME session transcript,
+      // but never rewrites the preferred model in the global defaults.
+      await session.setModel(nextModel, { persist: false });
+    },
   };
 }
 
@@ -299,19 +341,48 @@ export class PiAgentSessionProvider {
       `When the assigned role work is actually complete, call ${RESULT_TOOL} exactly once. Do not finish with ordinary prose.`,
     ].join('\n');
 
+    const checkTerminalResult = run => {
+      const result = run.getTerminalResult?.() ?? null;
+      if (result) return result;
+      const last = Array.isArray(run.session?.messages) ? run.session.messages.at(-1) : null;
+      if (last?.role === 'assistant' && last?.stopReason === 'error' && last?.errorMessage) {
+        throw new Error(`PI_PROVIDER_ERROR: ${last.errorMessage}`);
+      }
+      throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
+    };
+
     record.promise = (async () => {
       try {
         const run = await this.createRunSession(spec);
         record.session = run.session;
-        await run.session.prompt(prompt);
-        const result = run.getTerminalResult?.() ?? null;
-        if (!result) {
-          const last = Array.isArray(run.session?.messages) ? run.session.messages.at(-1) : null;
-          if (last?.role === 'assistant' && last?.stopReason === 'error' && last?.errorMessage) {
-            throw new Error(`PI_PROVIDER_ERROR: ${last.errorMessage}`);
+        let result;
+        try {
+          await run.session.prompt(prompt);
+          result = checkTerminalResult(run);
+        } catch (error) {
+          const fallbackSpec = isCodexQuotaExhaustion(error) ? codexQuotaFallbackSpec(spec) : null;
+          if (!fallbackSpec || record.state === 'CANCELLED') throw error;
+          if (typeof run.switchModel !== 'function') {
+            throw new Error('ARIAD_MODEL_FALLBACK_UNAVAILABLE: Pi session cannot switch models in place');
           }
-          throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
+          await run.switchModel(fallbackSpec.context.roleModelRef);
+          // Continue the SAME session and full transcript. Do not create
+          // another Pi session, replay tools, or reset the role context.
+          await run.session.prompt(
+            'The previous model exhausted its usage quota. Continue the same Ariad role task ' +
+            'from the existing session history and tool results. Do not repeat completed work. ' +
+            'When complete, submit the required ariad_role_result.',
+          );
+          result = checkTerminalResult(run);
+          result = {
+            ...result,
+            keyPoints: [
+              ...(result.keyPoints ?? []),
+              `ARIAD_MODEL_QUOTA_FALLBACK: ${spec.context.roleModelRef} -> ${fallbackSpec.context.roleModelRef} (same Pi session)`,
+            ],
+          };
         }
+        if (record.state === 'CANCELLED') return;
         record.result = result;
         record.state = 'COMPLETED';
       } catch (error) {

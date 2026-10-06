@@ -315,7 +315,7 @@ export class AriadProjectManager {
   }
 
   setExecutionState(name, executionState) {
-    const allowed = ['IDLE', 'PLANNING', 'RUNNING', 'NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'];
+    const allowed = ['IDLE', 'MIGRATING', 'PLANNING', 'RUNNING', 'NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'];
     if (!allowed.includes(executionState)) throw new Error(`invalid execution state: ${executionState}`);
     const current = this.status(name);
     if (current.executionState === executionState) return current;

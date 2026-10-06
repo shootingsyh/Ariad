@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createServer, createConnection } from 'node:net';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, unlinkSync, chmodSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, unlinkSync, chmodSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -9,6 +9,7 @@ import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { AriadService } from './ariad-service.js';
 import { PiAgentSessionProvider } from './pi-agent-session-provider.js';
 import { createAriadControlTools } from './control-tools.js';
+import { AriadDashboardService } from './dashboard-service.js';
 
 export function daemonPaths(root) {
   const dir = join(root, '.runtime');
@@ -93,6 +94,51 @@ export async function serveAriad(root) {
     logger: { warn: (...args) => console.error(...args), error: (...args) => console.error(...args) },
   });
   const control = createAriadControlTools({ manager, service });
+  let dashboard = null;
+  let dashboardSettings = null;
+  function readConfig() {
+    if (!existsSync(paths.config)) return {};
+    return JSON.parse(readFileSync(paths.config, 'utf8'));
+  }
+  function writeConfig(config) {
+    const temporary = paths.config + '.tmp';
+    writeFileSync(temporary, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+    renameSync(temporary, paths.config);
+  }
+  function dashboardStatus() {
+    return {
+      running: dashboard != null,
+      enabled: readConfig().dashboard?.enabled === true,
+      address: dashboard?.address ?? null,
+      url: dashboard?.url ?? null,
+    };
+  }
+  async function startDashboard({ port = null } = {}) {
+    if (dashboard) return dashboardStatus();
+    const config = readConfig();
+    const configured = config.dashboard ?? {};
+    const selectedPort = port ?? configured.port ?? 18793;
+    if (!Number.isInteger(selectedPort) || selectedPort < 1 || selectedPort > 65535) {
+      throw new Error('dashboard port must be 1..65535');
+    }
+    const instance = new AriadDashboardService({
+      manager, host: '127.0.0.1', port: selectedPort,
+      logger: { info: (...args) => console.log(...args) },
+    });
+    await instance.start();
+    dashboard = instance;
+    dashboardSettings = { enabled: true, port: selectedPort };
+    writeConfig({ ...config, dashboard: dashboardSettings });
+    return dashboardStatus();
+  }
+  async function stopDashboard() {
+    const config = readConfig();
+    if (dashboard) await dashboard.stop();
+    dashboard = null;
+    dashboardSettings = null;
+    writeConfig({ ...config, dashboard: { ...(config.dashboard ?? {}), enabled: false } });
+    return dashboardStatus();
+  }
   const server = createServer(conn => {
     let data = '';
     conn.on('data', chunk => {
@@ -108,6 +154,16 @@ export async function serveAriad(root) {
           let value;
           if (input.action === 'ping') {
             value = { running: true, pid: process.pid };
+          } else if (input.action === 'dashboard_status') {
+            value = dashboardStatus();
+          } else if (input.action === 'dashboard_start') {
+            value = await startDashboard({ port: input.port ?? null });
+          } else if (input.action === 'dashboard_stop') {
+            value = await stopDashboard();
+          } else if (input.action === 'operator_analyze') {
+            value = service.createOperatorAnalysis(input.name, {
+              id: input.id, instruction: input.instruction,
+            });
           } else if (input.action === 'daemon_shutdown') {
             const active = manager.list().filter(p => p.desiredState !== 'STOPPED');
             if (active.length) throw new Error('ARIAD_DAEMON_HAS_ACTIVE_PROJECTS: stop projects first: ' + active.map(p => p.id).join(', '));
@@ -130,8 +186,13 @@ export async function serveAriad(root) {
   chmodSync(paths.socket, 0o600);
   writeFileSync(paths.pid, process.pid + '\n');
   await service.start();
+  if (readConfig().dashboard?.enabled === true) {
+    try { await startDashboard(); }
+    catch (error) { console.error('ARIAD_DASHBOARD_START_FAILED', error); }
+  }
   const shutdown = async () => {
     server.close();
+    if (dashboard) await dashboard.stop();
     await service.stop();
     try { unlinkSync(paths.socket); } catch {}
     try { unlinkSync(paths.pid); } catch {}

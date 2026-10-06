@@ -108,6 +108,10 @@ export const PROJECT_CONTROL_MACHINE = defineStateMachine({
 
 export const PROJECT_STATE_RULES = Object.freeze([
   {
+    state: 'MIGRATING',
+    when: ({ migration }) => migration?.status === 'REBUILDING',
+  },
+  {
     state: 'NEEDS_HUMAN',
     when: ({ tasks }) => tasks.some(task => task.state === 'NEEDS_HUMAN'),
   },
@@ -146,10 +150,10 @@ export const PROJECT_STATE_RULES = Object.freeze([
   },
 ]);
 
-export function deriveProjectExecutionState({ tasks, hasPlanning = false }) {
+export function deriveProjectExecutionState({ tasks, hasPlanning = false, migration = null }) {
   const delivery = tasks.filter(task => task.scope === 'delivery');
   for (const rule of PROJECT_STATE_RULES) {
-    if (rule.when({ tasks, delivery, hasPlanning })) return rule.state;
+    if (rule.when({ tasks, delivery, hasPlanning, migration })) return rule.state;
   }
   return 'IDLE';
 }

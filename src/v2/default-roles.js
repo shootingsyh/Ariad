@@ -21,6 +21,7 @@ import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
+import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
 import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
 import {
   beginRevisionPass,
@@ -959,6 +960,17 @@ export function createDefaultV2Roles({
     tech_lead: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.taskKind === 'ADHOC_ANALYSIS') {
+          const prompt = [
+            'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
+            'Read and investigate the repository as needed. Do not modify any files, planning artifacts, task graph, or implementation.',
+            'Do not initiate Delivery, Replan, or task creation. Return findings and concrete recommendations only.',
+            'Request:', task.input.instruction,
+            'Context:', JSON.stringify(task.input.context ?? {}),
+            'Return outcome PLANNED with your findings through the structured role-result tool.',
+          ].join('\n');
+          return prepareLlm(task, prompt);
+        }
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
           plannerPrompt({ store, project, task, artifactRoot }),
@@ -969,6 +981,18 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
+        if (task.taskKind === 'ADHOC_ANALYSIS') {
+          return {
+            state: 'DONE',
+            transitionHistory: {
+              type: 'ADHOC_ANALYSIS_COMPLETED',
+              role: 'tech_lead',
+              outcome: result.outcome,
+              findings: result.summary ?? result.result ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
           if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
@@ -992,7 +1016,13 @@ export function createDefaultV2Roles({
                 },
               };
             }
-            const pass = finishFrontierPass(artifactRoot, nodeType);
+            const migration = task.input?.versionMigration
+              ? store.getProject(task.projectId)?.planningModelMigration
+              : null;
+            const pass = finishFrontierPass(artifactRoot, nodeType, {
+              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
+              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
+            });
             if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
               throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
             }
@@ -1171,6 +1201,17 @@ export function createDefaultV2Roles({
                 validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
                 validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
               }
+              const decomp = iterationRequest(store, task);
+              if (decomp?.request?.changeType === 'FEATURE_DECOMPOSITION') {
+                if (!hasBoundaryContracts(artifactRoot, 'feature')) {
+                  throw new Error('FEATURE_DECOMPOSITION_INCOMPLETE: missing Feature Interface Graph');
+                }
+                validateFeatureDecompositionIteration(
+                  artifactRoot,
+                  loadFeatureTreeDiff(artifactRoot),
+                  validated.plan.tasks,
+                );
+              }
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
@@ -1302,6 +1343,73 @@ export function createDefaultV2Roles({
           ].join('\n\n');
           return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
         }
+        if (task.input?.versionMigration === true) {
+          return {
+            provider: codeProviderId,
+            executionProvenance: executionProvenanceFor(task),
+            execute: async () => {
+              const preceding = predecessorResults(store, task)[0] ?? null;
+              if (preceding?.outcome !== 'PASS') {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration final validation has not PASSED; no delivery approval is possible.',
+                    guidance: preceding?.result?.error ?? 'Regenerate and revalidate the migration delivery plan.',
+                    startDelivery: false,
+                  },
+                };
+              }
+              try {
+                const raw = loadPlannerArtifactPlan(artifactRoot);
+                if (!raw || !hasBoundaryContracts(artifactRoot, 'feature')
+                  || !hasBoundaryContracts(artifactRoot, 'milestone')) {
+                  throw new Error('Migration needs complete planner and interface artifacts');
+                }
+                const validated = validatePlannerArtifactPlan(raw);
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+                return {
+                  outcome: 'PLAN_ACCEPTED',
+                  result: {
+                    reason: 'Migration artifacts validated. Finalize planning model with delivery locked.',
+                    startDelivery: false,
+                  },
+                };
+              } catch (error) {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration artifacts are not ready for finalization.',
+                    guidance: error instanceof Error ? error.message : String(error),
+                    startDelivery: false,
+                  },
+                };
+              }
+            },
+          };
+        }
+        // Once the user has explicitly approved a validator-passed plan,
+        // finalize that decision deterministically. Do not ask the PM model to
+        // re-request the same human approval (or silently open an unapproved gate).
+        const humanDecision = [...(task.history ?? [])].reverse()
+          .find(entry => entry?.type === 'HUMAN_DECISION')?.decision ?? null;
+        const explicitlyApproved = typeof humanDecision === 'string'
+          ? /approve.*(?:plan|delivery).*authoriz(?:e|ed).*delivery/i.test(humanDecision)
+          : humanDecision?.decision === 'APPROVE_DELIVERY' && humanDecision?.startDelivery === true;
+        if (explicitlyApproved && predecessorResults(store, task)[0]?.outcome === 'PASS') {
+          return {
+            provider: codeProviderId,
+            executionProvenance: executionProvenanceFor(task),
+            execute: async () => ({
+              outcome: 'PLAN_ACCEPTED',
+              result: {
+                reason: 'User approved this fully validated SRPG v2 plan; begin normal Delivery without another Planning iteration.',
+                startDelivery: true,
+              },
+            }),
+          };
+        }
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
         const iteration = iterationRequest(store, task);
@@ -1379,6 +1487,7 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
             ? validatePlannerArtifactPlan(rawArtifactPlan)
@@ -1398,6 +1507,18 @@ export function createDefaultV2Roles({
             if (current?.deliveryEnabled === enabled) return current;
             return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
           };
+          if (wasMigrating) {
+            setDeliveryEnabled(false);
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
+                role: 'migration_finalizer',
+                migrationReconciliation,
+                at: new Date().toISOString(),
+              },
+            };
+          }
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
@@ -1429,11 +1550,18 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
+          const migration = store.getProject(task.projectId)?.planningModelMigration;
           enqueuePlanning?.({
-            request: {
-              purpose: 'PM_PLAN_REVISION',
-              guidance: result.result?.guidance ?? result.result ?? null,
-            },
+            request: migration?.status === 'REBUILDING'
+              ? {
+                  purpose: 'VERSION_MIGRATION_FINALIZE',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
+                }
+              : {
+                  purpose: 'PM_PLAN_REVISION',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                },
           });
           return { state: 'DONE' };
         }
