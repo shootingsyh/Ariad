@@ -1,103 +1,190 @@
-# Ariad v1
+# Ariad
 
-Ariad is a test-first engineering execution core for coordinating deterministic project workflows across agents, tools, source control, resources, and reliability boundaries.
+Ariad is a durable project-orchestration runtime for multi-role engineering work. Ariad owns project state, planning, scheduling, verification boundaries, retries, debugger routing, human gates, and source-control policy. Pi owns one model/tool session at a time.
 
-This repository contains the first fake-executor implementation used to harden the domain model before connecting OpenClaw or real model runtimes.
+The default standalone runtime is now the bundled Pi coding-agent SDK. OpenClaw is no longer required to execute Ariad roles.
 
-## Current scope
+## Runtime architecture
 
-- workflow state machine for Developer -> Tester -> Reviewer
-- project-debugger escalation after bounded development cycles
-- system failures routed to reliability without corrupting semantic development counters
-- scripted fake agent executor for deterministic tests
-- abstract runtime adapter contract and runtime registry
-- thin reliability incidents with bounded recovery and recovery locks
-- resource contention between local model runtimes and tools such as ComfyUI
-- append-only event store
-- project initialization distinct from plugin installation
-- source-control finalization controlled by the coordinator, not the Reviewer
-- optional OpenAI-compatible live LLM semantic eval lane
+```text
+Ariad
+  project/task graph
+  SQLite durable state
+  scheduler + supervisor
+  PM/TL/Debugger routing
+  role seals + acceptance semantics
+  human gates
+        |
+        v
+PiAgentSessionProvider
+        |
+        +-- PM / Tech Lead / Project Debugger: persistent sessions
+        +-- Developer / Tester / Reviewer / Artist: fresh persisted sessions
+        |
+        +-- coding tools
+        +-- Ariad project tools
+        +-- ariad_role_result
+        |
+        v
+provider/model
+  openai-codex/*
+  openai/*
+  meta/*
+  llamacpp/*
+```
 
-## TDD
+Pi owns provider/model/auth mechanics, context persistence/compaction, the model tool loop, and cancellation. Ariad does not reimplement those responsibilities.
 
-The project is developed test-first. Behavioral changes should start with a failing test, then the minimum implementation to make it pass, followed by refactoring while keeping the suite green.
+## Install and provider setup
 
-Run deterministic tests:
+Install Node dependencies:
+
+```bash
+npm install
+```
+
+Prepare/check global Pi provider authentication:
+
+```bash
+npx ariad setup
+```
+
+`ariad setup` never prints credentials. It reports only whether each provider namespace is ready and where the credential came from.
+
+Ariad currently recognizes:
+
+- `openai-codex/*` — Codex / ChatGPT subscription auth
+- `openai/*` — OpenAI API auth
+- `meta/*` — Meta/Muse provider auth
+- `llamacpp/*` — local OpenAI-compatible llama.cpp/Ollama endpoint; no auth required
+
+Pi auth is global by default at `~/.pi/agent/auth.json`. Projects do not store provider credentials.
+
+For local models, configure the OpenAI-compatible endpoint when needed:
+
+```bash
+export ARIAD_LLAMACPP_BASE_URL=http://127.0.0.1:11434/v1
+```
+
+## Project model configuration
+
+Every Ariad project stores explicit `provider/model` refs for:
+
+```text
+artist
+developer
+tester
+reviewer
+project_debugger
+tech_lead
+tech_lead_critic
+pm
+```
+
+The external control MCP exposes:
+
+- `models` — show required roles, provider namespaces, current mapping, and missing roles
+- `set_role_models` — update one or more role mappings
+
+`start` and `resume` reject incomplete model configuration. Existing projects resume without asking again once their model mapping is complete.
+
+## External project control
+
+Run the stdio control server:
+
+```bash
+npx ariad-control-mcp
+```
+
+It hosts `AriadService` and exposes one `ariad_project` MCP tool with actions:
+
+```text
+list
+status
+models
+set_role_models
+create
+takeover
+adopt
+start
+pause
+resume
+stop
+```
+
+The MCP process owns the live standalone service while it is running. Lifecycle actions reuse Ariad's existing project manager and scheduler rather than duplicating state logic.
+
+## Pi role tools
+
+In addition to Pi's normal coding tools, Ariad role sessions expose:
+
+- `ariad_code_search` — live repository search; uses ripgrep when available and a Node fallback otherwise
+- `ariad_interface_search` — searches current Ariad planner interface artifacts
+- `ariad_memory_search` / `ariad_memory_write` — simple artifact-bound project memory
+- `ariad_session_history` — reads persisted Pi session history for debugging/curation
+- `ariad_role_result` — authoritative terminal structured result for the current role
+
+Role semantics remain in Ariad prompts and state transitions. Tools do not decide workflow policy.
+
+## Session policy
+
+Ariad decides logical session identity; Pi decides how conversation state is persisted and compacted.
+
+- PM: persistent per project
+- Tech Lead: persistent per project
+- Project Debugger: persistent per project
+- Developer / Tester / Reviewer / Artist: fresh context per run, but transcript still persisted for audit/debugging
+
+Session files live under the project workspace:
+
+```text
+.ariad/pi/sessions/
+  persistent/<session-key-hash>/
+  fresh/<attempt-hash>/
+```
+
+## Testing
+
+Run the complete deterministic suite:
 
 ```bash
 npm test
 ```
 
-The current suite covers workflow convergence, failure isolation, source-control boundaries, resource conflicts, fake-agent behavior, runtime-adapter conformance, runtime registry behavior, LLM contract validation, and reliability recovery behavior.
-
-## Live LLM evals
-
-Ariad keeps real-model evaluation separate from required deterministic CI. The live lane uses an OpenAI-compatible chat-completions endpoint and currently exercises PM decomposition, Reviewer semantic rejection, and Project Debugger classification.
-
-Configure any compatible endpoint:
+Run the Pi standalone runtime lane:
 
 ```bash
-export ARIAD_LLM_BASE_URL=https://router.huggingface.co/v1
-export ARIAD_LLM_API_KEY=<token>
-export ARIAD_LLM_MODEL=<chat-completion-model>
-npm run test:llm
+npm run test:pi-runtime
 ```
 
-For local testing, the same variables can point at llama.cpp, vLLM, or another OpenAI-compatible server. If `ARIAD_LLM_BASE_URL` or `ARIAD_LLM_MODEL` is absent, live tests skip instead of failing normal CI.
+The Pi lane covers provider/model config, session policy, cancellation, role-result protocol, project tools, planning/replanning, and the PM -> Tech Lead -> Developer -> Tester -> Reviewer lifecycle using deterministic bottom-model fixtures.
 
-Hugging Face Inference Providers exposes `GET /v1/models`; use that to choose a currently served chat model rather than hard-coding provider availability. Lightweight instruction models are useful for testing Ariad's role contracts because the evals assert structured properties, not exact prose.
+Real-provider smoke tests are intentionally not required in CI. Development validation has also been run against local Qwen, Codex subscription auth, and Meta/Muse auth.
 
-## Runtime adapters
+## Legacy compatibility
 
-Ariad Core does not depend on OpenClaw, OpenCode, local model servers, or any other concrete runtime. It resolves a logical runtime key through `RuntimeRegistry` and talks only to a minimal contract:
+The earlier Pydantic standalone provider remains in the repository only for legacy/test coverage while those deterministic tests are migrated. It is not the default production runtime and is not the standalone CI lane.
 
-```text
-start
-resume
-poll
-cancel
-```
+The OpenClaw extension remains for compatibility/migration surfaces and legacy deployment paths. OpenClaw credential stores may be used once as migration inputs for Pi auth, but OpenClaw is not required for the default standalone role runtime.
 
-The preferred integration shape is one runtime per adapter file:
+## Ownership rules
 
-```text
-src/adapters/
-  fake-runtime.js
-  openclaw.js
-  opencode.js
-  local-cli.js
-```
+Ariad owns:
 
-Runtime-specific endpoint, session, model, provider, and authentication details stay inside the adapter. See `docs/runtime-adapters.md` for the contract and implementation pattern.
+- durable project/task/interface state
+- planning and replanning
+- scheduler/resource policy
+- retry/debugger/human-gate policy
+- role acceptance/seals
+- source-control finalization policy
 
-## Project initialization vs plugin installation
+Pi owns:
 
-Ariad treats these as separate lifecycle operations.
+- provider/model/auth
+- model conversation/session storage
+- context compaction
+- coding/tool execution loop
+- provider retries
+- abort/cancellation mechanics
 
-Project initialization prepares a specific engineering project:
-
-```text
-validate repository
-  -> configure source control
-  -> bootstrap Ariad metadata
-  -> validate project policy
-  -> create project state
-```
-
-Plugin installation configures the host/runtime integration and does not initialize project source control.
-
-## Source-control ownership
-
-Reviewer roles do not receive commit/push authority by default. After Reviewer PASS, the workflow enters a coordinator-controlled source-control finalization step. A commit/push failure is an execution/system failure, not a Reviewer rejection.
-
-## Reliability
-
-Reliability is deliberately small in v1:
-
-```text
-observe -> recover -> escalate
-```
-
-It allows independent incidents and avoids complex incident correlation. Destructive recovery actions are guarded by recovery-key locks so duplicate detections cannot cause duplicate restarts.
-
-See `docs/architecture.md` for the logical boundaries.
+See `docs/runtime-adapters.md` for the runtime boundary.
