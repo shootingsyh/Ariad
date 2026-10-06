@@ -280,10 +280,26 @@ export async function createDefaultPiRunSession(spec) {
     tools: [...ARIAD_PI_DEFAULT_TOOLS, ...ARIAD_PROJECT_TOOL_NAMES, RESULT_TOOL],
   });
   await session.bindExtensions({ mode: 'json' });
+  // A persistent session may have ended with a Muse quota fallback.
+  // Every NEW role run still uses Ariad's configured primary model.
+  if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
+    await session.setModel(model, { persist: false });
+  }
 
   return {
     session,
     getTerminalResult: () => terminalResult,
+    async switchModel(modelRef) {
+      const target = resolveAriadPiModelRef(modelRef);
+      if (target.provider === 'meta' && process.env.META_API_KEY) {
+        await modelRuntime.setRuntimeApiKey('meta', process.env.META_API_KEY);
+      }
+      const nextModel = modelRuntime.getModel(target.provider, target.model);
+      if (!nextModel) throw new Error(`MODEL_PROVIDER_UNAVAILABLE: fallback ${modelRef}`);
+      // Pi persists the model change inside the SAME session transcript,
+      // but never rewrites the preferred model in the global defaults.
+      await session.setModel(nextModel, { persist: false });
+    },
   };
 }
 
@@ -325,37 +341,44 @@ export class PiAgentSessionProvider {
       `When the assigned role work is actually complete, call ${RESULT_TOOL} exactly once. Do not finish with ordinary prose.`,
     ].join('\n');
 
-    const runModel = async (runSpec) => {
-      const run = await this.createRunSession(runSpec);
-      record.session = run.session;
-      await run.session.prompt(prompt);
+    const checkTerminalResult = run => {
       const result = run.getTerminalResult?.() ?? null;
-      if (!result) {
-        const last = Array.isArray(run.session?.messages) ? run.session.messages.at(-1) : null;
-        if (last?.role === 'assistant' && last?.stopReason === 'error' && last?.errorMessage) {
-          throw new Error(`PI_PROVIDER_ERROR: ${last.errorMessage}`);
-        }
-        throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
+      if (result) return result;
+      const last = Array.isArray(run.session?.messages) ? run.session.messages.at(-1) : null;
+      if (last?.role === 'assistant' && last?.stopReason === 'error' && last?.errorMessage) {
+        throw new Error(`PI_PROVIDER_ERROR: ${last.errorMessage}`);
       }
-      return result;
+      throw new Error('ARIAD_ROLE_RESULT_MISSING: Pi session ended without terminal result tool');
     };
 
     record.promise = (async () => {
       try {
+        const run = await this.createRunSession(spec);
+        record.session = run.session;
         let result;
         try {
-          result = await runModel(spec);
+          await run.session.prompt(prompt);
+          result = checkTerminalResult(run);
         } catch (error) {
           const fallbackSpec = isCodexQuotaExhaustion(error) ? codexQuotaFallbackSpec(spec) : null;
           if (!fallbackSpec || record.state === 'CANCELLED') throw error;
-          try { record.session?.dispose?.(); } catch {}
-          record.session = null;
-          result = await runModel(fallbackSpec);
+          if (typeof run.switchModel !== 'function') {
+            throw new Error('ARIAD_MODEL_FALLBACK_UNAVAILABLE: Pi session cannot switch models in place');
+          }
+          await run.switchModel(fallbackSpec.context.roleModelRef);
+          // Continue the SAME session and full transcript. Do not create
+          // another Pi session, replay tools, or reset the role context.
+          await run.session.prompt(
+            'The previous model exhausted its usage quota. Continue the same Ariad role task ' +
+            'from the existing session history and tool results. Do not repeat completed work. ' +
+            'When complete, submit the required ariad_role_result.',
+          );
+          result = checkTerminalResult(run);
           result = {
             ...result,
             keyPoints: [
               ...(result.keyPoints ?? []),
-              `ARIAD_MODEL_QUOTA_FALLBACK: ${spec.context.roleModelRef} -> ${fallbackSpec.context.roleModelRef}`,
+              `ARIAD_MODEL_QUOTA_FALLBACK: ${spec.context.roleModelRef} -> ${fallbackSpec.context.roleModelRef} (same Pi session)`,
             ],
           };
         }
