@@ -21,8 +21,7 @@ function writeJsonAtomic(file, data) {
 export function activateDeferredIterations({ store, projectId, workspace }) {
   const project = store.getProject(projectId);
   if (!project) return [];
-  if (project.planningModelMigration?.status === 'REBUILDING') return [];
-  if (project.planningModelMigration && project.planningModelMigration.status !== 'COMPLETED') return [];
+  if (project.planningModelMigration?.status !== 'COMPLETED') return [];
   if (store.listPlanningRequests(projectId).some(r => r.state !== 'PLANNED')) return [];
   const root = join(workspace, '.ariad', 'iterations', 'requests');
   if (!existsSync(root)) return [];
