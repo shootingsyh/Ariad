@@ -12,17 +12,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Install bundled Node runtime dependencies
+      - name: Install bundled Pi runtime dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Install Pydantic runtime only
-        run: pip install -r runtime/pydantic/requirements.txt
-      - name: Compile standalone worker
-        run: python -m py_compile runtime/pydantic/worker.py
-      - name: Test standalone runtime without OpenClaw
-        run: npm run test:pydantic-runtime
+      - name: Test standalone Pi runtime without OpenClaw
+        run: npm run test:pi-runtime
 
   test:
     runs-on: ubuntu-latest
