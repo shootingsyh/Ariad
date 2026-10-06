@@ -141,7 +141,8 @@ export function revisionInstructions(artifactRoot, nodeType) {
   const { decisionsDir } = layout(artifactRoot, nodeType);
   return [
     `Write exactly one decision JSON for the active ${nodeType} node into ${decisionsDir}/<nodeId>.json.`,
-    'Shape: {"version":1,"nodeType":"feature|milestone","nodeId":"...","action":"KEEP|AMEND|REMOVE|REFINE","visitChildren":true|false,"reason":"...","patch":{...}}.',
+    'Base shape: {"version":1,"nodeType":"feature|milestone","nodeId":"...","action":"KEEP|AMEND|REMOVE|REFINE","visitChildren":true|false,"reason":"..."}.',
+    'Only AMEND may include a patch object. KEEP, REFINE, and REMOVE MUST omit the patch property entirely, not even an empty object.',
     'KEEP means this node itself stays unchanged. Set visitChildren=false only when the entire subtree is confidently unaffected.',
     'AMEND changes this node while preserving stable identity; use the smallest patch.',
     'REFINE means child structure must be reconsidered using the normal one-layer top-down frontier after traversal identifies the affected node.',
