@@ -6,19 +6,25 @@ const codex='openai-codex/gpt-5.6-sol';
 const muse='meta/muse-spark-1.3-contributor';
 async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
   const calls=[];
-  let disposed=0;
+  let disposed=0, switched=0;
   const provider=new PiAgentSessionProvider({
     createRunSession:async spec=>{
-      calls.push({model:spec.context.roleModelRef,policy:spec.sessionPolicy,attempt:spec.attemptId});
-      const fail=spec.context.roleModelRef===codex?primaryError:fallbackError;
+      let active=spec.context.roleModelRef;
+      calls.push({model:active,policy:spec.sessionPolicy,attempt:spec.attemptId});
       const session={messages:[],
-        async prompt(){
-          if(!fail)return;
-          this.messages.push({role:'assistant',stopReason:'error',errorMessage:fail});
+        async prompt(message){
+          this.messages.push({role:'user',content:message});
+          const fail=active===codex?primaryError:fallbackError;
+          if(fail)this.messages.push({role:'assistant',stopReason:'error',errorMessage:fail});
         },
         dispose(){disposed++;}
       };
-      return {session,getTerminalResult:()=>fail?null:{outcome:'PLANNED',summary:'Completed using '+spec.context.roleModelRef,keyPoints:[]}};
+      return {
+        session,
+        async switchModel(ref){ active=ref; switched++; calls.push({switchTo:ref}); },
+        getTerminalResult:()=>((active===codex?primaryError:fallbackError)?null:{
+          outcome:'PLANNED',summary:'Completed using '+active,keyPoints:[]}),
+      };
     },
   });
   const handle=await provider.start({
@@ -30,16 +36,16 @@ async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
   await provider.runs.get(handle.externalId).promise;
   const state=await provider.poll(handle);
   await provider.close();
-  return {calls,state,disposed};
+  return {calls,state,disposed,switched};
 }
 test('Codex account quota falls back to Muse only for this attempt',async()=>{
  const r=await execute({primaryError:'Codex error: The usage limit has been reached'});
- assert.deepEqual(r.calls.map(x=>x.model),[codex,muse]);
- assert.deepEqual(r.calls.map(x=>x.policy),['persistent','fresh']);
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
+ assert.equal(r.switched,1);
  assert.equal(r.state.state,'COMPLETED');
  assert.match(r.state.summary,/meta\/muse/);
  assert.ok(r.state.keyPoints.some(x=>x.includes('ARIAD_MODEL_QUOTA_FALLBACK')));
- assert.equal(r.disposed,2);
+ assert.equal(r.disposed,1);
  // Next new task/attempt always starts with primary Codex, not Muse.
  const next=await execute({primaryError:null});
  assert.deepEqual(next.calls.map(x=>x.model),[codex]);
@@ -53,7 +59,7 @@ test('Muse fallback failures remain failures; do not claim success',async()=>{
  const r=await execute({primaryError:'usage limit has been reached',fallbackError:'Muse auth denied'});
  assert.equal(r.state.state,'FAILED');
  assert.match(r.state.failure,/Muse auth denied/);
- assert.deepEqual(r.calls.map(x=>x.model),[codex,muse]);
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
 });
 test('other providers are never forced through Codex fallback',async()=>{
  const r=await execute({roleModelRef:muse,primaryError:null});
