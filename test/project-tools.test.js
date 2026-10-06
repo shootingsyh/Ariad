@@ -170,8 +170,8 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
   await tools.execute('set_role_models', { name: 'P', roleModels: { pm: 'openai-codex/gpt-5.6-sol' } });
   assert.equal(calls[0][0], 'set_role_models');
   tools.takeover({ name: 'take', sourcePath: '/repo', roleModels: { developer: 'x/y' } });
-  assert.equal(calls[0][0], 'create');
-  assert.equal(calls[0][2].mode, 'TAKEOVER');
+  assert.equal(calls[1][0], 'create');
+  assert.equal(calls[1][2].mode, 'TAKEOVER');
   await tools.execute('start', { name: 'P' });
   await tools.execute('pause', { name: 'P' });
   await tools.execute('resume', { name: 'P' });
