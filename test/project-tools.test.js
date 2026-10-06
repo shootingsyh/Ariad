@@ -12,6 +12,7 @@ import { ariadPiPaths } from '../src/runtime/pi-runtime-config.js';
 import { piSessionManagerForSpec } from '../src/runtime/pi-agent-session-provider.js';
 import { ARIAD_PROJECT_TOOL_NAMES, registerAriadProjectTools } from '../src/runtime/pi-project-tools.js';
 import { AriadControlTools } from '../src/runtime/control-tools.js';
+import { MemoryCurator } from '../src/runtime/memory-curator.js';
 import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';
 
 test('project memory binds concise memories to Ariad artifacts and searches them', () => {
@@ -235,5 +236,95 @@ test('control MCP exposes external Ariad project management tool', async () => {
     child.kill('SIGTERM');
     await new Promise(resolve => child.once('exit', resolve));
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('daily memory curator uses the PM model, consumes persisted history, and records success', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-curator-'));
+  try {
+    const paths = ariadPiPaths(workspace);
+    const history = piSessionManagerForSpec({
+      projectId: 'P-curator',
+      taskId: 'T-real',
+      attemptId: 'P-curator:T-real:developer:1',
+      role: 'developer',
+      sessionPolicy: 'fresh',
+    }, paths, workspace);
+    history.appendMessage({
+      role: 'user',
+      content: 'PolicyGuard must preserve a stable deny-by-default invariant.',
+      timestamp: Date.now(),
+    });
+
+    const starts = [];
+    let pollCount = 0;
+    const provider = {
+      async start(spec) {
+        starts.push(spec);
+        return { externalId: 'curator-1' };
+      },
+      async poll() {
+        pollCount += 1;
+        return { state: 'COMPLETED', outcome: 'PASS', summary: 'Stored one durable memory.' };
+      },
+      async cancel() {},
+    };
+    const now = new Date('2026-10-05T20:00:00.000Z');
+    const curator = new MemoryCurator({ provider, now: () => now });
+    const project = {
+      id: 'P-curator',
+      workspace,
+      roleModels: { pm: 'openai-codex/gpt-5.6-sol' },
+    };
+
+    const first = await curator.tick(project);
+    assert.equal(first.state, 'STARTED');
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0].role, 'memory_curator');
+    assert.equal(starts[0].context.roleModelRef, 'openai-codex/gpt-5.6-sol');
+    assert.match(starts[0].prompt, /ariad_session_history/);
+
+    const second = await curator.tick(project);
+    assert.equal(second.state, 'COMPLETED');
+    assert.equal(pollCount, 1);
+    const state = JSON.parse(fs.readFileSync(path.join(workspace, '.ariad', 'memory-curator.json'), 'utf8'));
+    assert.equal(state.lastSuccessAt, now.toISOString());
+    assert.equal(state.lastFailure, null);
+    assert.equal(state.lastSummary, 'Stored one durable memory.');
+
+    const third = await curator.tick(project);
+    assert.equal(third.state, 'IDLE');
+    assert.equal(starts.length, 1, 'successful daily curation must not immediately rerun');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('memory curator skips model calls when there is no recent non-maintenance history', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-curator-empty-'));
+  try {
+    const provider = {
+      starts: 0,
+      async start() { this.starts += 1; return { externalId: 'never' }; },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() {},
+    };
+    const now = new Date('2026-10-05T20:00:00.000Z');
+    const curator = new MemoryCurator({ provider, now: () => now });
+    const project = {
+      id: 'P-empty',
+      workspace,
+      roleModels: { pm: 'openai-codex/gpt-5.6-sol' },
+    };
+    const result = await curator.tick(project);
+    assert.equal(result.state, 'SKIPPED');
+    assert.equal(result.reason, 'NO_RECENT_HISTORY');
+    assert.equal(provider.starts, 0);
+    const state = curator.state(project);
+    assert.equal(state.lastSummary, 'No recent session history to curate.');
+    assert.equal(curator.isDue(project), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
