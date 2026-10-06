@@ -30,12 +30,14 @@ export function sessionHistory(workspace, {
   taskId = null,
   limit = 200,
   maxChars = 20000,
+  includeMaintenance = false,
 } = {}) {
   const root = ariadPiPaths(workspace).sessionsDir;
   const cutoff = Date.now() - Math.max(0, Number(sinceHours) || 24) * 60 * 60 * 1000;
   const events = [];
   for (const file of walk(root).sort()) {
     const meta = readMeta(file);
+    if (!includeMaintenance && meta.role === 'memory_curator') continue;
     if (role && meta.role !== role) continue;
     if (taskId && meta.taskId !== taskId) continue;
     let lines;
