@@ -149,6 +149,8 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
   const manager = {
     create(name, options) { calls.push(['create', name, options]); return { id: name }; },
     adopt(name, sourcePath, options) { calls.push(['adopt', name, sourcePath, options]); return { id: name, adopted: true }; },
+    status(name) { return { id: name, roleModels: { developer: 'llamacpp/qwen3.8:27b' } }; },
+    setRoleModels(name, roleModels) { calls.push(['set_role_models', name, roleModels]); return { id: name, roleModels }; },
   };
   const service = {
     list() { return ['P']; },
@@ -162,6 +164,11 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
 
   assert.deepEqual(tools.list(), ['P']);
   assert.deepEqual(await tools.execute('status', { name: 'P' }), { id: 'P' });
+  const models = await tools.execute('models', { name: 'P' });
+  assert.equal(models.roleModels.developer, 'llamacpp/qwen3.8:27b');
+  assert.equal(models.missingRoles.includes('pm'), true);
+  await tools.execute('set_role_models', { name: 'P', roleModels: { pm: 'openai-codex/gpt-5.6-sol' } });
+  assert.equal(calls[0][0], 'set_role_models');
   tools.takeover({ name: 'take', sourcePath: '/repo', roleModels: { developer: 'x/y' } });
   assert.equal(calls[0][0], 'create');
   assert.equal(calls[0][2].mode, 'TAKEOVER');
@@ -169,7 +176,7 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
   await tools.execute('pause', { name: 'P' });
   await tools.execute('resume', { name: 'P' });
   await tools.execute('stop', { name: 'P' });
-  assert.deepEqual(calls.slice(1).map(call => call[0]), ['start', 'pause', 'resume', 'stop']);
+  assert.deepEqual(calls.slice(2).map(call => call[0]), ['start', 'pause', 'resume', 'stop']);
 });
 
 test('control MCP exposes external Ariad project management tool', async () => {
@@ -204,7 +211,7 @@ test('control MCP exposes external Ariad project management tool', async () => {
     assert.equal(response.result.tools[0].name, 'ariad_project');
     assert.deepEqual(
       response.result.tools[0].inputSchema.properties.action.enum,
-      ['list', 'status', 'create', 'takeover', 'adopt', 'start', 'pause', 'resume', 'stop'],
+      ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'resume', 'stop'],
     );
 
     child.stdin.write(JSON.stringify({
