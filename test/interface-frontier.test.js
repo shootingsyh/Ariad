@@ -291,6 +291,76 @@ test('frontier pass rejects grandchildren created in the same TL round', () => {
   }
 });
 
+
+test('migration frontier preserves archived grandchildren and validates the durable target', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-legacy-'));
+  const legacy = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-archive-'));
+  try {
+    for (const dir of [root, legacy]) {
+      feature(dir, 'project', null);
+      feature(dir, 'release', 'project');
+      feature(dir, 'platform', 'release');
+    }
+    contract(root, 'feature', 'project', { decomposition: 'expand', exports: ['project-api'] });
+    contract(root, 'feature', 'release', { decomposition: 'expand', exports: ['release-api'] });
+    contract(root, 'feature', 'platform', { decomposition: 'leaf', exports: ['platform-api'] });
+
+    // Legacy active-frontier artifacts predate the node-baseline field and may
+    // point to null even though the durable migration decision targets release.
+    writeJson(path.join(root, 'planner', 'interfaces', 'active-frontier.json'), {
+      version: 1, nodeType: 'feature', bootstrap: false, targetNodeId: null,
+    });
+    const pass = finishFrontierPass(root, 'feature', {
+      expectedTargetNodeId: 'release',
+      legacyBaselineRoot: legacy,
+    });
+    assert.equal(pass.targetNodeId, 'release');
+    assert.deepEqual(pass.childIds, ['platform']);
+    assert.throws(
+      () => finishFrontierPass(root, 'feature'),
+      /one-layer frontier pass illegally created grandchild/,
+    );
+
+    feature(root, 'surprise', 'platform');
+    contract(root, 'feature', 'platform', { decomposition: 'expand', exports: ['platform-api'] });
+    contract(root, 'feature', 'surprise', { decomposition: 'leaf', exports: ['surprise-api'] });
+    assert.throws(
+      () => finishFrontierPass(root, 'feature', {
+        expectedTargetNodeId: 'release',
+        legacyBaselineRoot: legacy,
+      }),
+      /one-layer frontier pass illegally created grandchild/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(legacy, { recursive: true, force: true });
+  }
+});
+
+test('frontier pass allows pre-existing grandchildren but rejects newly introduced ones', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-existing-'));
+  try {
+    feature(root, 'project', null);
+    feature(root, 'child', 'project');
+    feature(root, 'old-descendant', 'child');
+    contract(root, 'feature', 'project', { decomposition: 'expand', exports: ['project-api'] });
+    contract(root, 'feature', 'child', { decomposition: 'expand', exports: ['child-api'] });
+    contract(root, 'feature', 'old-descendant', { decomposition: 'leaf', exports: ['old-api'] });
+    beginFrontierPass(root, 'feature');
+    const ok = finishFrontierPass(root, 'feature');
+    assert.equal(ok.targetNodeId, 'project');
+
+    feature(root, 'new-descendant', 'child');
+    contract(root, 'feature', 'new-descendant', { decomposition: 'leaf', exports: ['new-api'] });
+    assert.throws(
+      () => finishFrontierPass(root, 'feature'),
+      /one-layer frontier pass illegally created grandchild/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('parent-facing exported interfaces freeze when a child is first exposed', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-freeze-'));
   try {
