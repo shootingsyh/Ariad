@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { runAriadCli } from '../src/runtime/cli.js';
+import { defaultProjectsRoot } from '../src/runtime/project-manager.js';
 
 test('ariad project migrate archives the old DB and creates a fresh migration request', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-cli-migrate-'));
@@ -80,5 +81,21 @@ test('ariad setup prepares global Pi provider auth without exposing credentials'
     if (original === undefined) delete process.env.ARIAD_PI_AUTH_PATH;
     else process.env.ARIAD_PI_AUTH_PATH = original;
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('standalone project root is default for new installs while legacy OpenClaw root remains discoverable', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-project-root-'));
+  try {
+    assert.equal(defaultProjectsRoot(home), path.join(home, '.ariad', 'projects'));
+    const legacy = path.join(home, '.openclaw', 'ariad', 'projects');
+    fs.mkdirSync(legacy, { recursive: true });
+    assert.equal(defaultProjectsRoot(home), legacy);
+    const standalone = path.join(home, '.ariad', 'projects');
+    fs.mkdirSync(standalone, { recursive: true });
+    assert.equal(defaultProjectsRoot(home), standalone);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
