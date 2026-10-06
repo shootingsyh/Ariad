@@ -96,10 +96,14 @@ export function buildAriadPiModelsConfig(roleModels = {}, {
   };
 }
 
+export function ariadPiAuthPath() {
+  return process.env.ARIAD_PI_AUTH_PATH
+    || join(homedir(), '.pi', 'agent', 'auth.json');
+}
+
 export function ariadPiPaths(workspace) {
   const root = join(workspace, '.ariad', 'pi');
-  const authPath = process.env.ARIAD_PI_AUTH_PATH
-    || join(homedir(), '.pi', 'agent', 'auth.json');
+  const authPath = ariadPiAuthPath();
   return {
     root,
     authPath,
