@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export const ARIAD_PI_DEFAULT_TOOLS = Object.freeze([
@@ -97,9 +98,11 @@ export function buildAriadPiModelsConfig(roleModels = {}, {
 
 export function ariadPiPaths(workspace) {
   const root = join(workspace, '.ariad', 'pi');
+  const authPath = process.env.ARIAD_PI_AUTH_PATH
+    || join(homedir(), '.pi', 'agent', 'auth.json');
   return {
     root,
-    authPath: join(root, 'auth.json'),
+    authPath,
     modelsPath: join(root, 'models.json'),
     sessionsDir: join(root, 'sessions'),
   };
