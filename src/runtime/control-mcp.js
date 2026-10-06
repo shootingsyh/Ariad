@@ -24,7 +24,7 @@ const inputSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['list', 'status', 'create', 'takeover', 'adopt', 'start', 'pause', 'resume', 'stop'],
+      enum: ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'resume', 'stop'],
     },
     name: { type: 'string' },
     goal: { type: ['string', 'null'] },
@@ -81,7 +81,7 @@ async function main() {
       reply(id, {
         tools: [{
           name: 'ariad_project',
-          description: 'Manage Ariad projects from outside the role runtime: create/takeover/adopt, inspect, start, pause, resume, or stop.',
+          description: 'Manage Ariad projects from outside the role runtime: inspect/configure models, create/takeover/adopt, start, pause, resume, or stop.',
           inputSchema,
         }],
       });
