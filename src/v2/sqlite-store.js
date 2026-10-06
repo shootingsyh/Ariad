@@ -1,4 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
+import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
+import { controlTaskPolicyFailure, TASK_KINDS } from './control-task-policy.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -33,7 +35,7 @@ function normalizeTask(task) {
   if (scope === 'delivery' && task.flowId != null) {
     throw new Error('delivery task cannot have flowId');
   }
-  return {
+  const normalized = {
     dependsOn: [],
     stage: 'developer',
     state: 'READY',
@@ -45,6 +47,9 @@ function normalizeTask(task) {
     scope,
     flowId: scope === 'control' ? task.flowId : undefined,
   };
+  const policyError = controlTaskPolicyFailure(normalized);
+  if (policyError) throw new Error(policyError);
+  return normalized;
 }
 
 function graphKey(task) {
@@ -148,6 +153,24 @@ export class SQLiteV2Store {
     return this.#insertTask(task);
   }
 
+  createAdhocAnalysis({ projectId, id, requestedBy, instruction, context = null }) {
+    if (!this.getProject(projectId)) throw new Error('unknown project');
+    if (!id || !/^[a-zA-Z0-9_.:-]+$/.test(id)) throw new Error('invalid adhoc id');
+    if (!['operator', 'user', 'pm'].includes(requestedBy)) {
+      throw new Error('ADHOC_ANALYSIS_UNAUTHORIZED_ISSUER');
+    }
+    return this.createControlFlow({
+      projectId,
+      flowId: `adhoc:${projectId}:${id}`,
+      tasks: [{
+        id: `adhoc:${projectId}:${id}:analysis`,
+        stage: 'tech_lead',
+        taskKind: TASK_KINDS.ADHOC_ANALYSIS,
+        input: { taskKind: TASK_KINDS.ADHOC_ANALYSIS, requestedBy, instruction, context },
+      }],
+    })[0];
+  }
+
   createControlFlow({ projectId, flowId, tasks }) {
     if (!projectId) throw new Error('projectId is required');
     if (!flowId) throw new Error('flowId is required');
@@ -243,6 +266,25 @@ export class SQLiteV2Store {
     }
     if (plan?.version !== 3 && !plan?.rootTaskId) {
       throw new Error('legacy delivery plan requires rootTaskId');
+    }
+
+    // Never compile an administrative approval gate as developer work.
+    // It remains in the plan for traceability but must be resolved by the
+    // PM/control-plane authorization mechanism, not a coding agent.
+    for (const spec of deliverySpecs) {
+      if (isApprovalGateTask(spec)) {
+        throw new Error(`DELIVERY_PLAN_CONTROL_TASK: ${spec.id} is an approval gate; move authorization to the PM control flow instead of Delivery`);
+      }
+      const plannedStage = spec.revisionMode === 'regression'
+        ? 'tester' : (spec.art?.required ? 'artist' : 'developer');
+      const failure = developerTaskPolicyFailure({
+        ...spec, stage: plannedStage, scope: 'delivery',
+      });
+      // Legacy v1/v2 task plans may have synthetic root tasks without milestone
+      // ownership. Full v3 compiled plans require explicit milestone ownership.
+      if (failure && (failure !== 'DEVELOPER_REQUIRES_MILESTONE' || plan.version === 3)) {
+        throw new Error(`${failure}: ${spec.id}`);
+      }
     }
 
     const incoming = new Map(deliverySpecs.map(task => [task.id, task]));

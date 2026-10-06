@@ -63,6 +63,21 @@ test('project state is derived by ordered declarative rules', () => {
     deriveProjectExecutionState({ tasks: [], hasPlanning: true }),
     'PLANNING',
   );
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [{ scope: 'control', state: 'NEEDS_HUMAN' }],
+      hasPlanning: true,
+      migration: { status: 'REBUILDING' },
+    }),
+    'MIGRATING',
+  );
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [{ scope: 'delivery', state: 'READY' }],
+      migration: { status: 'REBUILDING' },
+    }),
+    'MIGRATING',
+  );
 });
 
 

@@ -2,6 +2,8 @@ import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
+import { developerTaskPolicyFailure } from './developer-task-policy.js';
+import { controlTaskPolicyFailure, isAdhocAnalysis } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -39,9 +41,10 @@ export class V2Scheduler {
     this.resources = resources;
   }
 
-  async #advanceResults(projectId) {
+  async #advanceResults(projectId, { migrating = false } = {}) {
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'RESULT_READY') continue;
+      if (migrating && !(isPlannerTask(task) && task.input?.versionMigration === true)) continue;
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
@@ -99,27 +102,49 @@ export class V2Scheduler {
   }
 
   async tick(projectId) {
-    await this.#advanceResults(projectId);
+    const initialProject = this.store.getProject(projectId);
+    if (!initialProject) throw new Error(`unknown project: ${projectId}`);
+    const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
+    await this.#advanceResults(projectId, { migrating });
     this.#settlePlanningBatches(projectId);
 
     if (this.store.hasUnplannedPlanningRequests(projectId)) {
-      createNextPlanningBatch({ store: this.store, projectId });
+      const pending = this.store.listPlanningRequests(projectId, { states: ['PENDING'] });
+      if (!migrating || pending.every(item =>
+        ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
+      )) {
+        createNextPlanningBatch({ store: this.store, projectId });
+      }
     }
 
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
     const allTasks = this.store.listTasks(projectId);
-    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId);
+    // A human-approved PM review remains resumable after its planning request
+    // has been marked PLANNED. It must finish the review gate before Delivery
+    // may be considered, without reopening unrelated planning work.
+    const resumedHumanReview = allTasks.some(task =>
+      isPlannerTask(task)
+      && task.stage === 'pm'
+      && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
+      && (task.history ?? []).some(entry => entry.type === 'HUMAN_DECISION')
+    );
+    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId) || resumedHumanReview;
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
-    const schedulableTasks = planningBlocked
-      ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
-      : allTasks.filter(task =>
-          (!isPlannerTask(task) || isUnifiedDiagnostic(task))
-          && (task.scope !== 'delivery' || deliveryEnabled)
-        );
+    // Migration is a project-level exclusive mode. Neither Delivery nor
+    // ordinary planning/iteration/diagnostic roles may execute, regardless
+    // of deliveryEnabled, PM authorization, or task graph state.
+    const schedulableTasks = migrating
+      ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
+      : planningBlocked
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
+        : allTasks.filter(task =>
+            (!isPlannerTask(task) || isUnifiedDiagnostic(task))
+            && (task.scope !== 'delivery' || deliveryEnabled)
+          );
     const candidates = [];
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
@@ -153,6 +178,19 @@ export class V2Scheduler {
       const graph = buildExecutionGraph(sameGraphTasks);
       const fresh = graph.byId.get(task.id);
       if (!graph.isRunnable(fresh)) continue;
+
+      const controlPolicyFailure = controlTaskPolicyFailure(task);
+      if (controlPolicyFailure) {
+        throw new Error(`${controlPolicyFailure}: refusing to dispatch task ${task.id}`);
+      }
+      const policyFailure = developerTaskPolicyFailure(task, {
+        // Legacy pre-v3 hand-created tasks lacked milestone metadata;
+        // enforce ownership for projects whose delivery plan is compiled.
+        requireMilestone: (project.deliveryPlanVersion ?? 0) > 0,
+      });
+      if (policyFailure) {
+        throw new Error(`${policyFailure}: refusing to dispatch developer task ${task.id}`);
+      }
 
       const role = this.roles.get(task.stage);
       const spec = role.prepare({ project, task });

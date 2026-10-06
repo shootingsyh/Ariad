@@ -2744,3 +2744,97 @@ test('shared scoped resource pool serializes local LLM work across projects with
     fs.rmSync(cdir.dir, { recursive: true, force: true });
   }
 });
+
+test('PM review resumed by HUMAN_DECISION runs after request is marked PLANNED', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-reviewed', deliveryEnabled: false });
+    store.createTask({
+      id: 'D1', projectId: 'P-reviewed', scope: 'delivery', stage: 'developer',
+      state: 'READY',
+    });
+    store.createTask({
+      id: 'PM', projectId: 'P-reviewed', scope: 'control',
+      flowId: 'planner:P-reviewed:batch-1-1', stage: 'pm', state: 'READY',
+      input: { purpose: 'PLANNER_PM_REVIEW' },
+      history: [{ type: 'HUMAN_DECISION', decision: 'Approve the validated plan' }],
+    });
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start(spec) { return { externalId: spec.taskId }; },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() { return { confirmed: true }; },
+    });
+    const roleRegistry = new RoleRegistry();
+    roleRegistry.register('pm', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => ({ state: 'DONE' }),
+    });
+    roleRegistry.register('developer', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => ({ state: 'DONE' }),
+    });
+    const scheduler = new V2Scheduler({
+      store, roles: roleRegistry, providers, resources: new ResourcePool({}),
+    });
+    const tick = await scheduler.tick('P-reviewed');
+    assert.deepEqual(tick.started, ['PM']);
+    assert.equal(store.getTask('D1').state, 'READY');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrating scheduler allows only migration control tasks even if delivery is enabled', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-exclusive-migrate',
+      deliveryEnabled: true, // Deliberate compromised PM/manifest state.
+      planningModelMigration: { status: 'REBUILDING', fromVersion: 1, toVersion: 2 },
+    });
+    store.createTask({
+      id: 'D1', projectId: 'P-exclusive-migrate',
+      scope: 'delivery', stage: 'developer', state: 'READY',
+    });
+    store.createTask({
+      id: 'C1', projectId: 'P-exclusive-migrate',
+      scope: 'control', flowId: 'planner:P-exclusive-migrate:ordinary',
+      stage: 'tech_lead', state: 'READY', input: { purpose: 'PLANNER_DECOMPOSE' },
+    });
+    store.createTask({
+      id: 'M1', projectId: 'P-exclusive-migrate',
+      scope: 'control', flowId: 'planner:P-exclusive-migrate:migration',
+      stage: 'tech_lead', state: 'READY',
+      input: { purpose: 'PLANNER_DECOMPOSE', versionMigration: true },
+    });
+    const started = [];
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start(input) { started.push(input.taskId); return { externalId: 'run:' + input.taskId }; },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() { return { confirmed: true }; },
+    });
+    const roles = new RoleRegistry();
+    for (const role of ['developer','tech_lead']) {
+      roles.register(role, {
+        prepare: () => ({ provider: 'fake' }),
+        transition: () => ({ state: 'DONE' }),
+      });
+    }
+    const scheduler = new V2Scheduler({
+      store, roles, providers, resources: new ResourcePool({}),
+    });
+    const run = await scheduler.tick('P-exclusive-migrate');
+    assert.deepEqual(run.started, ['M1']);
+    assert.deepEqual(started, ['M1']);
+    assert.equal(store.getTask('D1').state, 'READY');
+    assert.equal(store.getTask('C1').state, 'READY');
+    store.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
