@@ -196,7 +196,8 @@ function latestFrontierCompletion(store, task) {
 }
 
 function migrationRevisionRoot(store, projectId) {
-  return store.getProject(projectId)?.planningModelMigration?.legacyRevisionRoot ?? null;
+  const migration = store.getProject(projectId)?.planningModelMigration;
+  return migration?.revisionWorkRoot ?? migration?.legacyRevisionRoot ?? null;
 }
 
 function migrationPlanningRequest(store, task) {
