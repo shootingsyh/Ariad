@@ -78,6 +78,11 @@ test('planning model migration archives the whole old DB and starts from a fresh
   assert.equal(bundle.tuple.activeVersion, 5);
   assert.equal(validatePlanningArtifactBundleManifest(bundle).ok, true);
   assert.equal(fs.existsSync(path.join(migration.legacyRevisionRoot, 'planner', 'logical', 'legacy.json')), true);
+  assert.equal(fs.existsSync(path.join(migration.revisionWorkRoot, 'planner', 'logical', 'legacy.json')), true);
+  fs.mkdirSync(path.join(migration.revisionWorkRoot, 'planner', 'revision', 'feature', 'decisions'), { recursive: true });
+  fs.writeFileSync(path.join(migration.revisionWorkRoot, 'planner', 'revision', 'feature', 'decisions', 'legacy.json'), JSON.stringify({ action: 'KEEP' }));
+  assert.equal(validatePlanningArtifactBundleManifest(bundle).ok, true, 'working decisions must never invalidate immutable bundle');
+
 
   const archived = new SQLiteV2Store(migration.legacyDatabasePath);
   assert.equal(archived.getTask('OLD-TASK')?.state, 'DONE');
@@ -95,6 +100,7 @@ test('planning model migration archives the whole old DB and starts from a fresh
   assert.equal(requests[0].request.purpose, 'VERSION_MIGRATION');
   assert.equal(requests[0].context.humanDecisions[0].decision, 'preserve existing behavior');
   assert.equal(requests[0].context.legacyRevisionRoot, migration.legacyRevisionRoot);
+  assert.equal(requests[0].context.revisionWorkRoot, migration.revisionWorkRoot);
 
   completePlanningModelMigration(fresh, 'demo');
   assert.equal(fresh.getProject('demo').planningModelVersion, CURRENT_PLANNING_MODEL_VERSION);
