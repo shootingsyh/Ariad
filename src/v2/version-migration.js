@@ -224,10 +224,13 @@ export function migratePlanningModelDatabase({
   const plannerRoot = join(artifactRoot, 'planner');
   const legacyPlannerPath = join(migrationRoot, 'planner');
   const legacyRevisionRoot = join(migrationRoot, 'revision-source');
+  const revisionWorkRoot = join(migrationRoot, 'revision-work');
   if (existsSync(plannerRoot)) {
     cpSync(plannerRoot, legacyPlannerPath, { recursive: true });
     mkdirSync(legacyRevisionRoot, { recursive: true });
+    mkdirSync(revisionWorkRoot, { recursive: true });
     cpSync(plannerRoot, join(legacyRevisionRoot, 'planner'), { recursive: true });
+    cpSync(plannerRoot, join(revisionWorkRoot, 'planner'), { recursive: true });
     rmSync(plannerRoot, { recursive: true, force: true });
   }
 
@@ -262,6 +265,7 @@ export function migratePlanningModelDatabase({
     legacyDatabasePath: legacyDbPath,
     legacyPlannerPath: existsSync(legacyPlannerPath) ? legacyPlannerPath : null,
     legacyRevisionRoot: existsSync(join(legacyRevisionRoot, 'planner')) ? legacyRevisionRoot : null,
+    revisionWorkRoot: existsSync(join(revisionWorkRoot, 'planner')) ? revisionWorkRoot : null,
     artifactBundleManifestPath: bundleManifestPath,
     artifactBundleId: bundleManifest.bundleId,
     strategy: 'reconstruct-and-reconcile',
@@ -297,6 +301,7 @@ export function migratePlanningModelDatabase({
         instruction: [
           'Reconstruct the project under the current planning model from durable product intent and the current workspace.',
           'Treat the legacy database and planner snapshot as evidence, not authoritative current control state.',
+          'The legacy revision-source snapshot is immutable: write all revision decisions only to revisionWorkRoot.',
           'Preserve completed implementation in the workspace; do not rewrite working code merely because tasks are reconstructed.',
           'Create current Feature/Milestone/Interface ownership and canonical tasks, then reconcile existing implementation against those contracts.',
           'Existing implementation that satisfies a new interface should be adopted and freshly verified rather than unnecessarily reimplemented.',
@@ -307,6 +312,7 @@ export function migratePlanningModelDatabase({
         legacyDatabasePath: legacyDbPath,
         legacyPlannerPath: migration.legacyPlannerPath,
         legacyRevisionRoot: migration.legacyRevisionRoot,
+        revisionWorkRoot: migration.revisionWorkRoot,
         artifactBundleManifestPath: bundleManifestPath,
         artifactBundleId: bundleManifest.bundleId,
         humanDecisions: snapshot.humanDecisions,
