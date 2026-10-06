@@ -6,6 +6,7 @@ import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { requireCompleteRoleModels } from './role-models.js';
+import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
 import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
 import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
@@ -24,6 +25,7 @@ export class AriadService {
     reconcileWakePath = null,
     safetyIntervalMs = 10 * 60 * 1000,
     onProjectEvent = null,
+    memoryCurator = null,
   }) {
     if (!manager) throw new Error('AriadService requires manager');
     if (!provider) throw new Error('AriadService requires provider');
@@ -32,6 +34,7 @@ export class AriadService {
     this.logger = logger;
     this.sharedResources = sharedResources;
     this.onProjectEvent = onProjectEvent;
+    this.memoryCurator = memoryCurator ?? (provider?.id === 'pi-agent-session' ? new MemoryCurator({ provider, logger }) : null);
     this.runtimes = new Map();
     this.signals = new Map();
 
@@ -90,6 +93,7 @@ export class AriadService {
     this.signals.clear();
     for (const runtime of this.runtimes.values()) runtime.close();
     this.runtimes.clear();
+    await this.memoryCurator?.close?.();
     await this.provider.close?.();
   }
 
@@ -280,6 +284,13 @@ export class AriadService {
   async reconcile() {
     for (const project of this.manager.list()) {
       await this.reconcileProject(project);
+      try {
+        await this.memoryCurator?.tick?.(this.manager.status(project.id));
+      } catch (error) {
+        this.logger?.warn?.(
+          `Ariad memory curator scheduling failed for ${project.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 }
