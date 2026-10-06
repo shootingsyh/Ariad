@@ -543,8 +543,31 @@ export function nextBoundaryFrontier(artifactRoot, nodeType) {
 
   for (const node of ordered) {
     const contract = contracts.get(node.id);
-    if (!contract) fail(`${nodeType}:${node.id}: missing contract before frontier selection`);
     const children = tree.childrenById.get(node.id) ?? [];
+    if (!contract) {
+      if (node.id === tree.root?.id) {
+        return {
+          nodeType,
+          bootstrap: true,
+          contractBootstrap: true,
+          node: structuredClone(node),
+          directChildren: children.map(childId => structuredClone(tree.byId.get(childId))),
+          parent: null,
+        };
+      }
+      return {
+        nodeType,
+        bootstrap: false,
+        contractBootstrap: true,
+        node: structuredClone(node),
+        contract: null,
+        parent: node.parentId ? {
+          node: structuredClone(tree.byId.get(node.parentId)),
+          contract: structuredClone(contracts.get(node.parentId) ?? null),
+        } : null,
+        directChildren: children.map(childId => structuredClone(tree.byId.get(childId))),
+      };
+    }
     if (contract.decomposition.kind === 'expand' && children.length === 0) {
       return {
         nodeType,
@@ -565,6 +588,12 @@ export function nextBoundaryFrontier(artifactRoot, nodeType) {
 export function frontierPromptContext(artifactRoot, nodeType) {
   const frontier = nextBoundaryFrontier(artifactRoot, nodeType);
   if (frontier?.bootstrap) {
+    if (frontier.contractBootstrap === true) {
+      return {
+        ...frontier,
+        instruction: `The existing ${nodeType} root and its current direct-child hierarchy are already materialized. Do not recreate or rename them. Define the root's complete boundary contract and complete contracts for every already-present direct child. Do not create grandchildren in this round.`,
+      };
+    }
     return {
       nodeType,
       bootstrap: true,
@@ -572,6 +601,15 @@ export function frontierPromptContext(artifactRoot, nodeType) {
     };
   }
   if (!frontier) return { nodeType, complete: true };
+  if (frontier.contractBootstrap === true) {
+    return {
+      nodeType,
+      bootstrap: false,
+      contractBootstrap: true,
+      current: frontier,
+      instruction: `Define the missing complete boundary contract for existing ${frontier.node.id}. Preserve the existing hierarchy. If it already has direct children, define complete contracts for those children in this round and do not create grandchildren.`,
+    };
+  }
   return {
     nodeType,
     bootstrap: false,
