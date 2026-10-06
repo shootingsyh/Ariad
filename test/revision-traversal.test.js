@@ -8,6 +8,7 @@ import {
   beginRevisionPass,
   compileFeatureRevisionDiff,
   finishRevisionPass,
+  revisionInstructions,
   validateRevisionTraversalComplete,
 } from '../src/v2/revision-traversal.js';
 
@@ -140,6 +141,18 @@ test('REFINE marks the existing node for later one-layer frontier expansion', ()
     const result = validateRevisionTraversalComplete(root, 'feature');
     assert.deepEqual(result.refinementTargets, ['root']);
     assert.deepEqual(compileFeatureRevisionDiff(root, 3).operations, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('revision instructions forbid patch on KEEP/REFINE/REMOVE', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-revision-prompt-'));
+  try {
+    const instructions = revisionInstructions(root, 'feature');
+    assert.match(instructions, /MUST omit the patch property entirely/);
+    assert.match(instructions, /Only AMEND may include a patch object/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
