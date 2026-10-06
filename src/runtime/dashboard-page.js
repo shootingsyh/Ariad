@@ -41,7 +41,7 @@ a{color:inherit}
 .small{font-size:12px}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;background:#202a35;border:1px solid #2d3947;font-size:11px;white-space:nowrap}
 .badge:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.RUNNING,.PLANNING,.READY,.WORKING{color:var(--accent)}
+.RUNNING,.MIGRATING,.PLANNING,.READY,.WORKING{color:var(--accent)}
 .SUCCEEDED,.DONE,.SATISFIED{color:var(--good)}
 .FAILED,.NEEDS_HUMAN,.SYSTEM_BLOCKED,.NOT_PASS,.FAILED_CRITERION{color:var(--bad)}
 .WAITING_REPLAN,.RESULT_READY{color:var(--warn)}
