@@ -21,6 +21,7 @@ import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
+import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
 import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
 import {
   beginRevisionPass,
@@ -1176,6 +1177,17 @@ export function createDefaultV2Roles({
                 validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
                 validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
                 validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+              }
+              const decomp = iterationRequest(store, task);
+              if (decomp?.request?.changeType === 'FEATURE_DECOMPOSITION') {
+                if (!hasBoundaryContracts(artifactRoot, 'feature')) {
+                  throw new Error('FEATURE_DECOMPOSITION_INCOMPLETE: missing Feature Interface Graph');
+                }
+                validateFeatureDecompositionIteration(
+                  artifactRoot,
+                  loadFeatureTreeDiff(artifactRoot),
+                  validated.plan.tasks,
+                );
               }
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
