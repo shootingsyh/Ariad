@@ -5,6 +5,7 @@ import { ReconcileTrigger } from '../v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { activateDeferredIterations } from '../v2/deferred-iterations.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
@@ -276,6 +277,14 @@ export class AriadService {
     const runtime = this.runtimeFor(project);
     const beforeState = project.executionState;
     try {
+      if (project.desiredState === 'RUNNING') {
+        const activated = activateDeferredIterations({
+          store: runtime.store,
+          projectId: project.id,
+          workspace: project.workspace,
+        });
+        if (activated.length) this.logger?.warn?.('Ariad activated iteration requests: ' + activated.join(', '));
+      }
       await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
       const nextState = this.deriveExecutionState(runtime);
       if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);
