@@ -1,3 +1,6 @@
+import { ARIAD_MODEL_ROLES, normalizeRoleModels } from './role-models.js';
+import { ARIAD_PI_SPECIAL_NEEDS } from './pi-runtime-config.js';
+
 export class AriadControlTools {
   constructor({ manager, service }) {
     if (!manager) throw new Error('AriadControlTools requires manager');
@@ -12,6 +15,26 @@ export class AriadControlTools {
 
   status(name) {
     return this.service.status(name);
+  }
+
+  models(name = null) {
+    const project = name ? this.manager.status(name) : null;
+    return {
+      requiredRoles: ARIAD_MODEL_ROLES,
+      providerNamespaces: [...ARIAD_PI_SPECIAL_NEEDS.hostedProviders, 'llamacpp'],
+      modelRefFormat: 'provider/model',
+      roleModels: project?.roleModels ?? null,
+      missingRoles: project
+        ? ARIAD_MODEL_ROLES.filter(role => !project.roleModels?.[role])
+        : null,
+    };
+  }
+
+  setRoleModels(name, roleModels) {
+    if (!name) throw new Error('project name is required');
+    const normalized = normalizeRoleModels(roleModels ?? {});
+    if (Object.keys(normalized).length === 0) throw new Error('roleModels is required');
+    return this.manager.setRoleModels(name, normalized);
   }
 
   create({ name, goal = null, roleModels, mode = 'NEW', sourcePath = null } = {}) {
@@ -51,6 +74,8 @@ export class AriadControlTools {
     switch (action) {
       case 'list': return this.list();
       case 'status': return this.status(input.name);
+      case 'models': return this.models(input.name ?? null);
+      case 'set_role_models': return this.setRoleModels(input.name, input.roleModels);
       case 'create': return this.create(input);
       case 'takeover': return this.takeover(input);
       case 'adopt': return this.adopt(input);
