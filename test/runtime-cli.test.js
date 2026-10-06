@@ -61,3 +61,24 @@ test('ariad project migrate archives the old DB and creates a fresh migration re
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('ariad setup prepares global Pi provider auth without exposing credentials', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-cli-setup-'));
+  const original = process.env.ARIAD_PI_AUTH_PATH;
+  process.env.ARIAD_PI_AUTH_PATH = path.join(root, 'auth.json');
+  try {
+    const result = runAriadCli(['setup']);
+    assert.equal(result.action, 'setup');
+    assert.equal(result.authPath, process.env.ARIAD_PI_AUTH_PATH);
+    assert.equal(typeof result.providers['openai-codex'].ready, 'boolean');
+    assert.equal(typeof result.providers.meta.ready, 'boolean');
+    assert.equal(result.providers.llamacpp.ready, true);
+    assert.equal('access' in result.providers['openai-codex'], false);
+    assert.equal('key' in result.providers.meta, false);
+  } finally {
+    if (original === undefined) delete process.env.ARIAD_PI_AUTH_PATH;
+    else process.env.ARIAD_PI_AUTH_PATH = original;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
