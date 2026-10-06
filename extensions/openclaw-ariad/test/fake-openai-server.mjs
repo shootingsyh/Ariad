@@ -108,9 +108,11 @@ function roleResultToolCall(request) {
   const cycle = requestCycle(request);
   const hasPriorToolWork = hasToolResult(request);
   const artifact = plannerArtifactTransport(request);
+  const frontier = plannerFrontierTransport(request);
   const v3Transport = plannerV3Transport(request);
   const canSubmitWithoutWorkTool = ['tech_lead', 'tech_lead_critic', 'pm'].includes(role)
-    && !(role === 'tech_lead' && (artifact || v3Transport));
+    && !(role === 'tech_lead' && (artifact || frontier || v3Transport));
+  if (role === 'tech_lead' && frontier && !plannerFrontierReady(request)) return null;
   if (role === 'tech_lead' && v3Transport && !plannerV3Ready(request)) return null;
   if (!hasPriorToolWork && !canSubmitWithoutWorkTool) return null;
 
@@ -146,6 +148,120 @@ function roleResultToolCall(request) {
       artifacts: [],
       result,
     },
+  };
+}
+
+
+function plannerFrontierTransport(request) {
+  const text = currentPromptText(request);
+  if (!/FRONTIER PHASE/i.test(text)) return null;
+  const nodeDir = text.match(/Node artifacts:\\s*([^\\n]+)/i)?.[1]?.trim() ?? null;
+  const contractDir = text.match(/Boundary contracts:\\s*([^\\n]+)/i)?.[1]?.trim() ?? null;
+  const nodeType = text.match(/"frontierPhase"\\s*:\\s*"(feature|milestone)"/i)?.[1]?.toLowerCase() ?? null;
+  const bootstrap = /"bootstrap"\\s*:\\s*true/i.test(text);
+  if (!nodeDir || !contractDir || !nodeType || !bootstrap) return null;
+
+  if (nodeType === 'feature') {
+    return {
+      files: [
+        {
+          path: `${nodeDir}/health.json`,
+          content: {
+            id: 'health',
+            title: 'Health Product',
+            summary: 'Tiny deterministic health product.',
+            parentId: null,
+          },
+        },
+        {
+          path: `${contractDir}/health.json`,
+          content: {
+            version: 1,
+            nodeId: 'health',
+            nodeType: 'feature',
+            decomposition: { kind: 'leaf', reason: 'The E2E fixture is one atomic product capability.' },
+            interfaces: [{
+              id: 'health-status',
+              kind: 'executor', visibility: 'exported', contract: { input: [], output: ['Produce the deterministic health status fixture used by the product flow.'], sideEffects: [] },
+            }],
+            imports: [],
+            integrationScenarios: [],
+            featureUses: [],
+            bindings: [],
+            featureTasks: [{
+              id: 'T1',
+              title: 'Health endpoint fixture',
+              intent: 'Create health.txt with a healthy status.',
+              acceptanceCriteria: ['health.txt status=healthy'],
+              testStrategy: 'Read health.txt.',
+              verification: [],
+              interfaceIds: ['health-status'],
+            }],
+            taskLinks: [],
+            integrationTasks: [],
+          },
+        },
+      ],
+    };
+  }
+
+  return {
+    files: [
+      {
+        path: `${nodeDir}/M1.json`,
+        content: {
+          id: 'M1',
+          title: 'Healthy endpoint usable',
+          goal: 'The health endpoint fixture works as an integrated slice.',
+          parentId: null,
+          dependsOn: [],
+          logicalRefs: ['health'],
+          acceptanceCriteria: ['The health project is complete.'],
+          testStrategy: 'Run final integration verification.',
+          tasks: [],
+        },
+      },
+      {
+        path: `${contractDir}/M1.json`,
+        content: {
+          version: 1,
+          nodeId: 'M1',
+          nodeType: 'milestone',
+          decomposition: { kind: 'leaf', reason: 'One integrated checkpoint is sufficient for the E2E fixture.' },
+          interfaces: [{
+            id: 'health-project',
+            kind: 'executor', visibility: 'exported', contract: { input: [], output: ['The complete health product can be executed and verified end to end.'], sideEffects: [] },
+          }],
+          imports: [],
+          integrationScenarios: [{
+            id: 'health-e2e',
+            description: 'Create the health status and verify the complete product result.',
+            uses: [{ graph: 'feature', nodeId: 'health', interfaceId: 'health-status' }],
+          }],
+          featureUses: [{
+            featureId: 'health',
+            interfaceId: 'health-status',
+            purpose: 'Use the canonical health capability in the integrated checkpoint.',
+          }],
+          bindings: [],
+          featureTasks: [],
+          taskLinks: [{
+            taskId: 'T1',
+            addDependsOn: [],
+            addVerification: [],
+          }],
+          integrationTasks: [{
+            id: 'ROOT',
+            title: 'Health project complete',
+            intent: 'Integrate and verify the complete health project.',
+            acceptanceCriteria: ['The health project is complete.'],
+            testStrategy: 'Run final integration verification.',
+            verification: [],
+            interfaceIds: ['health-project'],
+          }],
+        },
+      },
+    ],
   };
 }
 
@@ -241,6 +357,21 @@ function calledWritePaths(request) {
   return paths;
 }
 
+
+function nextPlannerFrontierWrite(request) {
+  const transport = plannerFrontierTransport(request);
+  if (!transport) return null;
+  const written = calledWritePaths(request);
+  return transport.files.find(file => !written.has(file.path)) ?? null;
+}
+
+function plannerFrontierReady(request) {
+  const transport = plannerFrontierTransport(request);
+  if (!transport) return false;
+  const written = calledWritePaths(request);
+  return transport.files.every(file => written.has(file.path));
+}
+
 function nextPlannerV3Write(request) {
   const transport = plannerV3Transport(request);
   if (!transport) return null;
@@ -296,6 +427,16 @@ function toolCallFor(request) {
   if (frontdesk) return frontdesk;
   const roleResult = roleResultToolCall(request);
   if (roleResult) return roleResult;
+  const frontierWrite = nextPlannerFrontierWrite(request);
+  if (frontierWrite) {
+    return {
+      name: 'write',
+      arguments: {
+        path: frontierWrite.path,
+        content: JSON.stringify(frontierWrite.content, null, 2),
+      },
+    };
+  }
   const v3Write = nextPlannerV3Write(request);
   if (v3Write) {
     return {

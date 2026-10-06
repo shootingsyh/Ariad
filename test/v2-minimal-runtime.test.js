@@ -638,6 +638,24 @@ test('supervisor recovers resource claims from durable WORKING tasks after resta
   }
 });
 
+test('default runtime keeps only PM Tech Lead and Project Debugger persistent', () => {
+  const registry = createDefaultV2Roles({
+    store: {
+      listTasks: () => [],
+      listPlanningRequests: () => [],
+      listIncidents: () => [],
+      getProject: () => ({ id: 'P-policy' }),
+    },
+    workspace: process.cwd(),
+  });
+  assert.equal(registry.pm.sessionPolicy, 'persistent');
+  assert.equal(registry.tech_lead.sessionPolicy, 'persistent');
+  assert.equal(registry.project_debugger.sessionPolicy, 'persistent');
+  assert.equal(registry.developer.sessionPolicy, undefined);
+  assert.equal(registry.tester.sessionPolicy, undefined);
+  assert.equal(registry.reviewer.sessionPolicy, undefined);
+});
+
 test('role definitions carry startup policy, including persistent PM sessions', () => {
   const role = roles().get('pm');
   const project = { id: 'P5', spec: 'brainstorm this', pmBinding: 'openclaw:agent:pm-1' };
@@ -2205,6 +2223,43 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
 });
 
 
+test('restart-orphan unknown legacy provider requeues without consuming an attempt', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-legacy-provider' });
+    store.createTask({
+      id: 'T-legacy-provider',
+      projectId: 'P-legacy-provider',
+      stage: 'tech_lead',
+      state: 'WORKING',
+      execution: {
+        provider: 'pydantic-v2',
+        externalId: 'legacy-runtime-handle',
+        attemptId: 'P-legacy-provider:T-legacy-provider:tech_lead:4',
+        resources: [],
+      },
+    });
+
+    const providers = new ProviderRegistry();
+    const resources = new ResourcePool({});
+    const supervisor = new V2Supervisor({ store, providers, resources });
+
+    await supervisor.audit('P-legacy-provider');
+    const task = store.getTask('T-legacy-provider');
+    assert.equal(task.state, 'READY');
+    assert.equal(task.stage, 'tech_lead');
+    assert.equal(task.execution, null);
+    assert.equal(task.history.at(-1)?.failure, 'PROVIDER_UNAVAILABLE_AFTER_RESTART: pydantic-v2');
+    assert.equal(task.history.at(-1)?.consumeAttempt, false);
+    assert.equal(task.history.at(-1)?.restartOrphan, true);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 test('restart-orphan human-gate recovery only matches the known debugger misclassification', () => {
   const base = {
     id: 'T-gate',
@@ -2608,8 +2663,10 @@ test('default LLM roles request the shared local-llm resource only for llamacpp 
     const remote = definitions.reviewer.prepare({ task: store.getTask('T-remote') });
     assert.deepEqual(local.resources, ['local-llm']);
     assert.equal(local.context.roleModelRef, 'llamacpp/qwen3.8-27b');
+    assert.deepEqual(local.context.roleModels, { developer: 'llamacpp/qwen3.8-27b' });
     assert.deepEqual(remote.resources, []);
     assert.equal(remote.context.roleModelRef, 'openai-codex/gpt-5.6-codex');
+    assert.deepEqual(remote.context.roleModels, { reviewer: 'openai-codex/gpt-5.6-codex' });
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2686,4 +2743,55 @@ test('shared scoped resource pool serializes local LLM work across projects with
     fs.rmSync(b.dir, { recursive: true, force: true });
     fs.rmSync(cdir.dir, { recursive: true, force: true });
   }
+});
+
+test('migrating scheduler allows only migration control tasks even if delivery is enabled', async () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-exclusive-migrate',
+      deliveryEnabled: true, // Deliberate compromised PM/manifest state.
+      planningModelMigration: { status: 'REBUILDING', fromVersion: 1, toVersion: 2 },
+    });
+    store.createTask({
+      id: 'D1', projectId: 'P-exclusive-migrate',
+      scope: 'delivery', stage: 'developer', state: 'READY',
+    });
+    store.createTask({
+      id: 'C1', projectId: 'P-exclusive-migrate',
+      scope: 'control', flowId: 'planner:P-exclusive-migrate:ordinary',
+      stage: 'tech_lead', state: 'READY', input: { purpose: 'PLANNER_DECOMPOSE' },
+    });
+    store.createTask({
+      id: 'M1', projectId: 'P-exclusive-migrate',
+      scope: 'control', flowId: 'planner:P-exclusive-migrate:migration',
+      stage: 'tech_lead', state: 'READY',
+      input: { purpose: 'PLANNER_DECOMPOSE', versionMigration: true },
+    });
+    const started = [];
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake',
+      async start(input) { started.push(input.taskId); return { externalId: 'run:' + input.taskId }; },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() { return { confirmed: true }; },
+    });
+    const roles = new RoleRegistry();
+    for (const role of ['developer','tech_lead']) {
+      roles.register(role, {
+        prepare: () => ({ provider: 'fake' }),
+        transition: () => ({ state: 'DONE' }),
+      });
+    }
+    const scheduler = new V2Scheduler({
+      store, roles, providers, resources: new ResourcePool({}),
+    });
+    const run = await scheduler.tick('P-exclusive-migrate');
+    assert.deepEqual(run.started, ['M1']);
+    assert.deepEqual(started, ['M1']);
+    assert.equal(store.getTask('D1').state, 'READY');
+    assert.equal(store.getTask('C1').state, 'READY');
+    store.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

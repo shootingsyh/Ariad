@@ -7,6 +7,29 @@ import { acceptanceCriterionIds } from './acceptance.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { ensureTakeoverReviewState, completeTakeoverReview } from './takeover-gate.js';
 import {
+  beginFrontierPass,
+  buildOwnedExecutionTasks,
+  finishFrontierPass,
+  frontierArtifactInstructions,
+  nextBoundaryFrontier,
+  validateFrontierPass,
+  hasBoundaryContracts,
+  validateBoundaryContracts,
+  validateTaskOwnershipCompilation,
+} from './interface-contracts.js';
+import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
+import { buildRoleBoundaryContext } from './role-boundary-context.js';
+import { sealRoleInterfaces } from './interface-seal.js';
+import { completePlanningModelMigration } from './version-migration.js';
+import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
+import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
+import {
+  beginRevisionPass,
+  finishRevisionPass,
+  nextRevisionFrontier,
+  revisionInstructions,
+} from './revision-traversal.js';
+import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
   applyFeatureTreeDiff,
@@ -110,6 +133,21 @@ function failureCount(task) {
   return count;
 }
 
+function roleSealFailureCount(task, role) {
+  const history = task.history ?? [];
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (
+      (entry?.type === 'ROLE_RESULT' && entry.role === 'project_debugger')
+      || entry?.type === 'DEBUGGER_ROUTE'
+    ) break;
+    if (entry?.type === 'ROLE_SEAL_FAILED' && entry.ownerRole === role) count += 1;
+    if (role === 'developer' && entry?.type === 'INTERFACE_SEAL_FAILED') count += 1;
+  }
+  return count;
+}
+
 function strategyEpoch(task) {
   return 1 + (task.history ?? []).filter(
     entry => entry?.type === 'ROLE_RESULT'
@@ -144,6 +182,29 @@ function planningBatchRequests(store, task) {
 function isTakeoverPlanningTask(store, task) {
   const project = ensureTakeoverReviewState(store, task.projectId);
   return project.mode === 'TAKEOVER' && project.takeoverReviewRequired === true;
+}
+
+
+function latestFrontierCompletion(store, task) {
+  const tasks = flowTasks(store, task);
+  for (let i = tasks.length - 1; i >= 0; i -= 1) {
+    const history = tasks[i]?.history ?? [];
+    for (let j = history.length - 1; j >= 0; j -= 1) {
+      if (history[j]?.type === 'PLANNER_FRONTIER_LAYER_COMPLETE') return history[j];
+    }
+  }
+  return null;
+}
+
+function migrationRevisionRoot(store, projectId) {
+  const migration = store.getProject(projectId)?.planningModelMigration;
+  return migration?.revisionWorkRoot ?? migration?.legacyRevisionRoot ?? null;
+}
+
+function migrationPlanningRequest(store, task) {
+  return planningBatchRequests(store, task).find(
+    item => ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
+  ) ?? null;
 }
 
 function iterationRequest(store, task) {
@@ -208,6 +269,79 @@ const REVIEWER_FRESH_EVIDENCE_PROMPT = [
   'Accept only on the basis of the current Tester run and its fresh evidence against the current acceptance criteria.',
 ].join(' ');
 
+
+function deliveryRoleSuffix(role) {
+  if (role === 'developer') {
+    return [
+      "YOUR ROLE: DEVELOPER",
+      "Implement the assigned task and the interfaces listed in the shared task context.",
+      "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run appropriate local/unit/component checks and avoid unrelated refactors.",
+      "Interface ownership is already defined by the plan. Do not invent, remove, rename, or silently reassign interfaces.",
+      "When a required interface realization is newly created or relocated, return result.interfaceRealizations with {interfaceId, anchors:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}. These are hints only; Ariad independently resolves and seals them.",
+      "If an existing binding remains valid and unchanged, you do not need to restate it.",
+      "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
+      "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
+    ].join('\n');
+  }
+  if (role === 'tester') {
+    return [
+      "YOUR ROLE: TESTER",
+      "Verify that implemented behavior satisfies the required interface contracts and task acceptance criteria.",
+      "Ariad has already performed mechanical Interface Seal checks such as binding existence and anchor resolvability. Do not redo those checks as your primary task; verify behavior.",
+      "For each required Executor, derive verification from its input, output, and sideEffects. For each required Provider, verify both that the provider produces the promised thing and that the produced thing behaves according to its own input/output/sideEffects contract.",
+      "Use realistic entry points and state transitions. Prefer executable evidence over inspection-only reasoning. Add or update test code when needed, and do not bypass required product flow merely to make a test pass.",
+      "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
+      "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
+    ].join('\n');
+  }
+  if (role === 'reviewer') {
+    return [
+      "YOUR ROLE: REVIEWER",
+      "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
+      "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
+      "For every required interface, check that the implementation is appropriate for the owning Feature and abstraction level, the realization plausibly corresponds to the contract, and Tester evidence exercises the important inputs, outputs, and sideEffects.",
+      "For Providers, require evidence for both provider creation and behavior of the produced thing.",
+      "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
+      "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
+      "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
+    ].join('\n');
+  }
+  return null;
+}
+
+function buildSharedTaskPrompt(task, roleBoundaryContext) {
+  const requiredInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
+  return [
+    "SHARED TASK CONTEXT",
+    "You are working on one Ariad delivery task. Developer, Tester, and Reviewer receive this same task-level context.",
+    JSON.stringify({
+      task: {
+        id: task.id,
+        title: task.title ?? null,
+        intent: task.intent ?? task.input?.intent ?? null,
+        acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+        owningFeatureRefs: task.logicalRefs ?? task.input?.logicalRefs ?? [],
+        milestoneId: task.milestoneId ?? task.input?.milestoneId ?? null,
+        requiredInterfaceIds,
+      },
+      boundaryContext: roleBoundaryContext,
+    }, null, 2),
+    "INTERFACE RULES",
+    "Interface ownership is defined by the plan, not invented after implementation. A task may own multiple interfaces; every required interface must be accounted for.",
+    "An Executor contract describes input, output, and sideEffects. A Provider contract describes provider input plus the produced thing and that thing's input, output, and sideEffects.",
+    "Parent Features own interfaces at their own abstraction level. Child interfaces may realize a parent interface but do not replace the parent contract. A facade may expose a child interface by reference only when that is genuinely the intended abstraction.",
+    "Use the supplied interface/binding context as the primary reasoning boundary. Expand outward only when it is demonstrably insufficient; do not perform unrelated repository-wide rediscovery.",
+    "Task completion requires the required contracts to be implemented, mechanically bindable to real code, behaviorally verified, and supported by reviewable evidence.",
+  ].join('\n\n');
+}
+
+function composeDeliveryRolePrompt(task, roleBoundaryContext, suffix) {
+  return [
+    buildSharedTaskPrompt(task, roleBoundaryContext),
+    suffix,
+  ].filter(Boolean).join('\n\n');
+}
+
 function plannerPublicPlan(plan) {
   if (!plan) return null;
   const { executionTasks, ...publicPlan } = plan;
@@ -232,22 +366,82 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   };
 
   if (purpose === 'PLANNER_DECOMPOSE') {
+    const nodeType = task.input?.frontierPhase ?? 'feature';
+    const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
+    const revision = revisionRoot && task.input?.sourceComplete !== true
+      ? beginRevisionPass(revisionRoot, nodeType)
+      : null;
+    const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
-      plannerArtifactInstructions(artifactRoot),
-      'Create the complete known project-wide Logical Tree and Milestone execution tree as bounded artifacts. Later milestones may be coarser, but known future scope must remain represented.',
-    ].join('\n\n');
+      frontierArtifactInstructions(artifactRoot, nodeType),
+      revision && !revision.complete ? [
+        'VERSION MIGRATION SOURCE FRONTIER',
+        'The archived tree is the authoritative traversal source for this round.',
+        'Write exactly one KEEP|AMEND|REMOVE|REFINE revision decision for the legacy node before completing this round.',
+        'During planning-model migration, KEEP and AMEND should normally keep visitChildren=true because every legacy descendant must receive a fresh interface contract under the new schema.',
+        'Use REFINE with visitChildren=false when the old descendants should be replaced by a newly decomposed subtree.',
+        'REMOVE skips materializing this legacy node in the new tree.',
+        revisionInstructions(revisionRoot, nodeType),
+        JSON.stringify({ legacyRevisionFrontier: revision }, null, 2),
+      ].join('\n\n') : null,
+      nodeType === 'feature'
+        ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition, boundary contracts, and the canonical implementation/local-test tasks owned by every node created or finalized in this round. Do not defer task intent to a later global pass.'
+        : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition, feature interface uses, additive links to feature tasks, and milestone-owned integration/E2E tasks for every node created or finalized in this round. Do not defer integration test ownership to a later global pass.',
+      frontier.bootstrap
+        ? frontier.instruction
+        : [
+            frontier.instruction,
+            'The current node already has a parent-facing contract. Preserve every exported interface exactly.',
+            'If expanding, define each direct child completely enough to expose its own stable parent-facing contract and decomposition decision.',
+            'Then update the current node imports and integrationScenarios so they use only those direct-child exported interfaces.',
+          ].join(' '),
+      JSON.stringify({
+        frontierPhase: nodeType,
+        frontier,
+        legacyRevisionFrontier: revision,
+      }, null, 2),
+      nodeType === 'milestone'
+        ? 'Milestone artifacts may keep legacy tasks=[] as a compatibility view; canonical task ownership now lives in the milestone boundary contract (featureUses/taskLinks/integrationTasks).'
+        : 'A leaf Feature that requires implementation should own its canonical featureTasks now. A pure composition node may own no implementation task and instead express integrationScenarios.'
+    ].filter(Boolean).join('\n\n');
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
+    const canonicalTasks = hasBoundaryContracts(artifactRoot)
+      ? buildOwnedExecutionTasks(artifactRoot)
+      : [];
     return [
-      'You are Ariad\'s Tech Lead dependency pass.',
-      'Inspect the existing planner artifacts and reconcile execution dependencies in place. Do not emit a monolithic plan.',
+      'You are Ariad\'s Tech Lead dependency compilation pass.',
+      'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. Feature and milestone frontier passes already own task definition.',
+      'Compile the already-defined canonical featureTasks, milestone taskLinks, and milestone integrationTasks into the legacy milestone/tasks compatibility artifacts and add only precise dependency edges required for execution ordering.',
+      'Feature task title, intent, acceptanceCriteria, testStrategy, and feature ownership are immutable in this pass.',
+      'Milestone taskLinks may only add dependencies and verification. Milestone integrationTasks are already defined and must remain milestone-owned.',
+      'Tester owns milestone/cross-feature integration, UI-journey, contract, and E2E test implementation/execution; Developer owns feature implementation plus local/unit/component correctness.',
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
+      canonicalTasks.length
+        ? 'ARIAD CANONICAL TASKS (copy semantics exactly; only compile dependency/milestone placement):\n' + JSON.stringify(canonicalTasks, null, 2)
+        : null,
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       plannerArtifactInstructions(artifactRoot),
+    ].filter(Boolean).join('\n\n');
+  }
+
+  if (purpose === 'PLANNER_FRONTIER_REPAIR') {
+    const previous = predecessorResults(store, task)[0] ?? null;
+    const frontier = latestFrontierCompletion(store, task);
+    return [
+      "You are Ariad's Tech Lead repairing exactly one migration frontier.",
+      'Repair only the current frontier artifacts identified below. Do not alter already-frozen ancestor exports or unrelated siblings.',
+      'Address only concrete critic issues. Preserve accepted node identity and product intent.',
+      JSON.stringify({
+        context,
+        frontier,
+        critic: previous?.result ?? previous ?? null,
+      }, null, 2),
+      frontierArtifactInstructions(artifactRoot, task.input?.frontierPhase ?? 'feature'),
     ].join('\n\n');
   }
 
@@ -267,6 +461,20 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
 
 function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
+  if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
+    const frontier = latestFrontierCompletion(store, task);
+    return [
+      "You are Ariad's semantic critic for exactly one top-down migration frontier.",
+      'Review only the frontier just produced, plus the parent contract needed to judge it.',
+      'Check: correct abstraction level, interface quality, Executor/Provider semantics where applicable, stable parent boundary, sensible child decomposition, task/interface ownership, and whether the frontier preserves project intent.',
+      'Do not request unrelated tree-wide cleanup. Return CLEAN when this frontier is acceptable; otherwise ISSUES with precise, locally repairable findings.',
+      JSON.stringify({
+        project: { id: project.id, spec: project.spec ?? null },
+        frontier,
+        validation,
+      }, null, 2),
+    ].join('\n\n');
+  }
   return [
     'You are Ariad\'s delivery-plan critic.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
@@ -285,7 +493,8 @@ function criticPrompt({ store, project, task, artifactRoot }) {
 
 export function createDefaultV2Roles({
   store,
-  providerId = 'openclaw-v2',
+  providerId = 'pi-agent-session',
+  completionProtocol = 'provider_terminal',
   codeProviderId = 'ariad-code',
   workspace,
   sourceControl = null,
@@ -294,6 +503,7 @@ export function createDefaultV2Roles({
   executionCapabilities = [],
   executionProvenance = {},
   resolveRoleExecutionMetadata = null,
+  codeIntelligence = null,
 }) {
   if (artifactRoot) mkdirSync(artifactRoot, { recursive: true });
 
@@ -310,12 +520,22 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
+    const sharedDeliveryContext = ['developer', 'tester', 'reviewer'].includes(task.stage);
+    const roleBoundaryContext = buildRoleBoundaryContext({
+      artifactRoot,
+      task,
+      role: sharedDeliveryContext ? 'delivery' : task.stage,
+      workspace,
+    });
+    const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
+      ? `${task.stage}:${task.projectId}`
+      : null;
     const modelRef = typeof executionMetadata.modelRef === 'string'
       ? executionMetadata.modelRef.trim()
       : '';
     return {
       provider: providerId,
-      completionProtocol: 'role_result_tool',
+      completionProtocol,
       resources: modelRef.startsWith('llamacpp/') ? ['local-llm'] : [],
       executionCapabilities: [...executionCapabilities],
       executionProvenance: {
@@ -324,10 +544,18 @@ export function createDefaultV2Roles({
       },
       workspace,
       context: {
+        role: task.stage,
         executionCapabilities: [...executionCapabilities],
-        ...(modelRef ? { roleModelRef: modelRef } : {}),
+        ...(modelRef ? {
+          roleModelRef: modelRef,
+          roleModels: { [task.stage]: modelRef },
+        } : {}),
+        ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
-        v2Prompt,
+        ...(roleBoundaryContext ? { roleBoundaryContext } : {}),
+        v2Prompt: ['developer', 'tester', 'reviewer'].includes(task.stage)
+          ? composeDeliveryRolePrompt(task, roleBoundaryContext, v2Prompt)
+          : v2Prompt,
         task: {
           id: task.id,
           title: task.title ?? null,
@@ -339,8 +567,56 @@ export function createDefaultV2Roles({
           art: task.art ?? task.input?.art ?? null,
           history: task.history ?? [],
         },
+        executionHandoff: deriveExecutionHandoff(task.history ?? []),
         devCycle: 1 + failureCount(task),
         strategyEpoch: strategyEpoch(task),
+      },
+    };
+  };
+
+  const sealAfterPersist = async (role, task, result) => {
+    const seal = await sealRoleInterfaces({
+      role,
+      artifactRoot,
+      workspace,
+      task,
+      result,
+      codeIntelligence,
+    });
+    if (!seal.required) return null;
+    if (!seal.ok) {
+      const repairRole = seal.repairRole ?? role;
+      const priorFailures = roleSealFailureCount(task, role);
+      const exhaustedRepairBudget = priorFailures >= 3;
+      return {
+        patch: {
+          stage: exhaustedRepairBudget ? 'project_debugger' : repairRole,
+          state: 'READY',
+          execution: null,
+        },
+        transitionHistory: {
+          type: 'ROLE_SEAL_FAILED',
+          role: 'interface_seal',
+          ownerRole: role,
+          repairRole,
+          featureId: seal.featureId ?? null,
+          failures: seal.failures ?? [],
+          repairAttempt: Math.max(0, priorFailures),
+          repairBudget: 3,
+          ...(exhaustedRepairBudget ? { escalatedTo: 'project_debugger' } : {}),
+          at: new Date().toISOString(),
+        },
+      };
+    }
+    return {
+      transitionHistory: {
+        type: 'ROLE_SEALED',
+        role: 'interface_seal',
+        ownerRole: role,
+        featureId: seal.featureId ?? null,
+        sealed: seal.sealed ?? [],
+        observedCommit: seal.observedCommit ?? null,
+        at: new Date().toISOString(),
       },
     };
   };
@@ -378,12 +654,21 @@ export function createDefaultV2Roles({
     },
 
     developer: {
-      prepare: ({ task }) => prepareLlm(task, DEVELOPER_REUSE_PROMPT),
+      prepare: ({ task }) => prepareLlm(task, [
+        DEVELOPER_REUSE_PROMPT,
+        deliveryRoleSuffix('developer'),
+      ].join('\n\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
+      async afterPersist({ task, result }) {
+        return sealAfterPersist('developer', task, result);
+      },
     },
 
     tester: {
-      prepare: ({ task }) => prepareLlm(task, TESTER_REUSE_PROMPT, {
+      prepare: ({ task }) => prepareLlm(task, [
+        TESTER_REUSE_PROMPT,
+        deliveryRoleSuffix('tester'),
+      ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition: ({ task, result }) => {
@@ -395,10 +680,16 @@ export function createDefaultV2Roles({
         }
         return { stage: 'project_debugger', state: 'READY' };
       },
+      async afterPersist({ task, result }) {
+        return sealAfterPersist('tester', task, result);
+      },
     },
 
     reviewer: {
-      prepare: ({ task }) => prepareLlm(task, REVIEWER_FRESH_EVIDENCE_PROMPT, {
+      prepare: ({ task }) => prepareLlm(task, [
+        REVIEWER_FRESH_EVIDENCE_PROMPT,
+        deliveryRoleSuffix('reviewer'),
+      ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
       }),
       transition({ task, result }) {
@@ -410,15 +701,20 @@ export function createDefaultV2Roles({
         if (result.outcome !== 'PASS') return { stage: 'project_debugger', state: 'READY' };
         return { state: 'DONE' };
       },
-      async afterPersist({ task }) {
-        if (!sourceControl || task.state !== 'DONE') return null;
+      async afterPersist({ task, result }) {
+        const sealFollowUp = await sealAfterPersist('reviewer', task, result);
+        if (sealFollowUp) {
+          if (sealFollowUp.patch) return sealFollowUp;
+          if (!sourceControl || task.state !== 'DONE') return sealFollowUp;
+        }
+        if (!sourceControl || task.state !== 'DONE') return sealFollowUp;
         store.checkpoint?.();
         const finalized = await sourceControl.finalize({
           taskId: task.id,
           strategyEpoch: strategyEpoch(task),
           devCycle: Math.max(1, failureCount(task) + 1),
         });
-        if (finalized.ok) return null;
+        if (finalized.ok) return sealFollowUp;
         const sourceControlFailures = (task.history ?? []).filter(
           entry => entry?.type === 'SYSTEM_INTERRUPTION' && entry?.role === 'source_control'
         ).length;
@@ -438,15 +734,76 @@ export function createDefaultV2Roles({
     },
 
     project_debugger: {
-      prepare: ({ task }) => prepareLlm(task, task.input?.blockedTaskId ? [
-        "You are Ariad's unified Project Debugger.",
-        'Automatic execution retry has been exhausted for the blocked business task below.',
-        'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
-        'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
-        'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
-        JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
-      ].join('\n\n') : null),
+      sessionPolicy: 'persistent',
+      prepare: ({ task }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
+          const critics = flowTasks(store, task)
+            .filter(item => item.input?.purpose === 'PLANNER_FRONTIER_CRITIC')
+            .map(item => ({
+              round: item.input?.round ?? null,
+              result: latestRoleResult(item),
+            }));
+          return prepareLlm(task, [
+            "You are Ariad's Project Debugger diagnosing one planning frontier after three failed semantic critic rounds.",
+            'Do not edit planner artifacts. Judge both the Tech Lead and the critics.',
+            'You may return OVERRIDE_CRITIC when the current frontier is sound and the critic objections are wrong, irrelevant, contradictory, or overreaching. Ariad will freeze the frontier and continue.',
+            'You may return RETRY_WITH_GUIDANCE when the frontier still needs work but a concrete Tech Lead correction is possible. Put precise corrective instructions in result.guidance. Ariad will start a fresh three-round TL/validator/critic cycle on the same frontier.',
+            'Use REQUIREMENT_DECISION_REQUIRED when the disagreement exposes a genuine product ambiguity that PM must resolve.',
+            'Use MODEL_CAPABILITY_MISMATCH or SYSTEM_RUNTIME_FAILURE only when execution/model/tooling is actually the cause.',
+            'Do not choose RETRY_WITH_GUIDANCE without giving actionable guidance, and do not choose OVERRIDE_CRITIC merely to make progress.',
+            JSON.stringify({
+              frontierPhase: task.input?.frontierPhase ?? null,
+              frontier: latestFrontierCompletion(store, task),
+              critics,
+            }, null, 2),
+          ].join('\n\n'));
+        }
+        return prepareLlm(task, task.input?.blockedTaskId ? [
+          "You are Ariad's unified Project Debugger.",
+          'Automatic execution retry has been exhausted for the blocked business task below.',
+          'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
+          'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
+          'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+          JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
+        ].join('\n\n') : null);
+      },
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
+          const batchId = task.input?.planningBatchId;
+          if (result.outcome === 'OVERRIDE_CRITIC') {
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN',
+                role: 'project_debugger',
+                frontierPhase: task.input?.frontierPhase ?? null,
+                summary: result.summary ?? result.result?.reason ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'RETRY_WITH_GUIDANCE') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: task.input?.frontierPhase ?? 'feature',
+                debuggerGuidance: result.result?.guidance ?? result.summary ?? null,
+                retryOfPlanningBatchId: batchId ?? null,
+              },
+            });
+            return {
+              state: 'DONE',
+              skipTaskIds: batchId ? [`planner:${batchId}:frontier-finalize`] : [],
+              transitionHistory: {
+                type: 'PLANNER_FRONTIER_DEBUGGER_RETRY',
+                role: 'project_debugger',
+                frontierPhase: task.input?.frontierPhase ?? null,
+                guidance: result.result?.guidance ?? result.summary ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+        }
         const blockedTaskId = task.input?.blockedTaskId ?? null;
         const blocked = blockedTaskId ? store.getTask(blockedTaskId) : null;
         const routeBlocked = (patch, history) => {
@@ -601,6 +958,7 @@ export function createDefaultV2Roles({
     },
 
     tech_lead: {
+      sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
@@ -613,6 +971,83 @@ export function createDefaultV2Roles({
       },
       transition: ({ task, result }) => {
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
+            const nodeType = task.input?.frontierPhase ?? 'feature';
+            const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
+            const revisionPass = revisionRoot && task.input?.sourceComplete !== true
+              ? finishRevisionPass(revisionRoot, nodeType)
+              : null;
+            if (revisionPass?.decision?.action === 'REMOVE') {
+              return {
+                state: 'DONE',
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType,
+                  nodeId: revisionPass.decision.nodeId,
+                  disposition: 'remove',
+                  childIds: [],
+                  nextNodeId: revisionPass.next?.node?.id ?? null,
+                  revisionDecision: revisionPass.decision,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            const migration = task.input?.versionMigration
+              ? store.getProject(task.projectId)?.planningModelMigration
+              : null;
+            const pass = finishFrontierPass(artifactRoot, nodeType, {
+              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
+              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
+            });
+            if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
+              throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
+            }
+            const frontierHistory = {
+              type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+              role: 'tech_lead',
+              nodeType,
+              nodeId: pass.targetNodeId,
+              disposition: pass.targetDisposition,
+              childIds: pass.childIds,
+              nextNodeId: pass.next?.node?.id ?? null,
+              revisionDecision: revisionPass?.decision ?? null,
+              at: new Date().toISOString(),
+            };
+            if (task.input?.singleFrontier === true) {
+              return {
+                state: 'DONE',
+                transitionHistory: frontierHistory,
+              };
+            }
+            if (pass.next) {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: nodeType,
+                },
+                transitionHistory: frontierHistory,
+              };
+            }
+            if (nodeType === 'feature') {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: 'milestone',
+                },
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_PHASE_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType: 'feature',
+                  nextPhase: 'milestone',
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            return { state: 'DONE' };
+          }
           return task.scope === 'control'
             ? { state: 'DONE' }
             : { stage: 'developer', state: 'WAITING_REPLAN' };
@@ -634,6 +1069,37 @@ export function createDefaultV2Roles({
     tech_lead_critic: {
       prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
+          const batchId = task.input?.planningBatchId;
+          const round = task.input?.round ?? 1;
+          if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
+            const skipByRound = {
+              1: [
+                `planner:${batchId}:frontier-repair-1`,
+                `planner:${batchId}:frontier-validate-2`,
+                `planner:${batchId}:frontier-critic-2`,
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              2: [
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              3: [
+                `planner:${batchId}:frontier-debugger`,
+              ],
+            };
+            return {
+              state: 'DONE',
+              skipTaskIds: skipByRound[round] ?? [],
+            };
+          }
+          return { state: 'DONE' };
+        }
         if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
           return {
             state: 'DONE',
@@ -649,6 +1115,52 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          if (task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE') {
+            const frontier = latestFrontierCompletion(store, task);
+            const nodeType = task.input?.frontierPhase ?? frontier?.nodeType ?? 'feature';
+            try {
+              const validated = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: true });
+              return {
+                outcome: 'PASS',
+                result: {
+                  valid: true,
+                  frontier,
+                  boundary: validated,
+                  error: null,
+                  errorCode: null,
+                },
+              };
+            } catch (error) {
+              return {
+                outcome: 'NOT_PASS',
+                result: {
+                  valid: false,
+                  frontier,
+                  error: error?.message ?? String(error),
+                  errorCode: error?.code ?? null,
+                },
+              };
+            }
+          }
+          if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
+            const phase = task.input?.frontierPhase ?? 'feature';
+            const revisionRoot = migrationRevisionRoot(store, task.projectId);
+            const sourceNext = revisionRoot ? nextRevisionFrontier(revisionRoot, phase) : null;
+            const next = nextBoundaryFrontier(artifactRoot, phase);
+            return {
+              outcome: 'PASS',
+              result: {
+                phase,
+                sourceComplete: sourceNext == null,
+                sourceNext: sourceNext == null ? null : { nodeId: sourceNext.node?.id ?? null },
+                complete: sourceNext == null && next == null,
+                next: next == null ? null : {
+                  bootstrap: next.bootstrap === true,
+                  nodeId: next.node?.id ?? null,
+                },
+              },
+            };
+          }
           try {
             materializeIterationFeatureTree(store, task, artifactRoot);
           } catch (error) {
@@ -661,6 +1173,22 @@ export function createDefaultV2Roles({
           if (rawArtifactPlan) {
             try {
               const validated = validatePlannerArtifactPlan(rawArtifactPlan);
+              if (hasBoundaryContracts(artifactRoot)) {
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+              }
+              const decomp = iterationRequest(store, task);
+              if (decomp?.request?.changeType === 'FEATURE_DECOMPOSITION') {
+                if (!hasBoundaryContracts(artifactRoot, 'feature')) {
+                  throw new Error('FEATURE_DECOMPOSITION_INCOMPLETE: missing Feature Interface Graph');
+                }
+                validateFeatureDecompositionIteration(
+                  artifactRoot,
+                  loadFeatureTreeDiff(artifactRoot),
+                  validated.plan.tasks,
+                );
+              }
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
               return {
                 outcome: 'PASS',
@@ -697,6 +1225,35 @@ export function createDefaultV2Roles({
         },
       }),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
+          const phase = task.input?.frontierPhase ?? 'feature';
+          const complete = result.result?.complete === true;
+          if (!complete) {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: phase,
+                sourceComplete: result.result?.sourceComplete === true,
+              },
+            });
+            return { state: 'DONE' };
+          }
+          if (phase === 'feature') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: 'milestone',
+              },
+            });
+            return { state: 'DONE' };
+          }
+          enqueuePlanning?.({
+            request: {
+              purpose: 'VERSION_MIGRATION_FINALIZE',
+            },
+          });
+          return { state: 'DONE' };
+        }
         if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
           if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
             enqueuePlanning?.({
@@ -762,6 +1319,52 @@ export function createDefaultV2Roles({
             }, null, 2),
           ].join('\n\n');
           return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
+        }
+        if (task.input?.versionMigration === true) {
+          return {
+            provider: codeProviderId,
+            executionProvenance: executionProvenanceFor(task),
+            execute: async () => {
+              const preceding = predecessorResults(store, task)[0] ?? null;
+              if (preceding?.outcome !== 'PASS') {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration final validation has not PASSED; no delivery approval is possible.',
+                    guidance: preceding?.result?.error ?? 'Regenerate and revalidate the migration delivery plan.',
+                    startDelivery: false,
+                  },
+                };
+              }
+              try {
+                const raw = loadPlannerArtifactPlan(artifactRoot);
+                if (!raw || !hasBoundaryContracts(artifactRoot, 'feature')
+                  || !hasBoundaryContracts(artifactRoot, 'milestone')) {
+                  throw new Error('Migration needs complete planner and interface artifacts');
+                }
+                const validated = validatePlannerArtifactPlan(raw);
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+                return {
+                  outcome: 'PLAN_ACCEPTED',
+                  result: {
+                    reason: 'Migration artifacts validated. Finalize planning model with delivery locked.',
+                    startDelivery: false,
+                  },
+                };
+              } catch (error) {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration artifacts are not ready for finalization.',
+                    guidance: error instanceof Error ? error.message : String(error),
+                    startDelivery: false,
+                  },
+                };
+              }
+            },
+          };
         }
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
@@ -840,11 +1443,19 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
             ? validatePlannerArtifactPlan(rawArtifactPlan)
             : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
           store.applyDeliveryPlan(task.projectId, validated.plan);
+          const migrationReconciliation = reconcileMigratedDeliveryTasks({
+            store,
+            projectId: task.projectId,
+            artifactRoot,
+            workspace,
+          });
+          completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           const setDeliveryEnabled = (enabled) => {
@@ -852,6 +1463,18 @@ export function createDefaultV2Roles({
             if (current?.deliveryEnabled === enabled) return current;
             return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
           };
+          if (wasMigrating) {
+            setDeliveryEnabled(false);
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
+                role: 'migration_finalizer',
+                migrationReconciliation,
+                at: new Date().toISOString(),
+              },
+            };
+          }
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
@@ -877,16 +1500,24 @@ export function createDefaultV2Roles({
               role: 'pm',
               enabled: result.result?.startDelivery === true,
               reason: result.result?.reason ?? null,
+              migrationReconciliation,
               at: new Date().toISOString(),
             },
           };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
+          const migration = store.getProject(task.projectId)?.planningModelMigration;
           enqueuePlanning?.({
-            request: {
-              purpose: 'PM_PLAN_REVISION',
-              guidance: result.result?.guidance ?? result.result ?? null,
-            },
+            request: migration?.status === 'REBUILDING'
+              ? {
+                  purpose: 'VERSION_MIGRATION_FINALIZE',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
+                }
+              : {
+                  purpose: 'PM_PLAN_REVISION',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                },
           });
           return { state: 'DONE' };
         }

@@ -133,6 +133,7 @@ class ProjectRuntime {
     const roleDefinitions = (createDefaultV2Roles as any)({
       store: this.store,
       providerId: provider.id,
+      completionProtocol: 'role_result_tool',
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
       sourceControl: this.sourceControl,

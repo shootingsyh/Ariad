@@ -1,6 +1,7 @@
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
+import { applyTaskEvent } from './state-machine.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -38,19 +39,34 @@ export class V2Scheduler {
     this.resources = resources;
   }
 
-  async #advanceResults(projectId) {
+  async #advanceResults(projectId, { migrating = false } = {}) {
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'RESULT_READY') continue;
+      if (migrating && !(isPlannerTask(task) && task.input?.versionMigration === true)) continue;
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
       const next = await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-      const { skipTaskIds = [], transitionHistory = null, ...patch } = next;
-      let updated = this.store.updateTask(task.id, task.version, {
-        ...patch,
-        execution: null,
-      });
+      const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
+      const transitionEvent = ({
+        READY: 'NEXT_ROLE',
+        DONE: 'FINISH',
+        WAITING_REPLAN: 'WAIT_REPLAN',
+        NEEDS_HUMAN: 'NEED_HUMAN',
+        SKIPPED: 'SKIP',
+      })[requestedState];
+      if (!transitionEvent) {
+        throw new Error(`role ${task.stage} requested unsupported task state: ${requestedState}`);
+      }
+      let updated = this.store.updateTask(task.id, task.version, applyTaskEvent(
+        task,
+        transitionEvent,
+        {
+          ...patch,
+          execution: null,
+        },
+      ));
       if (transitionHistory) {
         updated = this.store.appendTaskHistory(task.id, updated.version, transitionHistory);
       }
@@ -84,11 +100,19 @@ export class V2Scheduler {
   }
 
   async tick(projectId) {
-    await this.#advanceResults(projectId);
+    const initialProject = this.store.getProject(projectId);
+    if (!initialProject) throw new Error(`unknown project: ${projectId}`);
+    const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
+    await this.#advanceResults(projectId, { migrating });
     this.#settlePlanningBatches(projectId);
 
     if (this.store.hasUnplannedPlanningRequests(projectId)) {
-      createNextPlanningBatch({ store: this.store, projectId });
+      const pending = this.store.listPlanningRequests(projectId, { states: ['PENDING'] });
+      if (!migrating || pending.every(item =>
+        ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
+      )) {
+        createNextPlanningBatch({ store: this.store, projectId });
+      }
     }
 
     const project = this.store.getProject(projectId);
@@ -99,12 +123,17 @@ export class V2Scheduler {
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
-    const schedulableTasks = planningBlocked
-      ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
-      : allTasks.filter(task =>
-          (!isPlannerTask(task) || isUnifiedDiagnostic(task))
-          && (task.scope !== 'delivery' || deliveryEnabled)
-        );
+    // Migration is a project-level exclusive mode. Neither Delivery nor
+    // ordinary planning/iteration/diagnostic roles may execute, regardless
+    // of deliveryEnabled, PM authorization, or task graph state.
+    const schedulableTasks = migrating
+      ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
+      : planningBlocked
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
+        : allTasks.filter(task =>
+            (!isPlannerTask(task) || isUnifiedDiagnostic(task))
+            && (task.scope !== 'delivery' || deliveryEnabled)
+          );
     const candidates = [];
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
@@ -153,8 +182,7 @@ export class V2Scheduler {
       const idempotencyKey = `ariad:v2:${attemptId}`;
 
       try {
-        this.store.updateTask(task.id, task.version, {
-          state: 'WORKING',
+        this.store.updateTask(task.id, task.version, applyTaskEvent(task, 'START', {
           execution: {
             provider: spec.provider,
             externalId: null,
@@ -170,7 +198,7 @@ export class V2Scheduler {
             resources: structuredClone(requirements),
             sessionPolicy: role.sessionPolicy ?? 'fresh',
           },
-        });
+        }));
       } catch (error) {
         this.resources.release(task.id);
         if (String(error?.message).includes('version conflict')) continue;
@@ -200,16 +228,18 @@ export class V2Scheduler {
         started.push(task.id);
       } catch (error) {
         const current = this.store.getTask(task.id);
+        const blocked = systemFailureCount(current) >= 2;
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
           failure: error?.message ?? String(error),
           consumeAttempt: true,
           at: new Date().toISOString(),
-        }, {
-          state: systemFailureCount(current) >= 2 ? 'SYSTEM_BLOCKED' : 'READY',
-          execution: null,
-        });
+        }, applyTaskEvent(
+          current,
+          blocked ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
+          { execution: null },
+        ));
         this.resources.release(task.id);
       }
     }
