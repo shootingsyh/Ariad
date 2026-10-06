@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 import { ProjectMemoryStore } from '../src/runtime/project-memory.js';
 import { codeSearch, interfaceSearch } from '../src/runtime/project-search-tools.js';
@@ -14,6 +14,12 @@ import { ARIAD_PROJECT_TOOL_NAMES, registerAriadProjectTools } from '../src/runt
 import { AriadControlTools } from '../src/runtime/control-tools.js';
 import { MemoryCurator } from '../src/runtime/memory-curator.js';
 import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';
+import {
+  createProjectCodeIntelligence,
+  detectProjectLanguages,
+  inspectProjectCodeCapabilities,
+  requireRuntimeDependencies,
+} from '../src/runtime/code-intelligence/project-capabilities.js';
 
 test('project memory binds concise memories to Ariad artifacts and searches them', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-memory-'));
@@ -76,9 +82,10 @@ test('code and interface search read current workspace facts', () => {
     const originalPath = process.env.PATH;
     process.env.PATH = '';
     try {
-      const fallback = codeSearch(workspace, 'PolicyGuard', { mode: 'symbol' });
-      assert.equal(fallback[0].matchKind, 'declaration');
-      assert.equal(fallback[0].file, 'policy.js');
+      assert.throws(
+        () => codeSearch(workspace, 'PolicyGuard', { mode: 'symbol' }),
+        /CODE_SEARCH_UNAVAILABLE: ripgrep \(rg\) is required/,
+      );
     } finally {
       process.env.PATH = originalPath;
     }
@@ -89,6 +96,64 @@ test('code and interface search read current workspace facts', () => {
     assert.equal(interfaces[0].realization[0].symbol, 'PolicyGuard');
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+
+test('project capability probe detects languages and treats LSP as optional with rg fallback', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-capabilities-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-capabilities-bin-'));
+  const originalPath = process.env.PATH;
+  try {
+    fs.writeFileSync(path.join(workspace, 'project.godot'), '[application]\n');
+    fs.writeFileSync(path.join(workspace, 'main.gd'), 'extends Node\n');
+    fs.writeFileSync(path.join(workspace, 'helper.py'), 'print("ok")\n');
+    assert.deepEqual(detectProjectLanguages(workspace), ['gdscript', 'python']);
+
+    const nodePath = process.execPath;
+    const gitPath = execFileSync('/bin/sh', ['-lc', 'command -v git'], { encoding: 'utf8' }).trim();
+    const rgPath = execFileSync('/bin/sh', ['-lc', 'command -v rg'], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(nodePath, path.join(bin, 'node'));
+    fs.symlinkSync(gitPath, path.join(bin, 'git'));
+    fs.symlinkSync(rgPath, path.join(bin, 'rg'));
+    process.env.PATH = bin;
+
+    assert.equal(requireRuntimeDependencies().ready, true);
+    const capabilities = inspectProjectCodeCapabilities(workspace);
+    assert.equal(capabilities.textSearch.available, true);
+    assert.equal(capabilities.languages.gdscript.status, 'unavailable');
+    assert.equal(capabilities.languages.gdscript.fallback, 'rg');
+    assert.equal(capabilities.languages.python.status, 'unavailable');
+    assert.equal(createProjectCodeIntelligence({ id: 'demo', workspace }, capabilities), null);
+
+    fs.writeFileSync(path.join(bin, 'godot'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const withGodot = inspectProjectCodeCapabilities(workspace);
+    assert.equal(withGodot.languages.gdscript.status, 'available');
+    const intelligence = createProjectCodeIntelligence({ id: 'demo', workspace }, withGodot);
+    assert.equal(intelligence?.constructor?.name, 'GodotLspProvider');
+    intelligence?.client?.close?.();
+  } finally {
+    process.env.PATH = originalPath;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test('required runtime dependency probe fails fast when ripgrep is unavailable', () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-required-bin-'));
+  const originalPath = process.env.PATH;
+  try {
+    const gitPath = execFileSync('/bin/sh', ['-lc', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    fs.symlinkSync(gitPath, path.join(bin, 'git'));
+    process.env.PATH = bin;
+    assert.throws(
+      () => requireRuntimeDependencies(),
+      /RUNTIME_DEPENDENCY_MISSING: rg/,
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    fs.rmSync(bin, { recursive: true, force: true });
   }
 });
 
