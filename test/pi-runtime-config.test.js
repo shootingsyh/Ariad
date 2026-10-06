@@ -103,6 +103,20 @@ test('Pi ModelRuntime contains Codex and Meta providers and consumes Ariad local
   }
 });
 
+test('Ariad Pi auth is global while project models and sessions stay workspace-local', () => {
+  const original = process.env.ARIAD_PI_AUTH_PATH;
+  process.env.ARIAD_PI_AUTH_PATH = '/tmp/ariad-global-auth.json';
+  try {
+    const paths = ariadPiPaths('/tmp/project-workspace');
+    assert.equal(paths.authPath, '/tmp/ariad-global-auth.json');
+    assert.equal(paths.modelsPath, '/tmp/project-workspace/.ariad/pi/models.json');
+    assert.equal(paths.sessionsDir, '/tmp/project-workspace/.ariad/pi/sessions');
+  } finally {
+    if (original === undefined) delete process.env.ARIAD_PI_AUTH_PATH;
+    else process.env.ARIAD_PI_AUTH_PATH = original;
+  }
+});
+
 test('Ariad Pi sessions enable coding tools and persistent-session coordinates', () => {
   const workspace = '/tmp/demo';
   const config = buildAriadPiSessionConfig({
