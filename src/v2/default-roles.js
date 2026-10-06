@@ -1320,6 +1320,52 @@ export function createDefaultV2Roles({
           ].join('\n\n');
           return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
         }
+        if (task.input?.versionMigration === true) {
+          return {
+            provider: codeProviderId,
+            executionProvenance: executionProvenanceFor(task),
+            execute: async () => {
+              const preceding = predecessorResults(store, task)[0] ?? null;
+              if (preceding?.outcome !== 'PASS') {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration final validation has not PASSED; no delivery approval is possible.',
+                    guidance: preceding?.result?.error ?? 'Regenerate and revalidate the migration delivery plan.',
+                    startDelivery: false,
+                  },
+                };
+              }
+              try {
+                const raw = loadPlannerArtifactPlan(artifactRoot);
+                if (!raw || !hasBoundaryContracts(artifactRoot, 'feature')
+                  || !hasBoundaryContracts(artifactRoot, 'milestone')) {
+                  throw new Error('Migration needs complete planner and interface artifacts');
+                }
+                const validated = validatePlannerArtifactPlan(raw);
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
+                return {
+                  outcome: 'PLAN_ACCEPTED',
+                  result: {
+                    reason: 'Migration artifacts validated. Finalize planning model with delivery locked.',
+                    startDelivery: false,
+                  },
+                };
+              } catch (error) {
+                return {
+                  outcome: 'PLAN_REVISION_REQUIRED',
+                  result: {
+                    reason: 'Migration artifacts are not ready for finalization.',
+                    guidance: error instanceof Error ? error.message : String(error),
+                    startDelivery: false,
+                  },
+                };
+              }
+            },
+          };
+        }
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
         const iteration = iterationRequest(store, task);
@@ -1397,6 +1443,7 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
             ? validatePlannerArtifactPlan(rawArtifactPlan)
@@ -1416,6 +1463,18 @@ export function createDefaultV2Roles({
             if (current?.deliveryEnabled === enabled) return current;
             return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
           };
+          if (wasMigrating) {
+            setDeliveryEnabled(false);
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
+                role: 'migration_finalizer',
+                migrationReconciliation,
+                at: new Date().toISOString(),
+              },
+            };
+          }
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
@@ -1447,11 +1506,18 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
+          const migration = store.getProject(task.projectId)?.planningModelMigration;
           enqueuePlanning?.({
-            request: {
-              purpose: 'PM_PLAN_REVISION',
-              guidance: result.result?.guidance ?? result.result ?? null,
-            },
+            request: migration?.status === 'REBUILDING'
+              ? {
+                  purpose: 'VERSION_MIGRATION_FINALIZE',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
+                }
+              : {
+                  purpose: 'PM_PLAN_REVISION',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                },
           });
           return { state: 'DONE' };
         }
