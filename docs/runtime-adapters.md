@@ -1,178 +1,167 @@
-# Runtime adapters
+# Runtime boundary
 
-Ariad treats runtimes as replaceable execution backends. Workflow Core must not import or depend on OpenClaw, OpenCode, local model servers, CLI processes, or any vendor-specific API.
+Ariad's current standalone execution backend is Pi. The useful boundary is not a second general runtime framework; it is a narrow provider/session seam between Ariad orchestration and one Pi agent run.
 
-## Logical contract
+## Ownership
 
-Every runtime adapter implements the same minimal lifecycle:
+```text
+Ariad orchestration
+  - project/task graph
+  - SQLite state
+  - scheduler/supervisor
+  - planning/replanning
+  - debugger routing
+  - human gates
+  - role-result validation/seals
+  - resource policy
+        |
+        v
+PiAgentSessionProvider
+  - create one role session
+  - choose explicit provider/model
+  - expose tools
+  - persist/compact conversation
+  - run tool loop
+  - abort/cancel
+        |
+        v
+provider/model
+```
+
+Ariad must not duplicate Pi's provider auth, message-history, compaction, or tool-loop implementation.
+
+Pi must not decide Ariad task transitions, acceptance, retry budgets, debugger routing, or project policy.
+
+## Provider contract used by Ariad
+
+The scheduler/supervisor needs only a small execution surface:
 
 ```js
 {
   id,
-  config,
-  async install(context),
-  async probe(),
-  async start(request),
-  async resume(request),
-  async poll(runHandle),
-  async cancel(runHandle)
+  async start(spec),
+  async poll(handle),
+  async cancel(handle),
+  async close()
 }
 ```
 
-`install()` prepares the runtime integration and must be safe to call repeatedly. It may validate dependencies, create runtime-specific directories, register local integration metadata, or perform another deterministic setup step. It must not initialize a specific engineering project; project initialization is a separate Ariad lifecycle.
+`PiAgentSessionProvider` implements this contract.
 
-`probe()` returns normalized health such as `HEALTHY`, `DEGRADED`, `UNHEALTHY`, or `UNKNOWN`. Runtime-specific health details may be attached, but the normalized health field is required.
+A role `spec` includes project/task/role identity, workspace, session policy, prompt/context, and an explicit role model ref. Pi runtime details stay inside the provider.
 
-`start()` and `resume()` return a normalized run handle:
+## Model namespaces
 
-```js
-{
-  runtimeId,
-  runId,
-  externalId,
-  state
-}
-```
-
-`poll()` returns normalized execution state/result data. Runtime-specific session IDs, process IDs, thread IDs, provider metadata, model names, endpoints, and authentication remain inside the adapter.
-
-## One runtime, one adapter file
-
-The preferred implementation shape is:
+Ariad persists explicit provider namespaces rather than guessing:
 
 ```text
-src/adapters/
-  fake-runtime.js
-  openclaw.js
-  opencode.js
-  local-cli.js
+openai-codex/gpt-...
+openai/gpt-...
+meta/...
+llamacpp/...
 ```
 
-A normal runtime integration should be possible in one file. That file may import a small shared transport/client helper when unavoidable, but it must own all runtime-specific translation logic.
+`openai-codex/*` means subscription/Codex auth.
+`openai/*` means OpenAI API auth.
 
-Canonical adapter shape:
+Legacy projects that used historical `openai/*` refs before the namespace split migrate once to `openai-codex/*`.
 
-```js
-'use strict';
+## Authentication
 
-const {
-  normalizeRunHandle,
-  normalizeRuntimeResult,
-  normalizeHealth,
-} = require('../runtime-adapter');
+Authentication is global Pi state, not project state.
 
-function createRuntimeAdapter(config = {}) {
-  return {
-    id: 'my-runtime',
-    config,
-
-    async install(context) {
-      await ensureRuntimeAvailable(config, context);
-      return { state: 'INSTALLED' };
-    },
-
-    async probe() {
-      const status = await runtimeHealth(config);
-      return normalizeHealth(translateHealth(status));
-    },
-
-    async start(request) {
-      const externalId = await runtimeCreate(config, request);
-      return normalizeRunHandle('my-runtime', request.runId, externalId);
-    },
-
-    async resume(request) {
-      const externalId = await runtimeResume(config, request);
-      return normalizeRunHandle('my-runtime', request.runId, externalId);
-    },
-
-    async poll(handle) {
-      const vendorState = await runtimeStatus(config, handle.externalId);
-      return normalizeRuntimeResult(translateStatus(vendorState));
-    },
-
-    async cancel(handle) {
-      await runtimeCancel(config, handle.externalId);
-      return { state: 'CANCELLED' };
-    },
-  };
-}
-
-module.exports = { createRuntimeAdapter };
-```
-
-## Monitoring ownership
-
-Adapters expose facts; Ariad owns monitoring loops. A runtime adapter should not normally start a hidden permanent timer/thread during `install()`.
-
-Ariad's `RuntimeMonitor` starts and stops a lightweight async polling job around `probe()`:
+Default path:
 
 ```text
-RuntimeMonitor
-  -> adapter.probe()
-  -> normalized health
-  -> RUNTIME_HEALTH_CHANGED / RUNTIME_PROBE_FAILED
-  -> Reliability layer
+~/.pi/agent/auth.json
 ```
 
-This keeps monitor lifecycle, shutdown, tests, and failures under Ariad control. The fake runtime uses the exact same path and can script health changes or probe errors for deterministic reliability tests.
+Override for controlled environments/tests:
 
-A future runtime that has a genuine event stream may optionally add a runtime-specific subscription helper, but the Core contract remains probe-based and does not require background threads inside the adapter.
-
-## Registry boundary
-
-Workflow/Execution code uses a logical runtime key rather than importing an implementation:
-
-```js
-registry.register('local_execution', createQwenRuntime(config));
-registry.register('planning', createMuseRuntime(config));
-registry.register('agent_runtime', createOpenClawRuntime(config));
+```bash
+export ARIAD_PI_AUTH_PATH=/path/to/auth.json
 ```
 
-Core then resolves `local_execution` or `planning`; it does not know what concrete runtime is behind the key.
+`ariad setup` may import compatible legacy Codex/Meta credentials into global Pi auth. It reports readiness only and never prints credential material.
 
-## What does not belong in the adapter
+Each project keeps only:
 
-Adapters must not own:
-
-- workflow transitions;
-- development-cycle counters;
-- project-debugger policy;
-- reliability recovery ladders;
-- resource scheduling policy;
-- project source-control policy;
-- context-compaction policy;
-- long-lived monitoring policy.
-
-They may report runtime facts required by those layers, but those layers make the decisions.
-
-## Configuration
-
-Runtime-specific configuration is intentionally opaque to Core:
-
-```js
-{
-  endpoint: 'http://localhost:1234',
-  model: 'qwen-local',
-  timeoutMs: 300000,
-  vendorSpecificFlag: true
-}
+```text
+.ariad/pi/models.json
+.ariad/pi/sessions/...
 ```
 
-Only the adapter interprets these fields. This lets configuration evolve without changing the logical contract.
+## Session policy
 
-## Conformance testing
+Persistent roles:
 
-Every adapter should run the shared behavioral expectations:
+- PM
+- Tech Lead
+- Project Debugger
 
-- valid stable adapter id;
-- install is repeatable/idempotent;
-- probe returns normalized health;
-- `start` creates a normalized run handle;
-- `resume` can continue from a checkpoint;
-- `poll` produces normalized states/results;
-- `cancel` is idempotent or safely repeatable;
-- vendor-specific configuration never leaks into Workflow Core;
-- provider errors are translated into normalized execution failures rather than semantic task outcomes.
+Fresh roles:
 
-`fake-runtime.js` is the executable reference implementation for the contract.
+- Artist
+- Developer
+- Tester
+- Reviewer
+
+Fresh means no conversational carry-over into the next attempt. It does not mean history is discarded; fresh sessions are still persisted as separate Pi JSONL files.
+
+## Structured completion
+
+Every normal Ariad role run must terminate through the registered `ariad_role_result` tool. Ariad validates the role-specific schema and only then lets the scheduler/supervisor advance state.
+
+Ordinary assistant prose is not completion.
+
+Provider errors are execution failures, not semantic task failures.
+
+## Cancellation and restart
+
+Ariad owns the decision to cancel; Pi owns the actual session abort.
+
+A project stop:
+
+```text
+Ariad marks STOPPED
+  -> locate WORKING tasks
+  -> provider.cancel(handle)
+  -> Pi session.abort()
+  -> durable SYSTEM_INTERRUPTION
+  -> task returns to recoverable state without consuming a semantic attempt
+```
+
+Restart-orphan recovery similarly belongs to Ariad's supervisor because only Ariad knows whether the durable role result was already sealed.
+
+## Project tools
+
+Pi extensions expose read/write/query capabilities, but they do not own workflow policy:
+
+- live code search
+- current interface search
+- small artifact-bound memory
+- persisted session-history access
+- terminal role result
+
+Code search prefers `rg` when installed and has a Node fallback so runtime correctness does not depend on a host utility.
+
+## External control
+
+`ariad-control-mcp` is the standalone process boundary for project management. It creates one `AriadService` plus one `PiAgentSessionProvider` and exposes lifecycle/model configuration through MCP.
+
+It supports:
+
+```text
+list / status
+models / set_role_models
+create / takeover / adopt
+start / pause / resume / stop
+```
+
+No control action reimplements scheduler logic; it delegates to `AriadProjectManager` and `AriadService`.
+
+## Legacy backends
+
+The repository still contains older Pydantic/OpenClaw integration code for migration and deterministic legacy tests. Those paths are not the default standalone runtime.
+
+New runtime work should target Pi unless a concrete missing Pi capability is demonstrated. If such a gap exists, prefer extending Pi or its tool layer over expanding Ariad's orchestration responsibilities.
