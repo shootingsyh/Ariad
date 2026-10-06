@@ -8,6 +8,7 @@ import {
   beginFrontierPass,
   ensureInterfaceArtifactLayout,
   finishFrontierPass,
+  frontierPromptContext,
   nextBoundaryFrontier,
   validateBoundaryContracts,
 } from '../src/v2/interface-contracts.js';
@@ -411,6 +412,34 @@ test('milestone may consume exported feature interfaces but not feature internal
       () => validateBoundaryContracts(root, 'milestone', { allowFrontier: false }),
       /feature interface project\/not-exported is not exported/,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('existing one-layer hierarchy with no contracts enters contract bootstrap instead of failing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-contract-bootstrap-'));
+  try {
+    const logical = path.join(root, 'planner', 'logical');
+    fs.mkdirSync(logical, { recursive: true });
+    fs.writeFileSync(path.join(logical, 'root.json'), JSON.stringify({
+      id: 'root', title: 'Root', summary: 'Existing root', parentId: null,
+    }, null, 2));
+    fs.writeFileSync(path.join(logical, 'child.json'), JSON.stringify({
+      id: 'child', title: 'Child', summary: 'Existing child', parentId: 'root',
+    }, null, 2));
+
+    const frontier = nextBoundaryFrontier(root, 'feature');
+    assert.equal(frontier.bootstrap, true);
+    assert.equal(frontier.contractBootstrap, true);
+    assert.equal(frontier.node.id, 'root');
+    assert.deepEqual(frontier.directChildren.map(node => node.id), ['child']);
+
+    const context = frontierPromptContext(root, 'feature');
+    assert.equal(context.contractBootstrap, true);
+    assert.match(context.instruction, /already materialized/);
+    assert.match(context.instruction, /Do not recreate or rename/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
