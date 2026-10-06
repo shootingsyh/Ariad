@@ -81,6 +81,7 @@ export function registerAriadProjectTools(pi, { workspace }) {
       taskId: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
       maxChars: Type.Optional(Type.Integer({ minimum: 1000, maximum: 100000 })),
+      includeMaintenance: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }),
     async execute(_id, params) {
       return textResult({ events: sessionHistory(workspace, params) });
