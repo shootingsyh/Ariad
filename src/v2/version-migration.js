@@ -1,12 +1,15 @@
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 
 import { SQLiteV2Store } from './sqlite-store.js';
 import {
@@ -33,6 +36,119 @@ function humanDecisions(tasks) {
     }
   }
   return decisions;
+}
+
+function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function directoryDigest(root) {
+  if (!root || !existsSync(root)) return null;
+  const files = [];
+  const walk = dir => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile()) files.push(path);
+    }
+  };
+  walk(root);
+  files.sort((a, b) => relative(root, a).localeCompare(relative(root, b)));
+  const hash = createHash('sha256');
+  const entries = files.map(path => {
+    const rel = relative(root, path);
+    const digest = sha256File(path);
+    hash.update(rel).update('\0').update(digest).update('\n');
+    return { path: rel, sha256: digest };
+  });
+  return { sha256: hash.digest('hex'), entries };
+}
+
+function jsonIds(dir) {
+  if (!dir || !existsSync(dir)) return [];
+  const ids = [];
+  for (const file of readdirSync(dir).filter(name => name.endsWith('.json')).sort()) {
+    try {
+      const value = JSON.parse(readFileSync(join(dir, file), 'utf8'));
+      if (value?.id) ids.push(String(value.id));
+    } catch {}
+  }
+  return [...new Set(ids)].sort();
+}
+
+export function buildPlanningArtifactBundleManifest({
+  project,
+  snapshotPath,
+  legacyDatabasePath,
+  legacyPlannerPath,
+  legacyRevisionRoot,
+  createdAt,
+}) {
+  const plannerLogicalIds = jsonIds(legacyPlannerPath ? join(legacyPlannerPath, 'logical') : null);
+  const plannerMilestoneIds = jsonIds(legacyPlannerPath ? join(legacyPlannerPath, 'milestones') : null);
+  const revisionPlanner = legacyRevisionRoot ? join(legacyRevisionRoot, 'planner') : null;
+  const revisionLogicalIds = jsonIds(revisionPlanner ? join(revisionPlanner, 'logical') : null);
+  const revisionMilestoneIds = jsonIds(revisionPlanner ? join(revisionPlanner, 'milestones') : null);
+  const projectLogicalIds = [...new Set((project.logicalNodes ?? []).map(node => String(node.id)).filter(Boolean))].sort();
+  const projectMilestoneIds = [...new Set((project.milestones ?? []).map(node => String(node.id)).filter(Boolean))].sort();
+
+  const tuple = {
+    projectId: project.id,
+    dbVersion: project.version ?? null,
+    projectVersion: project.projectVersion ?? null,
+    activeVersion: project.activeVersion ?? null,
+    deliveryPlanVersion: project.deliveryPlanVersion ?? null,
+    planningModelVersion: projectPlanningModelVersion(project),
+    storageVersion: projectStorageVersion(project),
+  };
+
+  return {
+    version: 1,
+    bundleId: `${project.id}:pv${tuple.projectVersion ?? 'na'}:av${tuple.activeVersion ?? 'na'}:dp${tuple.deliveryPlanVersion ?? 'na'}:db${tuple.dbVersion ?? 'na'}`,
+    createdAt,
+    tuple,
+    sets: {
+      projectLogicalIds,
+      projectMilestoneIds,
+      plannerLogicalIds,
+      plannerMilestoneIds,
+      revisionLogicalIds,
+      revisionMilestoneIds,
+    },
+    alignment: {
+      projectVsPlannerLogical: projectLogicalIds.length === 0 || JSON.stringify(projectLogicalIds) === JSON.stringify(plannerLogicalIds),
+      projectVsPlannerMilestones: projectMilestoneIds.length === 0 || JSON.stringify(projectMilestoneIds) === JSON.stringify(plannerMilestoneIds),
+      plannerVsRevisionLogical: JSON.stringify(plannerLogicalIds) === JSON.stringify(revisionLogicalIds),
+      plannerVsRevisionMilestones: JSON.stringify(plannerMilestoneIds) === JSON.stringify(revisionMilestoneIds),
+    },
+    artifacts: {
+      controlPlaneSnapshot: snapshotPath ? { path: snapshotPath, sha256: sha256File(snapshotPath) } : null,
+      stateDb: legacyDatabasePath ? { path: legacyDatabasePath, sha256: sha256File(legacyDatabasePath) } : null,
+      planner: legacyPlannerPath ? { path: legacyPlannerPath, ...directoryDigest(legacyPlannerPath) } : null,
+      revisionSource: legacyRevisionRoot ? { path: legacyRevisionRoot, ...directoryDigest(legacyRevisionRoot) } : null,
+    },
+  };
+}
+
+export function validatePlanningArtifactBundleManifest(manifest) {
+  if (!manifest || manifest.version !== 1) throw new Error('invalid planning artifact bundle manifest');
+  const checks = [];
+  const fileArtifact = manifest.artifacts?.stateDb;
+  if (!fileArtifact?.path || !existsSync(fileArtifact.path)) throw new Error('artifact bundle missing state DB');
+  checks.push({ name: 'stateDb', ok: sha256File(fileArtifact.path) === fileArtifact.sha256 });
+
+  const snapshot = manifest.artifacts?.controlPlaneSnapshot;
+  if (snapshot?.path) {
+    checks.push({ name: 'controlPlaneSnapshot', ok: existsSync(snapshot.path) && sha256File(snapshot.path) === snapshot.sha256 });
+  }
+  for (const [name, artifact] of [['planner', manifest.artifacts?.planner], ['revisionSource', manifest.artifacts?.revisionSource]]) {
+    if (!artifact?.path) continue;
+    const digest = directoryDigest(artifact.path);
+    checks.push({ name, ok: Boolean(digest && digest.sha256 === artifact.sha256) });
+  }
+  const failed = checks.filter(check => !check.ok);
+  if (failed.length) throw new Error(`ARTIFACT_BUNDLE_MISMATCH: ${failed.map(check => check.name).join(', ')}`);
+  return { ok: true, checks, alignment: manifest.alignment, tuple: manifest.tuple };
 }
 
 export function planningModelMigrationStatus(project) {
@@ -125,6 +241,17 @@ export function migratePlanningModelDatabase({
     }
   }
 
+  const bundleManifestPath = join(migrationRoot, 'artifact-bundle.json');
+  const bundleManifest = buildPlanningArtifactBundleManifest({
+    project,
+    snapshotPath,
+    legacyDatabasePath: legacyDbPath,
+    legacyPlannerPath: existsSync(legacyPlannerPath) ? legacyPlannerPath : null,
+    legacyRevisionRoot: existsSync(join(legacyRevisionRoot, 'planner')) ? legacyRevisionRoot : null,
+    createdAt: at,
+  });
+  writeFileSync(bundleManifestPath, JSON.stringify(bundleManifest, null, 2) + '\n', 'utf8');
+
   const migration = {
     id,
     status: 'REBUILDING',
@@ -135,6 +262,8 @@ export function migratePlanningModelDatabase({
     legacyDatabasePath: legacyDbPath,
     legacyPlannerPath: existsSync(legacyPlannerPath) ? legacyPlannerPath : null,
     legacyRevisionRoot: existsSync(join(legacyRevisionRoot, 'planner')) ? legacyRevisionRoot : null,
+    artifactBundleManifestPath: bundleManifestPath,
+    artifactBundleId: bundleManifest.bundleId,
     strategy: 'reconstruct-and-reconcile',
   };
 
@@ -178,6 +307,8 @@ export function migratePlanningModelDatabase({
         legacyDatabasePath: legacyDbPath,
         legacyPlannerPath: migration.legacyPlannerPath,
         legacyRevisionRoot: migration.legacyRevisionRoot,
+        artifactBundleManifestPath: bundleManifestPath,
+        artifactBundleId: bundleManifest.bundleId,
         humanDecisions: snapshot.humanDecisions,
       },
     });
@@ -203,4 +334,69 @@ export function completePlanningModelMigration(store, projectId) {
     },
   });
   return project;
+}
+
+export function restorePlanningArtifactBundle({
+  stateDb,
+  artifactRoot,
+  bundleManifestPath,
+  abandonedRoot = join(artifactRoot, 'abandoned-migrations'),
+  now = () => new Date(),
+}) {
+  const manifest = JSON.parse(readFileSync(bundleManifestPath, 'utf8'));
+  validatePlanningArtifactBundleManifest(manifest);
+
+  const at = now().toISOString().replace(/[:.]/g, '-');
+  const abandoned = join(abandonedRoot, `restore-${at}`);
+  mkdirSync(abandoned, { recursive: true });
+
+  if (existsSync(stateDb)) {
+    cpSync(stateDb, join(abandoned, 'state.db'));
+  }
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    const sidecar = `${stateDb}${suffix}`;
+    if (existsSync(sidecar)) cpSync(sidecar, join(abandoned, `state.db${suffix}`));
+  }
+
+  const livePlanner = join(artifactRoot, 'planner');
+  if (existsSync(livePlanner)) cpSync(livePlanner, join(abandoned, 'planner'), { recursive: true });
+
+  rmSync(stateDb, { force: true });
+  for (const suffix of ['-wal', '-shm', '-journal']) rmSync(`${stateDb}${suffix}`, { force: true });
+  rmSync(livePlanner, { recursive: true, force: true });
+
+  cpSync(manifest.artifacts.stateDb.path, stateDb);
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    const source = `${manifest.artifacts.stateDb.path}${suffix}`;
+    if (existsSync(source)) cpSync(source, `${stateDb}${suffix}`);
+  }
+  if (manifest.artifacts.planner?.path) {
+    cpSync(manifest.artifacts.planner.path, livePlanner, { recursive: true });
+  }
+
+  const restored = new SQLiteV2Store(stateDb);
+  try {
+    const project = restored.getProject(manifest.tuple.projectId);
+    if (!project) throw new Error(`restored bundle missing project: ${manifest.tuple.projectId}`);
+    const actualTuple = {
+      projectId: project.id,
+      dbVersion: project.version ?? null,
+      projectVersion: project.projectVersion ?? null,
+      activeVersion: project.activeVersion ?? null,
+      deliveryPlanVersion: project.deliveryPlanVersion ?? null,
+      planningModelVersion: projectPlanningModelVersion(project),
+      storageVersion: projectStorageVersion(project),
+    };
+    if (JSON.stringify(actualTuple) !== JSON.stringify(manifest.tuple)) {
+      throw new Error(`ARTIFACT_BUNDLE_RESTORE_MISMATCH: expected ${JSON.stringify(manifest.tuple)}, got ${JSON.stringify(actualTuple)}`);
+    }
+  } finally {
+    restored.close();
+  }
+
+  return {
+    restoredBundleId: manifest.bundleId,
+    tuple: structuredClone(manifest.tuple),
+    abandonedPath: abandoned,
+  };
 }
