@@ -73,6 +73,16 @@ test('code and interface search read current workspace facts', () => {
     assert.equal(symbols[0].matchKind, 'declaration');
     assert.equal(symbols[0].file, 'policy.js');
 
+    const originalPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      const fallback = codeSearch(workspace, 'PolicyGuard', { mode: 'symbol' });
+      assert.equal(fallback[0].matchKind, 'declaration');
+      assert.equal(fallback[0].file, 'policy.js');
+    } finally {
+      process.env.PATH = originalPath;
+    }
+
     const interfaces = interfaceSearch(workspace, 'policy.guard');
     assert.equal(interfaces[0].interfaceId, 'policy.guard');
     assert.equal(interfaces[0].nodeId, 'act1');
