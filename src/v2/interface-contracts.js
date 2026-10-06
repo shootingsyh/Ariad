@@ -722,10 +722,16 @@ export function finishFrontierPass(artifactRoot, expectedNodeType, {
     && state.targetNodeId !== expectedTargetNodeId) {
     fail(`${expectedNodeType}: durable frontier target ${expectedTargetNodeId} disagrees with active target ${state.targetNodeId}`);
   }
+  // A pre-migration archive is historical evidence, not a current-schema
+  // graph. Some old milestone plans legitimately have multiple top-level
+  // roots. Read their parent pointers without validating root cardinality;
+  // validateFrontierPass still validates the LIVE tree strictly.
   const legacyNodeParents = legacyBaselineRoot
     ? Object.fromEntries(
-        loadPlannerHierarchy(legacyBaselineRoot, expectedNodeType).items
-          .map(node => [node.id, node.parentId ?? null]),
+        readJsonDir(join(
+          legacyBaselineRoot, 'planner',
+          expectedNodeType === 'feature' ? 'logical' : 'milestones',
+        )).map(node => [node.id, node.parentId ?? null]),
       )
     : {};
   return validateFrontierPass(
