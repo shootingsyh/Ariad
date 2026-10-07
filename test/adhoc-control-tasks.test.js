@@ -140,3 +140,61 @@ test('STOPPED service reconciles independent analysis without changing lifecycle
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('offline E2E: STOPPED project completes ad-hoc TL with durable result, no delivery', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-stopped-e2e-'));
+  const manager = new AriadProjectManager({ projectsRoot: root });
+  const project = manager.create('isolated-e2e', {
+    goal: 'Verify isolated offline ad-hoc execution',
+    roleModels: Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'test/runtime'])),
+  });
+  const started = [];
+  const provider = {
+    id: 'fake',
+    start: async spec => { started.push(spec); return { externalId: 'fake-run' }; },
+    poll: async () => ({
+      state: 'COMPLETED',
+      outcome: 'PLANNED',
+      summary: 'Scratch workspace has no product code',
+      keyPoints: ['Inspected the scratch workspace'],
+      artifacts: [],
+    }),
+    cancel: async () => {},
+    close: async () => {},
+  };
+  const service = new AriadService({
+    manager, provider, memoryCurator: { close: async () => {} },
+  });
+  try {
+    const created = service.createOperatorAnalysis(project.id, {
+      id: 'offline-e2e',
+      instruction: 'Inspect scratch workspace and report findings',
+    });
+    const db = new SQLiteV2Store(project.stateDb);
+    try {
+      db.createTask({ id: 'D-untouched', projectId: project.id, scope: 'delivery',
+        stage: 'developer', milestoneId: 'M1' });
+    } finally { db.close(); }
+    for (let i = 0; i < 4; i++) await service.reconcileProject(manager.status(project.id));
+    const store = new SQLiteV2Store(project.stateDb);
+    try {
+      const task = store.getTask(created.taskId);
+      assert.equal(task.state, 'DONE');
+      assert.equal(task.stage, 'tech_lead');
+      assert.equal(task.taskKind, 'ADHOC_ANALYSIS');
+      assert.ok(task.history.some(h => h.type === 'ROLE_RESULT'
+        && h.summary === 'Scratch workspace has no product code'));
+      assert.equal(store.getTask('D-untouched').state, 'READY');
+      assert.equal(store.getProject(project.id).deliveryEnabled, false);
+      assert.equal(store.listPlanningRequests(project.id).length, 0);
+      assert.equal(started.length, 1);
+      assert.equal(started[0].taskKind, 'ADHOC_ANALYSIS');
+      assert.equal(piToolsForTask(started[0]).includes('write'), false);
+      assert.equal(manager.status(project.id).desiredState, 'STOPPED');
+    } finally { store.close(); }
+  } finally {
+    await service.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
