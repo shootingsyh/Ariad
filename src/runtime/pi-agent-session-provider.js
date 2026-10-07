@@ -12,10 +12,10 @@ import {
 import { Type } from 'typebox';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
-import { ARIAD_PROJECT_TOOL_NAMES, registerAriadProjectTools } from './pi-project-tools.js';
+import { registerAriadProjectTools } from './pi-project-tools.js';
 
 import {
-  ARIAD_PI_DEFAULT_TOOLS,
+  piToolsForTask,
   buildAriadPiModelsConfig,
   ariadPiPaths,
   resolveAriadPiModelRef,
@@ -277,7 +277,7 @@ export async function createDefaultPiRunSession(spec) {
     resourceLoader: loader,
     settingsManager,
     sessionManager,
-    tools: [...ARIAD_PI_DEFAULT_TOOLS, ...ARIAD_PROJECT_TOOL_NAMES, RESULT_TOOL],
+    tools: piToolsForTask({ role: spec.role, taskKind: spec.taskKind }),
   });
   await session.bindExtensions({ mode: 'json' });
   // A persistent session may have ended with a Muse quota fallback.

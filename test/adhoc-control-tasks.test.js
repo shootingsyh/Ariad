@@ -9,6 +9,7 @@ import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
 import { controlTaskPolicyFailure, TASK_KINDS } from '../src/v2/control-task-policy.js';
+import { piToolsForTask } from '../src/runtime/pi-runtime-config.js';
 
 function setup(run) {
   const dir=mkdtempSync(join(tmpdir(),'ariad-adhoc-'));
@@ -50,12 +51,15 @@ test('scheduler dispatches authorized adhoc TL under closed Delivery, never deve
     roles.register('tech_lead',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
     roles.register('developer',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
     const providers=new ProviderRegistry();
-    providers.register({id:'fake',start:async(spec)=>{called.push(spec.taskId);return {externalId:'ex'};},poll:async()=>({state:'RUNNING'}),cancel:async()=>{}});
+    providers.register({id:'fake',start:async(spec)=>{called.push(spec);return {externalId:'ex'};},poll:async()=>({state:'RUNNING'}),cancel:async()=>{}});
     const scheduler=new V2Scheduler({store,roles,providers,resources:new ResourcePool({})});
     const result=await scheduler.tick('P');
     assert.equal(result.started.length,1);
     assert.equal(store.getTask('adhoc:P:diagnose:analysis').state,'WORKING');
     assert.equal(store.getTask('D').state,'READY');
     assert.equal(called.length,1);
+    assert.equal(called[0].taskKind, TASK_KINDS.ADHOC_ANALYSIS);
+    assert.equal(called[0].role, 'tech_lead');
+    assert.equal(piToolsForTask(called[0]).includes('bash'), false);
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
