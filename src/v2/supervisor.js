@@ -1,3 +1,4 @@
+import { isAdhocAnalysis } from './control-task-policy.js';
 import { applyTaskEvent } from './state-machine.js';
 
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
@@ -59,10 +60,11 @@ export class V2Supervisor {
     this.resources.release(task.id);
   }
 
-  async audit(projectId) {
+  async audit(projectId, { adhocOnly = false } = {}) {
     const incidents = [];
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'WORKING') continue;
+      if (adhocOnly && !isAdhocAnalysis(task)) continue;
       const execution = task.execution;
 
       if (!execution?.provider || !execution?.externalId) {

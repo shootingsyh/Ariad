@@ -5,6 +5,7 @@ import { ReconcileTrigger } from '../v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { isAdhocAnalysis } from '../v2/control-task-policy.js';
 import { activateDeferredIterations } from '../v2/deferred-iterations.js';
 import { recoverPrematureMigrationApprovalGate } from '../v2/migration-gate-recovery.js';
 import { requireCompleteRoleModels } from './role-models.js';
@@ -279,8 +280,23 @@ export class AriadService {
 
   async reconcileProject(project) {
     if (project.desiredState === 'STOPPED') {
-      const runtime = this.runtimes.get(project.id);
-      if (runtime) {
+      // A stopped project never schedules planning or delivery. Explicit
+      // operator analyses run in an isolated control-only lane instead.
+      // Keep the project lifecycle STOPPED and do not derive its status
+      // from these independent analysis tasks.
+      const runtime = this.runtimes.get(project.id) ?? (existsSync(project.stateDb) ? this.runtimeFor(project) : null);
+      if (!runtime) return;
+      const pending = runtime.store.listTasks(project.id).some(task =>
+        isAdhocAnalysis(task) && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
+      );
+      if (pending) {
+        try {
+          await runtime.tick({ adhocOnly: true });
+        } catch (error) {
+          this.logger?.error?.('Ariad ad-hoc analysis failed for ' + project.id + ': ' +
+            (error instanceof Error ? error.stack ?? error.message : String(error)));
+        }
+      } else {
         runtime.close();
         this.runtimes.delete(project.id);
       }
