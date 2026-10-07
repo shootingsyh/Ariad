@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
@@ -165,9 +165,31 @@ export function piRoleResultToolSchema(role) {
   }, { additionalProperties: false });
 }
 
-function ensureJson(path, value) {
+/** Pi model discovery is per workspace, shared by concurrent role sessions.
+ * Remote-provider runs must never erase local llama.cpp definitions. */
+export function ensureLocalPiModelsConfig(path, roleModels) {
+  const generated = buildAriadPiModelsConfig(roleModels);
+  const local = generated.providers?.llamacpp;
+  if (!local) return false;
+  let current = { providers: {} };
+  if (existsSync(path)) current = JSON.parse(readFileSync(path, 'utf8'));
+  const prior = current.providers?.llamacpp;
+  const models = new Map((prior?.models ?? []).map(model => [model.id, model]));
+  for (const model of local.models) models.set(model.id, model);
+  const next = {
+    ...current,
+    providers: {
+      ...(current.providers ?? {}),
+      llamacpp: { ...prior, ...local, models: [...models.values()] },
+    },
+  };
+  const content = JSON.stringify(next, null, 2) + '\n';
+  if (existsSync(path) && readFileSync(path, 'utf8') === content) return false;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, content, 'utf8');
+  renameSync(temporary, path);
+  return true;
 }
 
 export function piSessionManagerForSpec(spec, paths, workspace) {
@@ -208,7 +230,7 @@ export async function createDefaultPiRunSession(spec) {
     migrateLegacyPiAuth(paths.authPath, { providers: [target.provider] });
   }
   if (!spec.context?.preservePiConfig) {
-    ensureJson(paths.modelsPath, buildAriadPiModelsConfig(roleModels));
+    ensureLocalPiModelsConfig(paths.modelsPath, roleModels);
   }
 
   const modelRuntime = await ModelRuntime.create({

@@ -25,6 +25,7 @@ import {
 import {
   piRoleResultToolSchema,
   piSessionManagerForSpec,
+  ensureLocalPiModelsConfig,
 } from '../src/runtime/pi-agent-session-provider.js';
 
 test('Ariad bundles the Pi coding-agent SDK surface it depends on', () => {
@@ -285,6 +286,24 @@ test('persistent Pi role sessions resume by session key while fresh roles are is
     }, paths, workspace);
     assert.notEqual(freshAgain.getSessionDir(), fresh.getSessionDir());
     assert.equal(freshAgain.buildSessionContext().messages.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('concurrent remote-role setup preserves local llama.cpp models', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pi-shared-models-'));
+  const file = path.join(root, 'models.json');
+  try {
+    assert.equal(ensureLocalPiModelsConfig(file, { developer: 'llamacpp/qwen3.8-27b' }), true);
+    const previous = fs.readFileSync(file, 'utf8');
+    assert.equal(ensureLocalPiModelsConfig(file, { artist: 'meta/muse-spark-1.2-contributor' }), false);
+    assert.equal(fs.readFileSync(file, 'utf8'), previous, 'Muse run must not overwrite llama config');
+    assert.equal(ensureLocalPiModelsConfig(file, { tester: 'llamacpp/other-local-model' }), true);
+    const ids = JSON.parse(fs.readFileSync(file, 'utf8')).providers.llamacpp.models.map(x => x.id);
+    assert.deepEqual(ids, ['qwen3.8-27b', 'other-local-model']);
+    assert.equal(ensureLocalPiModelsConfig(file, { developer: 'llamacpp/qwen3.8-27b' }), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
