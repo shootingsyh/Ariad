@@ -10,7 +10,7 @@ import {
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { Check } from 'typebox/value';
+import { Check, Errors } from 'typebox/value';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 import { registerAriadProjectTools } from './pi-project-tools.js';
@@ -169,12 +169,47 @@ export function piRoleResultToolSchema(role) {
   }, { additionalProperties: false });
 }
 
+const deliveryDeclaredResultSchema = Type.Object({
+  interfaceRealizations: Type.Optional(Type.Array(Type.Object({
+    interfaceId: Type.String({ minLength: 1 }),
+    anchors: Type.Array(anchorSchema),
+  }, { additionalProperties: false }))),
+  criteria: Type.Optional(Type.Array(Type.Object({
+    criterionId: Type.String({ minLength: 1 }),
+    status: Type.Union([
+      Type.Literal('SATISFIED'),
+      Type.Literal('FAILED'),
+      Type.Literal('UNVERIFIED'),
+      Type.Literal('BLOCKED'),
+    ]),
+    evidenceType: Type.Union([
+      Type.Literal('runtime'),
+      Type.Literal('static'),
+      Type.Literal('behavioral'),
+      Type.Literal('proxy'),
+      Type.Literal('manual'),
+    ]),
+    evidence: Type.Array(Type.Any()),
+    reason: Type.String({ minLength: 1 }),
+  }, { additionalProperties: false }))),
+  interfaceVerifications: Type.Optional(Type.Array(Type.Object({
+    interfaceId: Type.String({ minLength: 1 }),
+    evidence: Type.Array(Type.Any()),
+    anchors: Type.Optional(Type.Array(anchorSchema)),
+  }, { additionalProperties: false }))),
+  interfaceReviews: Type.Optional(Type.Array(Type.Object({
+    interfaceId: Type.String({ minLength: 1 }),
+    status: Type.Literal('APPROVED'),
+    reason: Type.String({ minLength: 1 }),
+  }, { additionalProperties: false }))),
+}, { additionalProperties: false });
+
 export function piDeclaredRoleResultToolSchema(role) {
   if (!DELIVERY_ROLES.has(role)) return piRoleResultToolSchema(role);
   return Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
     ...commonFields,
-    result: Type.Optional(Type.Any()),
+    result: Type.Optional(deliveryDeclaredResultSchema),
   }, { additionalProperties: false });
 }
 
@@ -300,7 +335,11 @@ export async function createDefaultPiRunSession(spec) {
         async execute(_toolCallId, params) {
           const strictRoleSchema = piRoleResultToolSchema(spec.role);
           if (!Check(strictRoleSchema, params)) {
-            throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}`);
+            const detail = [...Errors(strictRoleSchema, params)]
+              .slice(0, 8)
+              .map(error => `${error.path || '/'}: ${error.message}`)
+              .join('; ');
+            throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}; ${detail}`);
           }
           terminalResult = {
             outcome: params.outcome,

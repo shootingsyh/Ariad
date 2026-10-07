@@ -217,6 +217,12 @@ test('Pi role result tool preserves Ariad strict role outcomes and structured de
 
   assert.deepEqual(piDeclaredRoleResultToolSchema('developer'), piDeclaredRoleResultToolSchema('tester'));
   assert.deepEqual(piDeclaredRoleResultToolSchema('tester'), piDeclaredRoleResultToolSchema('reviewer'));
+  const declared = piDeclaredRoleResultToolSchema('tester');
+  assert.equal(declared.properties.result.properties.criteria.type, 'array');
+  assert.ok(declared.properties.result.properties.criteria.items.properties.evidenceType);
+  assert.equal(declared.properties.result.properties.interfaceRealizations.type, 'array');
+  assert.equal(declared.properties.result.properties.interfaceVerifications.type, 'array');
+  assert.equal(declared.properties.result.properties.interfaceReviews.type, 'array');
 });
 
 
