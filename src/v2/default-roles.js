@@ -298,6 +298,7 @@ function deliveryRoleSuffix(role) {
   if (role === 'reviewer') {
     return [
       "YOUR ROLE: REVIEWER",
+      "Available tools: read, grep, find, ls, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_role_result. Do not try other tools.",
       "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
       "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
       "For every required interface, check that the implementation is appropriate for the owning Feature and abstraction level, the realization plausibly corresponds to the contract, and Tester evidence exercises the important inputs, outputs, and sideEffects.",
