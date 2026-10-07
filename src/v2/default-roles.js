@@ -298,8 +298,9 @@ function deliveryRoleSuffix(role) {
   if (role === 'reviewer') {
     return [
       "YOUR ROLE: REVIEWER",
-      "Available tools: read, grep, find, ls, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_role_result. Do not try other tools.",
+      "Available tools: read, grep, find, ls, bash, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_role_result. Do not try other tools.",
       "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
+      "If and only if the review will PASS, finalize source control before ariad_role_result: use bash only for git status/diff/add/commit/push, stage only the reviewed product code/data/tests/assets for this delivery, commit them with a concise task-specific message, and push the current branch. Never stage runtime/generated state such as .ariad/state.db, .ariad/pi, .ariad/artifacts/task-context, or .godot. Do not use bash to run tests, edit files, or perform unrelated shell work. If source-control finalization fails, do not claim a clean PASS; report the failure explicitly.",
       "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
       "For every required interface, check that the implementation is appropriate for the owning Feature and abstraction level, the realization plausibly corresponds to the contract, and Tester evidence exercises the important inputs, outputs, and sideEffects.",
       "For Providers, require evidence for both provider creation and behavior of the produced thing.",

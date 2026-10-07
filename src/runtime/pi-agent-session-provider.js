@@ -24,7 +24,7 @@ import {
 
 const RESULT_TOOL = 'ariad_role_result';
 const DELIVERY_ROLES = new Set(['developer', 'tester', 'reviewer']);
-const REVIEWER_MUTATING_TOOLS = new Set(['bash', 'edit', 'write', 'ariad_memory_write']);
+const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 

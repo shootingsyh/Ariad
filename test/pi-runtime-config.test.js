@@ -75,7 +75,8 @@ test('delivery roles share one tool declaration set while reviewer mutations are
   assert.deepEqual(developer, [...ARIAD_PI_DELIVERY_TOOLS]);
   assert.deepEqual(tester, developer);
   assert.deepEqual(reviewer, developer);
-  for (const forbidden of ['bash', 'edit', 'write', 'ariad_memory_write']) {
+  assert.equal(deliveryToolPolicy('reviewer', 'bash'), null, 'reviewer bash is available for git finalization');
+  for (const forbidden of ['edit', 'write', 'ariad_memory_write']) {
     assert.equal(deliveryToolPolicy('reviewer', forbidden)?.block, true, forbidden);
     assert.equal(deliveryToolPolicy('developer', forbidden), null);
     assert.equal(deliveryToolPolicy('tester', forbidden), null);
