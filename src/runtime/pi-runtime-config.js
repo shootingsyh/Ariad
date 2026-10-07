@@ -108,7 +108,7 @@ export function buildAriadPiModelsConfig(roleModels = {}, {
           reasoning: true,
           input: ['text'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 65536,
+          contextWindow: 131072,
           maxTokens: 16384,
         })),
       },
