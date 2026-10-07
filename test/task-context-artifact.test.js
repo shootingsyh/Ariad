@@ -37,7 +37,7 @@ test('task context artifact deduplicates contracts, strips source snippets, and 
   };
   const artifact = buildTaskContextArtifact({ task, boundaryContext });
   assert.deepEqual(Object.keys(artifact), [
-    'schema', 'task', 'contracts', 'dependencies', 'artist', 'developer', 'tester', 'reviewer', 'repair',
+    'schema', 'task', 'contracts', 'dependencies', 'artist', 'developer', 'automatedRegression', 'tester', 'reviewer', 'repair',
   ]);
   assert.deepEqual(artifact.contracts.referencedFeatureInterfaces.map(x => x.id), ['F2']);
   assert.equal('binding' in artifact.contracts.owningFeatures[0].interfaces[0], false);

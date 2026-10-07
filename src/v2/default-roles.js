@@ -20,6 +20,7 @@ import {
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { buildTaskContextArtifact, writeTaskContextArtifact } from '../runtime/task-context-artifact.js';
+import { runAutomatedRegression } from '../runtime/automated-regression.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
 import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
@@ -498,7 +499,7 @@ export function createDefaultV2Roles({
       workspace,
     });
     const taskArtifact = sharedDeliveryContext
-      ? buildTaskContextArtifact({ task, boundaryContext: roleBoundaryContext })
+      ? buildTaskContextArtifact({ task, boundaryContext: roleBoundaryContext, artifactRoot })
       : null;
     const taskArtifactPath = taskArtifact ? writeTaskContextArtifact(artifactRoot, taskArtifact) : null;
     const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
@@ -637,13 +638,18 @@ export function createDefaultV2Roles({
       ].join('\n\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
       async afterPersist({ task, result }) {
-        return sealAfterPersist('developer', task, result);
+        const sealFollowUp = await sealAfterPersist('developer', task, result);
+        if (!sealFollowUp?.patch && result.outcome === 'PASS') {
+          runAutomatedRegression({ workspace, artifactRoot, task, developerResult: result });
+        }
+        return sealFollowUp;
       },
     },
 
     tester: {
       prepare: ({ task }) => prepareLlm(task, [
         TESTER_REUSE_PROMPT,
+        "Ariad may have already executed deterministic focused regressions after Developer completion. Inspect the automatedRegression section of the canonical task artifact first. Treat fresh PASS results as reusable execution evidence; do not rerun them merely for freshness. Add or rerun only tests needed to cover missing acceptance criteria, interface input/output/sideEffects, a failed/suspicious result, or a required realistic journey not represented in the report. State the reason for any repeated deterministic regression.",
         deliveryRoleSuffix('tester'),
       ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readAutomatedRegression } from './automated-regression.js';
 
 function clone(value) {
   return value == null ? value : structuredClone(value);
@@ -119,7 +120,7 @@ function uniqueReferencedFeatures(boundary) {
     .map(stripBinding);
 }
 
-export function buildTaskContextArtifact({ task, boundaryContext }) {
+export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot = null }) {
   const history = task?.history ?? [];
   const developerResult = latestRoleResult(history, 'developer');
   const testerResult = latestRoleResult(history, 'tester');
@@ -158,6 +159,7 @@ export function buildTaskContextArtifact({ task, boundaryContext }) {
       ...compactRoleResult(developerResult, 'developer'),
       interfaceRealizations: realizationBindings,
     } : null,
+    automatedRegression: readAutomatedRegression(artifactRoot, task.id),
     tester: testerResult || verificationBindings.length > 0 ? {
       ...compactRoleResult(testerResult, 'tester'),
       interfaceVerifications: verificationBindings,
