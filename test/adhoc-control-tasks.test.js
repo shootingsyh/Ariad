@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { V2Scheduler } from '../src/v2/scheduler.js';
+import { V2Supervisor } from '../src/v2/supervisor.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
@@ -224,4 +225,129 @@ test('idle STOPPED project is not initialized by the background reconcile', asyn
     await service.stop();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('negative task kind, role, scope and issuer combinations fail closed', () => {
+  setup(store => {
+    store.createProject({ id: 'POLICY', deliveryEnabled: true });
+    const invalid = [
+      [{ scope: 'control', flowId: 'adhoc:POLICY:wrong', stage: 'developer',
+         taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: 'Inspect' } },
+       /ADHOC_ANALYSIS_REQUIRES_TECH_LEAD/],
+      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: 'Inspect' } },
+       /ADHOC_ANALYSIS_REQUIRES_ADHOC_FLOW/],
+      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'developer', instruction: 'Inspect' } },
+       /ADHOC_ANALYSIS_UNAUTHORIZED_ISSUER/],
+      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: ' ' } },
+       /ADHOC_ANALYSIS_REQUIRES_INSTRUCTION/],
+      [{ scope: 'delivery', stage: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' },
+       /NON_DELIVERY_TASK_IN_DELIVERY/],
+      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'developer',
+         taskKind: 'MILESTONE_TASK' }, /MILESTONE_TASK_REQUIRES_DELIVERY/],
+      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'developer',
+         taskKind: 'PLANNING' }, /CONTROL_TASK_INVALID_ROLE/],
+      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'PLANNING' }, /PLANNING_REQUIRES_PLANNER_FLOW/],
+      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'REVIEW_GATE' }, /REVIEW_GATE_REQUIRES_PM/],
+      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'pm',
+         taskKind: 'DIAGNOSTIC' }, /DIAGNOSTIC_REQUIRES_DEBUGGER/],
+      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+         taskKind: 'MALICIOUS_UNKNOWN' }, /UNKNOWN_TASK_KIND/],
+      [{ scope: 'unrecognized', stage: 'developer', taskKind: 'MILESTONE_TASK' },
+       /invalid task scope/],
+    ];
+    for (const [i, [task, failure]] of invalid.entries()) {
+      assert.throws(() => store.createTask({ id: 'bad-' + i,
+        projectId: 'POLICY', ...task }), failure);
+    }
+    assert.equal(store.listTasks('POLICY').length, 0, 'failed admissions must leave no tasks');
+    const valid = store.createAdhocAnalysis({
+      projectId: 'POLICY', id: 'valid', requestedBy: 'operator', instruction: 'Inspect',
+    });
+    assert.throws(() => store.updateTask(valid.id, valid.version, {
+      stage: 'developer',
+    }), /ADHOC_ANALYSIS_REQUIRES_TECH_LEAD/, 'updates must enforce the policy as well');
+    assert.equal(store.getTask(valid.id).stage, 'tech_lead');
+  });
+});
+
+test('STOPPED scheduler cannot advance unrelated results or dispatch developer even with open delivery', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-adhoc-neg-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  let launches = 0;
+  try {
+    store.createProject({ id: 'NEG', deliveryEnabled: true, deliveryPlanVersion: 3 });
+    store.createTask({ id: 'developer-ready', projectId: 'NEG', scope: 'delivery',
+      stage: 'developer', milestoneId: 'M1' });
+    store.createTask({ id: 'delivery-result', projectId: 'NEG', scope: 'delivery',
+      stage: 'tester', milestoneId: 'M1', state: 'RESULT_READY',
+      history: [{ type: 'ROLE_RESULT', role: 'tester', outcome: 'PASS' }] });
+    const roles = new RoleRegistry();
+    roles.register('developer', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => { throw new Error('ILLEGAL_DEVELOPER_ADVANCE'); },
+    });
+    roles.register('tester', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => { throw new Error('ILLEGAL_RESULT_ADVANCE'); },
+    });
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake', start: async () => { launches++; return { externalId: 'x' }; },
+      poll: async () => ({ state: 'RUNNING' }), cancel: async () => {},
+    });
+    const scheduler = new V2Scheduler({ store, roles, providers, resources: new ResourcePool({}) });
+    assert.deepEqual((await scheduler.tick('NEG', { adhocOnly: true })).started, []);
+    assert.equal(launches, 0);
+    assert.equal(store.getTask('developer-ready').state, 'READY');
+    assert.equal(store.getTask('delivery-result').state, 'RESULT_READY');
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('restart recovery audits only stopped ad-hoc tasks, without touching suspended delivery', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-adhoc-restart-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'R', deliveryEnabled: true, deliveryPlanVersion: 2 });
+    const analysis = store.createAdhocAnalysis({
+      projectId: 'R', id: 'restart', requestedBy: 'operator', instruction: 'Review state',
+    });
+    const working = {
+      provider: 'fake', externalId: 'missing-session',
+      attemptId: 'attempt-old', resources: [], role: 'developer',
+    };
+    store.createTask({
+      id: 'suspended-dev', projectId: 'R', scope: 'delivery',
+      stage: 'developer', milestoneId: 'M1', state: 'WORKING',
+      execution: working,
+    });
+    const roles = new RoleRegistry();
+    roles.register('tech_lead', {
+      prepare: () => ({ provider: 'fake' }),
+      transition: () => ({ state: 'DONE' }),
+    });
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: 'fake', start: async () => ({ externalId: 'missing-session' }),
+      poll: async () => ({ state: 'LOST', failure: 'SESSION_GONE', restartOrphan: true, consumeAttempt: false }),
+      cancel: async () => {},
+    });
+    const resources = new ResourcePool({});
+    const scheduler = new V2Scheduler({ store, roles, providers, resources });
+    const supervisor = new V2Supervisor({ store, providers, resources });
+    await scheduler.tick('R', { adhocOnly: true });
+    assert.equal(store.getTask(analysis.id).state, 'WORKING');
+    const result = await supervisor.audit('R', { adhocOnly: true });
+    assert.equal(result.incidents.length, 1);
+    assert.equal(store.getTask(analysis.id).state, 'READY');
+    assert.equal(store.getTask(analysis.id).history.at(-1).consumeAttempt, false);
+    assert.equal(store.getTask('suspended-dev').state, 'WORKING');
+    assert.equal(store.getTask('suspended-dev').history.length, 0);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
