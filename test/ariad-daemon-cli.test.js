@@ -24,6 +24,13 @@ test('standalone CLI controls detached daemon and projects without OpenClaw', as
     assert.equal(created.id, 'test-project');
     assert.equal(created.desiredState, 'STOPPED');
 
+    // Regression: `analyze <project> <instruction>` must not swap the arguments.
+    const analysis = await runAriadRuntimeCli(args('project', 'analyze', 'test-project', 'Inspect this scratch workspace only.'));
+    assert.equal(analysis.projectId, 'test-project');
+    assert.equal(analysis.taskKind, 'ADHOC_ANALYSIS');
+    assert.match(analysis.taskId, /^adhoc:test-project:/);
+    assert.equal(analysis.state, 'READY');
+
     const updated = await runAriadRuntimeCli(args('project', 'set-role-models', 'test-project', JSON.stringify({ reviewer: 'openai-codex/test' })));
     assert.equal(updated.roleModels.reviewer, 'openai-codex/test');
 
