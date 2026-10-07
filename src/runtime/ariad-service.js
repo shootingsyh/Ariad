@@ -284,19 +284,32 @@ export class AriadService {
       // operator analyses run in an isolated control-only lane instead.
       // Keep the project lifecycle STOPPED and do not derive its status
       // from these independent analysis tasks.
-      const runtime = this.runtimes.get(project.id) ?? (existsSync(project.stateDb) ? this.runtimeFor(project) : null);
-      if (!runtime) return;
-      const pending = runtime.store.listTasks(project.id).some(task =>
+      let runtime = this.runtimes.get(project.id);
+      const pendingAnalysis = tasks => tasks.some(task =>
         isAdhocAnalysis(task) && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
       );
+      let pending = false;
+      if (runtime) {
+        pending = pendingAnalysis(runtime.store.listTasks(project.id));
+      } else if (existsSync(project.stateDb)) {
+        // Do not initialize the full runtime for ordinary stopped projects.
+        // In particular, keep the stopped SRPG project completely untouched.
+        const probe = new SQLiteV2Store(project.stateDb);
+        try {
+          pending = pendingAnalysis(probe.listTasks(project.id));
+        } finally {
+          probe.close();
+        }
+      }
       if (pending) {
+        runtime ??= this.runtimeFor(project);
         try {
           await runtime.tick({ adhocOnly: true });
         } catch (error) {
           this.logger?.error?.('Ariad ad-hoc analysis failed for ' + project.id + ': ' +
             (error instanceof Error ? error.stack ?? error.message : String(error)));
         }
-      } else {
+      } else if (runtime) {
         runtime.close();
         this.runtimes.delete(project.id);
       }
