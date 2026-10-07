@@ -13,6 +13,7 @@ import { Type } from 'typebox';
 
 import {
   ARIAD_PI_DEFAULT_TOOLS,
+  ARIAD_PI_DELIVERY_TOOLS,
   ARIAD_PI_REVIEW_TOOLS,
   piToolsForTask,
   ARIAD_PI_SPECIAL_NEEDS,
@@ -24,6 +25,8 @@ import {
 } from '../src/runtime/pi-runtime-config.js';
 import {
   piRoleResultToolSchema,
+  piDeclaredRoleResultToolSchema,
+  deliveryToolPolicy,
   piSessionManagerForSpec,
   ensureLocalPiModelsConfig,
 } from '../src/runtime/pi-agent-session-provider.js';
@@ -65,29 +68,21 @@ test('Ariad Pi model refs preserve production policy without fallback', () => {
   );
 });
 
-test('review-only Pi runs cannot access write, shell or memory-write tools', () => {
-  for (const input of [
-    { role: 'reviewer', taskKind: 'MILESTONE_TASK' },
-    { role: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' },
-  ]) {
-    const tools = piToolsForTask(input);
-    assert.deepEqual(tools, [...ARIAD_PI_REVIEW_TOOLS]);
-    for (const forbidden of ['bash', 'edit', 'write', 'ariad_memory_write']) {
-      assert.equal(tools.includes(forbidden), false, forbidden);
-    }
-    assert.ok(tools.includes('ariad_role_result'));
+test('delivery roles share one tool declaration set while reviewer mutations are runtime-blocked', () => {
+  const developer = piToolsForTask({ role: 'developer', taskKind: 'MILESTONE_TASK' });
+  const tester = piToolsForTask({ role: 'tester', taskKind: 'MILESTONE_TASK' });
+  const reviewer = piToolsForTask({ role: 'reviewer', taskKind: 'MILESTONE_TASK' });
+  assert.deepEqual(developer, [...ARIAD_PI_DELIVERY_TOOLS]);
+  assert.deepEqual(tester, developer);
+  assert.deepEqual(reviewer, developer);
+  for (const forbidden of ['bash', 'edit', 'write', 'ariad_memory_write']) {
+    assert.equal(deliveryToolPolicy('reviewer', forbidden)?.block, true, forbidden);
+    assert.equal(deliveryToolPolicy('developer', forbidden), null);
+    assert.equal(deliveryToolPolicy('tester', forbidden), null);
   }
-  for (const input of [
-    { role: 'developer', taskKind: 'MILESTONE_TASK' },
-    { role: 'tester', taskKind: 'MILESTONE_TASK' },
-    { role: 'tech_lead', taskKind: 'PLANNING' },
-    { role: 'project_debugger', taskKind: 'DIAGNOSTIC' },
-  ]) {
-    const tools = piToolsForTask(input);
-    for (const needed of ['bash', 'edit', 'write', 'ariad_memory_write']) {
-      assert.ok(tools.includes(needed), input.role + ' requires ' + needed);
-    }
-  }
+  const adhoc = piToolsForTask({ role: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' });
+  assert.deepEqual(adhoc, [...ARIAD_PI_REVIEW_TOOLS]);
+  assert.equal(adhoc.includes('write'), false);
 });
 
 test('Ariad generates local llama.cpp provider configuration from role models', () => {
@@ -219,6 +214,9 @@ test('Pi role result tool preserves Ariad strict role outcomes and structured de
   const reviewer = piRoleResultToolSchema('reviewer');
   assert.equal(reviewer.properties.result.type, 'object');
   assert.equal(reviewer.properties.result.properties.interfaceReviews.type, 'array');
+
+  assert.deepEqual(piDeclaredRoleResultToolSchema('developer'), piDeclaredRoleResultToolSchema('tester'));
+  assert.deepEqual(piDeclaredRoleResultToolSchema('tester'), piDeclaredRoleResultToolSchema('reviewer'));
 });
 
 

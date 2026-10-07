@@ -19,6 +19,7 @@ import {
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildRoleBoundaryContext } from './role-boundary-context.js';
+import { buildTaskContextArtifact, writeTaskContextArtifact } from '../runtime/task-context-artifact.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { completePlanningModelMigration } from './version-migration.js';
 import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
@@ -274,7 +275,7 @@ function deliveryRoleSuffix(role) {
   if (role === 'developer') {
     return [
       "YOUR ROLE: DEVELOPER",
-      "Implement the assigned task and the interfaces listed in the shared task context.",
+      "Implement the assigned task and the interfaces listed in the canonical task artifact.",
       "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run appropriate local/unit/component checks and avoid unrelated refactors.",
       "Interface ownership is already defined by the plan. Do not invent, remove, rename, or silently reassign interfaces.",
       "When a required interface realization is newly created or relocated, return result.interfaceRealizations with {interfaceId, anchors:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}. These are hints only; Ariad independently resolves and seals them.",
@@ -307,39 +308,6 @@ function deliveryRoleSuffix(role) {
     ].join('\n');
   }
   return null;
-}
-
-function buildSharedTaskPrompt(task, roleBoundaryContext) {
-  const requiredInterfaceIds = task.interfaceIds ?? task.input?.interfaceIds ?? [];
-  return [
-    "SHARED TASK CONTEXT",
-    "You are working on one Ariad delivery task. Developer, Tester, and Reviewer receive this same task-level context.",
-    JSON.stringify({
-      task: {
-        id: task.id,
-        title: task.title ?? null,
-        intent: task.intent ?? task.input?.intent ?? null,
-        acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
-        owningFeatureRefs: task.logicalRefs ?? task.input?.logicalRefs ?? [],
-        milestoneId: task.milestoneId ?? task.input?.milestoneId ?? null,
-        requiredInterfaceIds,
-      },
-      boundaryContext: roleBoundaryContext,
-    }, null, 2),
-    "INTERFACE RULES",
-    "Interface ownership is defined by the plan, not invented after implementation. A task may own multiple interfaces; every required interface must be accounted for.",
-    "An Executor contract describes input, output, and sideEffects. A Provider contract describes provider input plus the produced thing and that thing's input, output, and sideEffects.",
-    "Parent Features own interfaces at their own abstraction level. Child interfaces may realize a parent interface but do not replace the parent contract. A facade may expose a child interface by reference only when that is genuinely the intended abstraction.",
-    "Use the supplied interface/binding context as the primary reasoning boundary. Expand outward only when it is demonstrably insufficient; do not perform unrelated repository-wide rediscovery.",
-    "Task completion requires the required contracts to be implemented, mechanically bindable to real code, behaviorally verified, and supported by reviewable evidence.",
-  ].join('\n\n');
-}
-
-function composeDeliveryRolePrompt(task, roleBoundaryContext, suffix) {
-  return [
-    buildSharedTaskPrompt(task, roleBoundaryContext),
-    suffix,
-  ].filter(Boolean).join('\n\n');
 }
 
 function plannerPublicPlan(plan) {
@@ -527,6 +495,10 @@ export function createDefaultV2Roles({
       role: sharedDeliveryContext ? 'delivery' : task.stage,
       workspace,
     });
+    const taskArtifact = sharedDeliveryContext
+      ? buildTaskContextArtifact({ task, boundaryContext: roleBoundaryContext })
+      : null;
+    const taskArtifactPath = taskArtifact ? writeTaskContextArtifact(artifactRoot, taskArtifact) : null;
     const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
       ? `${task.stage}:${task.projectId}`
       : null;
@@ -552,10 +524,13 @@ export function createDefaultV2Roles({
         } : {}),
         ...(persistentSessionKey ? { sessionKey: persistentSessionKey } : {}),
         ...extra,
-        ...(roleBoundaryContext ? { roleBoundaryContext } : {}),
-        v2Prompt: ['developer', 'tester', 'reviewer'].includes(task.stage)
-          ? composeDeliveryRolePrompt(task, roleBoundaryContext, v2Prompt)
-          : v2Prompt,
+        ...(sharedDeliveryContext ? {
+          taskArtifact,
+          taskArtifactPath,
+          roleProtocol: v2Prompt,
+        } : {}),
+        ...(!sharedDeliveryContext && roleBoundaryContext ? { roleBoundaryContext } : {}),
+        v2Prompt: sharedDeliveryContext ? '' : v2Prompt,
         task: {
           id: task.id,
           title: task.title ?? null,

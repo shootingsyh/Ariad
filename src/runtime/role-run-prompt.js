@@ -100,6 +100,26 @@ export function deriveExecutionHandoff(history = []) {
 }
 
 export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
+  if (context.taskArtifact) {
+    const sections = [
+      'ARIAD TASK ARTIFACT',
+      JSON.stringify(context.taskArtifact, null, 2),
+      '',
+      'ACTIVE ROLE PROTOCOL',
+      context.roleProtocol || fallbackPrompt || '',
+      '',
+      'ACTIVE ROLE',
+      String(context.role ?? ''),
+      '',
+      'TASK ARTIFACT PATH',
+      String(context.taskArtifactPath ?? ''),
+      '',
+      'EXECUTION DISCIPLINE',
+      'The serialized task artifact above is the single canonical task context. Do not reconstruct another task context. Stable contracts are earlier; later role slots contain accumulated evidence. Read source files on demand from anchors instead of expecting source snippets inline.',
+    ];
+    return sections.filter(part => part !== '').join('\n\n');
+  }
+
   const task = context.task ?? {};
   const history = task.history ?? [];
   const historySummary = compactHistory(history);

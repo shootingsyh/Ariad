@@ -10,6 +10,7 @@ import {
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { Check } from 'typebox/value';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 import { registerAriadProjectTools } from './pi-project-tools.js';
@@ -22,6 +23,9 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
+const DELIVERY_ROLES = new Set(['developer', 'tester', 'reviewer']);
+const REVIEWER_MUTATING_TOOLS = new Set(['bash', 'edit', 'write', 'ariad_memory_write']);
+export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
@@ -165,6 +169,22 @@ export function piRoleResultToolSchema(role) {
   }, { additionalProperties: false });
 }
 
+export function piDeclaredRoleResultToolSchema(role) {
+  if (!DELIVERY_ROLES.has(role)) return piRoleResultToolSchema(role);
+  return Type.Object({
+    outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
+    ...commonFields,
+    result: Type.Optional(Type.Any()),
+  }, { additionalProperties: false });
+}
+
+export function deliveryToolPolicy(role, toolName) {
+  if (role === 'reviewer' && REVIEWER_MUTATING_TOOLS.has(toolName)) {
+    return { block: true, reason: `Ariad reviewer runtime policy denies mutating tool: ${toolName}` };
+  }
+  return null;
+}
+
 /** Pi model discovery is per workspace, shared by concurrent role sessions.
  * Remote-provider runs must never erase local llama.cpp definitions. */
 export function ensureLocalPiModelsConfig(path, roleModels) {
@@ -263,14 +283,25 @@ export async function createDefaultPiRunSession(spec) {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    ...(DELIVERY_ROLES.has(spec.role) ? {
+      systemPromptOverride: () => ARIAD_DELIVERY_SYSTEM_PROMPT,
+      appendSystemPromptOverride: () => [],
+    } : {}),
     extensionFactories: [(pi) => {
       registerAriadProjectTools(pi, { workspace });
+      if (DELIVERY_ROLES.has(spec.role)) {
+        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName) ?? undefined);
+      }
       pi.registerTool({
         name: RESULT_TOOL,
         label: 'Ariad role result',
         description: 'Submit the authoritative structured result for this Ariad role. Arguments are strictly validated. Use only the outcome values and result shape allowed by this tool schema. This must be the final action.',
-        parameters: piRoleResultToolSchema(spec.role),
+        parameters: piDeclaredRoleResultToolSchema(spec.role),
         async execute(_toolCallId, params) {
+          const strictRoleSchema = piRoleResultToolSchema(spec.role);
+          if (!Check(strictRoleSchema, params)) {
+            throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}`);
+          }
           terminalResult = {
             outcome: params.outcome,
             summary: params.summary,

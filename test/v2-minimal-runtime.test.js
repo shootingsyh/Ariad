@@ -1614,9 +1614,9 @@ test('default delivery roles are reuse-first but require fresh verification evid
       codeProviderId: 'ariad-code',
     });
     const task = store.getTask('T-reuse');
-    assert.match(definitions.developer.prepare({ task }).context.v2Prompt, /reuse\/fix\/extend/i);
-    assert.match(definitions.tester.prepare({ task }).context.v2Prompt, /freshly executed/i);
-    assert.match(definitions.reviewer.prepare({ task }).context.v2Prompt, /fresh evidence/i);
+    assert.match(definitions.developer.prepare({ task }).context.roleProtocol, /reuse\/fix\/extend/i);
+    assert.match(definitions.tester.prepare({ task }).context.roleProtocol, /freshly executed/i);
+    assert.match(definitions.reviewer.prepare({ task }).context.roleProtocol, /fresh evidence/i);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

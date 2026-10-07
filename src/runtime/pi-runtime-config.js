@@ -56,8 +56,16 @@ export function resolveAriadPiModelRef(modelRef) {
   throw new Error(`MODEL_PROVIDER_UNAVAILABLE: no bundled Pi mapping for ${value}`);
 }
 
-// Review/inspection tasks must not receive arbitrary shell or write tools.
- // Ordinary planning, coding, testing, and debugging retain the coding toolset.
+export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
+  ...ARIAD_PI_DEFAULT_TOOLS,
+  'ariad_code_search', 'ariad_interface_search',
+  'ariad_memory_search', 'ariad_memory_write',
+  'ariad_session_history', 'ariad_role_result',
+]);
+
+// Ad-hoc analysis remains declaration-level read-only. Delivery roles deliberately
+// share one declaration set so Dev -> Test -> Review has a stable provider prefix;
+// runtime policy blocks mutating tools for Reviewer.
 export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
   'read', 'grep', 'find', 'ls',
   'ariad_code_search', 'ariad_interface_search',
@@ -65,15 +73,9 @@ export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
 ]);
 
 export function piToolsForTask({ role, taskKind } = {}) {
-  if (role === 'reviewer' || taskKind === 'ADHOC_ANALYSIS') {
-    return [...ARIAD_PI_REVIEW_TOOLS];
-  }
-  return [
-    ...ARIAD_PI_DEFAULT_TOOLS,
-    'ariad_code_search', 'ariad_interface_search',
-    'ariad_memory_search', 'ariad_memory_write',
-    'ariad_session_history', 'ariad_role_result',
-  ];
+  if (taskKind === 'ADHOC_ANALYSIS') return [...ARIAD_PI_REVIEW_TOOLS];
+  if (['developer', 'tester', 'reviewer'].includes(role)) return [...ARIAD_PI_DELIVERY_TOOLS];
+  return [...ARIAD_PI_DELIVERY_TOOLS];
 }
 
 export function piToolsForRole(_role) {

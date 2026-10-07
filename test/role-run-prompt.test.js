@@ -110,3 +110,31 @@ test('standalone role prompt carries durable interface seal feedback into the ne
   assert.match(prompt, /Preserve completed implementation work/);
   assert.match(prompt, /result\.interfaceRealizations/);
 });
+
+test('canonical delivery task artifact is serialized once before the role-specific tail', () => {
+  const artifact = {
+    schema: 'ariad-task-context-v1',
+    task: { id: 'T-cache', title: 'Cache-stable task' },
+    contracts: { owningFeatures: [{ id: 'F1' }] },
+    dependencies: null,
+    artist: null,
+    developer: null,
+    tester: null,
+    reviewer: null,
+    repair: null,
+  };
+  const prompt = buildStandaloneRolePrompt({
+    role: 'reviewer',
+    taskArtifact: artifact,
+    taskArtifactPath: '/tmp/T-cache.json',
+    roleProtocol: 'REVIEW ONLY THE PROVIDED EVIDENCE',
+    roleBoundaryContext: { shouldNotAppear: true },
+    task: { id: 'legacy-duplicate', history: [{ type: 'ROLE_RESULT', role: 'developer' }] },
+  });
+  assert.equal(prompt.match(/ARIAD TASK ARTIFACT/g)?.length, 1);
+  assert.equal(prompt.match(/\"schema\": \"ariad-task-context-v1\"/g)?.length, 1);
+  assert.equal(prompt.includes('ARIAD ROLE BOUNDARY CONTEXT'), false);
+  assert.equal(prompt.includes('legacy-duplicate'), false);
+  assert.ok(prompt.indexOf('ARIAD TASK ARTIFACT') < prompt.indexOf('ACTIVE ROLE PROTOCOL'));
+  assert.ok(prompt.indexOf('ACTIVE ROLE PROTOCOL') < prompt.indexOf('\n\nACTIVE ROLE\n'));
+});
