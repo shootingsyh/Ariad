@@ -41,9 +41,10 @@ export class V2Scheduler {
     this.resources = resources;
   }
 
-  async #advanceResults(projectId, { migrating = false } = {}) {
+  async #advanceResults(projectId, { migrating = false, adhocOnly = false } = {}) {
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'RESULT_READY') continue;
+      if (adhocOnly && !isAdhocAnalysis(task)) continue;
       if (migrating && !(isPlannerTask(task) && task.input?.versionMigration === true)) continue;
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
@@ -101,14 +102,14 @@ export class V2Scheduler {
     }
   }
 
-  async tick(projectId) {
+  async tick(projectId, { adhocOnly = false } = {}) {
     const initialProject = this.store.getProject(projectId);
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
-    await this.#advanceResults(projectId, { migrating });
-    this.#settlePlanningBatches(projectId);
+    await this.#advanceResults(projectId, { migrating, adhocOnly });
+    if (!adhocOnly) this.#settlePlanningBatches(projectId);
 
-    if (this.store.hasUnplannedPlanningRequests(projectId)) {
+    if (!adhocOnly && this.store.hasUnplannedPlanningRequests(projectId)) {
       const pending = this.store.listPlanningRequests(projectId, { states: ['PENDING'] });
       if (!migrating || pending.every(item =>
         ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
@@ -137,10 +138,12 @@ export class V2Scheduler {
     // Migration is a project-level exclusive mode. Neither Delivery nor
     // ordinary planning/iteration/diagnostic roles may execute, regardless
     // of deliveryEnabled, PM authorization, or task graph state.
-    const schedulableTasks = migrating
+    const schedulableTasks = adhocOnly
+      ? (migrating ? [] : allTasks.filter(isAdhocAnalysis))
+      : migrating
       ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
       : planningBlocked
-        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task))
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task))
         : allTasks.filter(task =>
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
             && (task.scope !== 'delivery' || deliveryEnabled)

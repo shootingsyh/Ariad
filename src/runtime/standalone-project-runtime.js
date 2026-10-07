@@ -121,9 +121,9 @@ export class StandaloneProjectRuntime {
     this.supervisor.recover(project.id);
   }
 
-  async tick({ schedule = true } = {}) {
-    const audit = await this.supervisor.audit(this.projectId);
-    const scheduled = schedule ? await this.scheduler.tick(this.projectId) : { started: [] };
+  async tick({ schedule = true, adhocOnly = false } = {}) {
+    const audit = await this.supervisor.audit(this.projectId, { adhocOnly });
+    const scheduled = schedule ? await this.scheduler.tick(this.projectId, { adhocOnly }) : { started: [] };
     this.store.checkpoint();
     return { audit, scheduled, status: this.status() };
   }
