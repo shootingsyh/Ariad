@@ -190,9 +190,36 @@ test('offline E2E: STOPPED project completes ad-hoc TL with durable result, no d
       assert.equal(store.listPlanningRequests(project.id).length, 0);
       assert.equal(started.length, 1);
       assert.equal(started[0].taskKind, 'ADHOC_ANALYSIS');
+      assert.equal(started[0].context.sessionKey, 'adhoc:' + project.id + ':' + created.taskId);
       assert.equal(piToolsForTask(started[0]).includes('write'), false);
       assert.equal(manager.status(project.id).desiredState, 'STOPPED');
     } finally { store.close(); }
+  } finally {
+    await service.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('idle STOPPED project is not initialized by the background reconcile', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-stopped-noop-'));
+  const manager = new AriadProjectManager({ projectsRoot: root });
+  const project = manager.create('idle-probe', {
+    goal: 'No unrequested work',
+    roleModels: Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'test/runtime'])),
+  });
+  const store = new SQLiteV2Store(project.stateDb);
+  store.createProject({ id: project.id, workspace: project.workspace, deliveryEnabled: false });
+  store.close();
+  const service = new AriadService({
+    manager, provider: { id: 'fake' },
+    memoryCurator: { close: async () => {} },
+  });
+  service.runtimeFor = () => { throw new Error('STOPPED_RUNTIME_MUST_NOT_START'); };
+  try {
+    await service.reconcileProject(manager.status(project.id));
+    assert.equal(manager.status(project.id).desiredState, 'STOPPED');
+    assert.equal(service.runtimes.size, 0);
   } finally {
     await service.stop();
     rmSync(root, { recursive: true, force: true });

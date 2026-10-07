@@ -969,7 +969,7 @@ export function createDefaultV2Roles({
             'Context:', JSON.stringify(task.input.context ?? {}),
             'Return outcome PLANNED with your findings through the structured role-result tool.',
           ].join('\n');
-          return prepareLlm(task, prompt);
+          return prepareLlm(task, prompt, { sessionKey: 'adhoc:' + task.projectId + ':' + task.id });
         }
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
