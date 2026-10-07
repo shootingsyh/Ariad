@@ -13,6 +13,8 @@ import { Type } from 'typebox';
 
 import {
   ARIAD_PI_DEFAULT_TOOLS,
+  ARIAD_PI_REVIEW_TOOLS,
+  piToolsForTask,
   ARIAD_PI_SPECIAL_NEEDS,
   ariadPiPaths,
   buildAriadPiModelsConfig,
@@ -60,6 +62,31 @@ test('Ariad Pi model refs preserve production policy without fallback', () => {
     () => resolveAriadPiModelRef('unknown/model'),
     /MODEL_PROVIDER_UNAVAILABLE/,
   );
+});
+
+test('review-only Pi runs cannot access write, shell or memory-write tools', () => {
+  for (const input of [
+    { role: 'reviewer', taskKind: 'MILESTONE_TASK' },
+    { role: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' },
+  ]) {
+    const tools = piToolsForTask(input);
+    assert.deepEqual(tools, [...ARIAD_PI_REVIEW_TOOLS]);
+    for (const forbidden of ['bash', 'edit', 'write', 'ariad_memory_write']) {
+      assert.equal(tools.includes(forbidden), false, forbidden);
+    }
+    assert.ok(tools.includes('ariad_role_result'));
+  }
+  for (const input of [
+    { role: 'developer', taskKind: 'MILESTONE_TASK' },
+    { role: 'tester', taskKind: 'MILESTONE_TASK' },
+    { role: 'tech_lead', taskKind: 'PLANNING' },
+    { role: 'project_debugger', taskKind: 'DIAGNOSTIC' },
+  ]) {
+    const tools = piToolsForTask(input);
+    for (const needed of ['bash', 'edit', 'write', 'ariad_memory_write']) {
+      assert.ok(tools.includes(needed), input.role + ' requires ' + needed);
+    }
+  }
 });
 
 test('Ariad generates local llama.cpp provider configuration from role models', () => {

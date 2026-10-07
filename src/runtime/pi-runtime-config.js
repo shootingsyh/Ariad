@@ -56,6 +56,26 @@ export function resolveAriadPiModelRef(modelRef) {
   throw new Error(`MODEL_PROVIDER_UNAVAILABLE: no bundled Pi mapping for ${value}`);
 }
 
+// Review/inspection tasks must not receive arbitrary shell or write tools.
+ // Ordinary planning, coding, testing, and debugging retain the coding toolset.
+export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
+  'read', 'grep', 'find', 'ls',
+  'ariad_code_search', 'ariad_interface_search',
+  'ariad_memory_search', 'ariad_session_history', 'ariad_role_result',
+]);
+
+export function piToolsForTask({ role, taskKind } = {}) {
+  if (role === 'reviewer' || taskKind === 'ADHOC_ANALYSIS') {
+    return [...ARIAD_PI_REVIEW_TOOLS];
+  }
+  return [
+    ...ARIAD_PI_DEFAULT_TOOLS,
+    'ariad_code_search', 'ariad_interface_search',
+    'ariad_memory_search', 'ariad_memory_write',
+    'ariad_session_history', 'ariad_role_result',
+  ];
+}
+
 export function piToolsForRole(_role) {
   // Keep the same general-purpose coding-agent capability boundary that Ariad
   // historically delegated to OpenClaw. Role semantics remain in Ariad prompts

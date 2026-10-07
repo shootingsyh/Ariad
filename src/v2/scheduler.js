@@ -3,7 +3,7 @@ import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, isAdhocAnalysis } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -236,6 +236,7 @@ export class V2Scheduler {
           projectId,
           taskId: task.id,
           role: task.stage,
+          taskKind: effectiveTaskKind(task),
           scope: task.scope,
           flowId: task.flowId ?? null,
           sessionPolicy: role.sessionPolicy ?? 'fresh',

@@ -19,6 +19,18 @@ jobs:
       - name: Test standalone Pi runtime without OpenClaw
         run: npm run test:pi-runtime
 
+  control-policy-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install Pi and test dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run offline task permissions and scheduler E2E
+        run: node --test test/pi-runtime-config.test.js test/adhoc-control-tasks.test.js test/pi-agent-session-e2e.test.js
+
   test:
     runs-on: ubuntu-latest
     steps:
