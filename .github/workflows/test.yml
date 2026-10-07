@@ -29,7 +29,7 @@ jobs:
       - name: Install Pi and test dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run offline task permissions and scheduler E2E
-        run: node --test test/pi-runtime-config.test.js test/adhoc-control-tasks.test.js test/pi-agent-session-e2e.test.js
+        run: node --test test/pi-runtime-config.test.js test/adhoc-control-tasks.test.js test/developer-task-policy.test.js test/pi-agent-session-e2e.test.js
 
   test:
     runs-on: ubuntu-latest
