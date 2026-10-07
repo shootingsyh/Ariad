@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PiAgentSessionProvider, isCodexQuotaExhaustion } from '../src/runtime/pi-agent-session-provider.js';
 
 const codex='openai-codex/gpt-5.6-sol';
-const muse='meta/muse-spark-1.3-contributor';
+const muse='meta/muse-spark-1.2-contributor';
 async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
   const calls=[];
   let disposed=0, switched=0;

@@ -22,7 +22,7 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
-const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.3-contributor';
+const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
 export function isCodexQuotaExhaustion(error) {
