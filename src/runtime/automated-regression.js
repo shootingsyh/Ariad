@@ -4,14 +4,8 @@ import { join, resolve } from 'node:path';
 
 function uniq(items) { return [...new Set(items)]; }
 
-export function discoverFocusedTests({ workspace, developerResult }) {
+function extractExistingTests(workspace, sources) {
   const found = [];
-  const sources = [
-    ...(developerResult?.artifacts ?? []),
-    ...(developerResult?.result?.interfaceRealizations ?? []).flatMap(item =>
-      (item?.anchors ?? []).map(anchor => anchor?.file ?? '')
-    ),
-  ];
   for (const raw of sources) {
     const text = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
     const matches = text.matchAll(/(?:^|[\s"'(])((?:tests)\/[A-Za-z0-9_.\/-]+\.gd)\b/g);
@@ -22,7 +16,25 @@ export function discoverFocusedTests({ workspace, developerResult }) {
       if (existsSync(resolve(workspace, rel))) found.push(rel);
     }
   }
-  return uniq(found).slice(0, 8);
+  return uniq(found);
+}
+
+export function discoverFocusedTests({ workspace, developerResult }) {
+  // Acceptance-criterion evidence is the strongest signal for the test that
+  // proves this leaf task. Developer artifacts may also list sibling regressions
+  // that were run defensively; do not automatically repeat those.
+  const criterionEvidence = (developerResult?.result?.criteria ?? [])
+    .flatMap(item => item?.evidence ?? []);
+  const evidenced = extractExistingTests(workspace, criterionEvidence);
+  if (evidenced.length > 0) return evidenced.slice(0, 8);
+
+  const fallbackSources = [
+    ...(developerResult?.artifacts ?? []),
+    ...(developerResult?.result?.interfaceRealizations ?? []).flatMap(item =>
+      (item?.anchors ?? []).map(anchor => anchor?.file ?? '')
+    ),
+  ];
+  return extractExistingTests(workspace, fallbackSources).slice(0, 8);
 }
 
 function tail(text, lines = 60) {

@@ -11,9 +11,12 @@ test('focused discovery uses developer-owned test artifacts only', () => {
   mkdirSync(join(root, 'tests'));
   for (const name of ['test_focus.gd', 'test_other.gd', 'helper.gd']) writeFileSync(join(root, 'tests', name), '# fixture\n');
   const tests = discoverFocusedTests({ workspace: root, developerResult: {
-    artifacts: ['scripts/feature.gd', 'tests/test_focus.gd', 'tests/helper.gd', 'missing/test_missing.gd'],
+    artifacts: ['scripts/feature.gd', 'tests/test_focus.gd', 'tests/test_other.gd', 'tests/helper.gd', 'missing/test_missing.gd'],
     keyPoints: ['full regression tests/test_other.gd also passed'],
-    result: { interfaceRealizations: [{ interfaceId: 'feature', anchors: [{ file: 'tests/test_focus.gd' }] }] },
+    result: {
+      criteria: [{ criterionId: 'AC1', evidence: [{ file: 'tests/test_focus.gd' }] }],
+      interfaceRealizations: [{ interfaceId: 'feature', anchors: [{ file: 'tests/test_focus.gd' }] }],
+    },
   }});
   assert.deepEqual(tests, ['tests/test_focus.gd']);
 });
