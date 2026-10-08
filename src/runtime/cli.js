@@ -12,7 +12,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|stop|status|models} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad daemon {start|status|stop} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
@@ -113,10 +113,10 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     const id = 'operator-' + Date.now().toString(36);
     return daemonRequest(root, { action: 'operator_analyze', name, id, instruction: analysisInstruction });
   }
-  if (scope === 'project' && ['start', 'resume', 'pause', 'stop', 'status', 'models', 'set-role-models', 'list', 'create', 'takeover', 'adopt'].includes(action)) {
+  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'set-role-models', 'list', 'create', 'takeover', 'adopt'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
-    if (['start', 'resume', 'pause', 'stop', 'set-role-models', 'create', 'takeover', 'adopt'].includes(action)) await ensureAriadDaemon(root);
-    const actualAction = action === 'set-role-models' ? 'set_role_models' : action;
+    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'create', 'takeover', 'adopt'].includes(action)) await ensureAriadDaemon(root);
+    const actualAction = action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action;
     return daemonRequest(root, {
       action: actualAction,
       name,

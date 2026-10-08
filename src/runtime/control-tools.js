@@ -62,6 +62,11 @@ export class AriadControlTools {
     return this.service.ensurePaused(name);
   }
 
+  softStop(name) {
+    return this.service.ensurePaused(name);
+  }
+
+
   resume(name) {
     return this.service.ensureResumed(name);
   }
@@ -81,6 +86,7 @@ export class AriadControlTools {
       case 'adopt': return this.adopt(input);
       case 'start': return this.start(input.name);
       case 'pause': return this.pause(input.name);
+      case 'soft_stop': return this.softStop(input.name);
       case 'resume': return this.resume(input.name);
       case 'stop': return this.stop(input.name);
       default: throw new Error(`unknown Ariad control action: ${action}`);

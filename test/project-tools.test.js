@@ -239,9 +239,10 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
   assert.equal(calls[1][2].mode, 'TAKEOVER');
   await tools.execute('start', { name: 'P' });
   await tools.execute('pause', { name: 'P' });
+  await tools.execute('soft_stop', { name: 'P' });
   await tools.execute('resume', { name: 'P' });
   await tools.execute('stop', { name: 'P' });
-  assert.deepEqual(calls.slice(2).map(call => call[0]), ['start', 'pause', 'resume', 'stop']);
+  assert.deepEqual(calls.slice(2).map(call => call[0]), ['start', 'pause', 'pause', 'resume', 'stop']);
 });
 
 test('control MCP exposes external Ariad project management tool', async () => {
@@ -276,7 +277,7 @@ test('control MCP exposes external Ariad project management tool', async () => {
     assert.equal(response.result.tools[0].name, 'ariad_project');
     assert.deepEqual(
       response.result.tools[0].inputSchema.properties.action.enum,
-      ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'resume', 'stop'],
+      ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop'],
     );
 
     child.stdin.write(JSON.stringify({
