@@ -101,14 +101,28 @@ function repairSlot(history) {
       'PRODUCT_DECISION',
     ].includes(entry?.type))
     .slice(-8)
-    .map(entry => ({
-      type: entry.type,
-      role: entry.role ?? null,
-      failure: entry.failure ?? null,
-      summary: entry.summary ?? null,
-      guidance: entry.guidance ?? null,
-      failures: clone(entry.failures ?? []),
-    }));
+    .map(entry => {
+      const failures = clone(entry.failures ?? []);
+      const packagingOnly = entry.type === 'ROLE_SEAL_FAILED'
+        && entry.repairRole === 'tester'
+        && failures.length > 0
+        && failures.every(failure => failure?.reason === 'MISSING_INTERFACE_VERIFICATION_EVIDENCE');
+      return {
+        type: entry.type,
+        role: entry.role ?? null,
+        ownerRole: entry.ownerRole ?? null,
+        repairRole: entry.repairRole ?? null,
+        failure: entry.failure ?? null,
+        summary: entry.summary ?? null,
+        guidance: entry.guidance ?? null,
+        failures,
+        ...(packagingOnly ? {
+          repairKind: 'RESULT_EVIDENCE_PACKAGING',
+          rerunRequired: false,
+          repairInstruction: 'Reuse the immediately preceding fresh Tester execution evidence. Do not rerun tests; repair only result.interfaceVerifications evidence packaging and resubmit.',
+        } : {}),
+      };
+    });
   return entries.length > 0 ? { events: entries } : null;
 }
 

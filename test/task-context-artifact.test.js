@@ -67,3 +67,38 @@ test('task artifact keeps stable fields before stage slots so later stages exten
   assert.equal(before.slice(0, developerOffsetBefore), afterDeveloper.slice(0, developerOffsetAfter));
   assert.ok(developerOffsetBefore > before.indexOf('"contracts":'));
 });
+
+test('tester evidence-packaging seal repair explicitly forbids rerunning fresh tests', () => {
+  const artifact = buildTaskContextArtifact({
+    task: {
+      id: 'T-repair',
+      title: 'Repair tester result packaging',
+      history: [
+        {
+          type: 'ROLE_RESULT',
+          role: 'tester',
+          outcome: 'PASS',
+          summary: 'Fresh behavioral suite passed.',
+          keyPoints: ['suite A PASS'],
+          artifacts: ['tests/a.gd'],
+          result: {
+            criteria: [{ criterionId: 'AC1', status: 'SATISFIED', evidence: [{ suite: 'A', result: 'PASS' }] }],
+            interfaceVerifications: [{ interfaceId: 'I1', evidence: [] }],
+          },
+        },
+        {
+          type: 'ROLE_SEAL_FAILED',
+          ownerRole: 'tester',
+          repairRole: 'tester',
+          failures: [{ interfaceId: 'I1', reason: 'MISSING_INTERFACE_VERIFICATION_EVIDENCE' }],
+        },
+      ],
+    },
+    boundaryContext: null,
+  });
+  const event = artifact.repair.events.at(-1);
+  assert.equal(event.repairKind, 'RESULT_EVIDENCE_PACKAGING');
+  assert.equal(event.rerunRequired, false);
+  assert.match(event.repairInstruction, /Do not rerun tests/);
+  assert.match(artifact.tester.summary, /Fresh behavioral suite passed/);
+});
