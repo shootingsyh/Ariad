@@ -277,7 +277,8 @@ function deliveryRoleSuffix(role) {
     return [
       "YOUR ROLE: DEVELOPER",
       "Implement the assigned task and the interfaces listed in the canonical task artifact.",
-      "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run appropriate local/unit/component checks and avoid unrelated refactors.",
+      "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run focused local/unit/component checks for the changed implementation and avoid unrelated refactors.",
+      "Do not run broad milestone, campaign, or repository-wide regression suites merely as a precaution. Ariad runs deterministic regression evidence after Developer completion and Tester inspects that report. Only run a wider dependency regression yourself when a changed shared interface directly requires it; state that dependency reason explicitly.",
       "Interface ownership is already defined by the plan. Do not invent, remove, rename, or silently reassign interfaces.",
       "When a required interface realization is newly created or relocated, return result.interfaceRealizations with {interfaceId, anchors:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}. These are hints only; Ariad independently resolves and seals them.",
       "If an existing binding remains valid and unchanged, you do not need to restate it.",
