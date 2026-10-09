@@ -266,6 +266,20 @@ export class AriadService {
     return { projectId: project.id, taskId: task.id, taskKind: task.taskKind, state: task.state };
   }
 
+  openIssue(name, issue) {
+    const project = this.manager.status(name);
+    const runtime = this.runtimeFor(project);
+    const opened = runtime.openIssue(issue);
+    this.wake('issue-opened');
+    return opened;
+  }
+
+  listIssues(name, states = null) {
+    const project = this.manager.status(name);
+    const runtime = this.runtimeFor(project);
+    return runtime.store.listIssues(project.id, { states });
+  }
+
   async submitDecision(name, decision) {
     const project = this.manager.status(name);
     const runtime = this.runtimeFor(project);

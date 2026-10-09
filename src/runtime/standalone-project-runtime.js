@@ -100,6 +100,7 @@ export class StandaloneProjectRuntime {
           request,
         });
       },
+      reportIssue: issue => this.openIssue(issue),
     });
     for (const [name, definition] of Object.entries(roleDefinitions)) {
       roleRegistry.register(name, definition);
@@ -119,6 +120,29 @@ export class StandaloneProjectRuntime {
       incidentSink,
     });
     this.supervisor.recover(project.id);
+  }
+
+  openIssue(issue = {}) {
+    const created = this.store.createIssue({
+      projectId: this.projectId,
+      ...structuredClone(issue),
+    });
+    if (!created.planningRequestId && !['CLOSED', 'REJECTED'].includes(created.state)) {
+      const requestId = `${this.projectId}:issue:${created.fingerprint}:${++this.requestSequence}`;
+      this.store.enqueuePlanningRequest({
+        id: requestId,
+        projectId: this.projectId,
+        request: {
+          purpose: 'TRIAGE_AND_ASSIGN_ISSUE',
+          issueId: created.id,
+          issue: created,
+          instruction: 'Triage this issue against the current feature/interface ownership. Reject duplicates/non-defects; otherwise assign the repair to the correct existing owner or revise the boundary if no valid owner exists. Create/update a bounded delivery repair task and preserve issueRefs=[issueId] on that task.',
+        },
+        context: { sourceKind: created.source?.kind ?? 'internal', issueId: created.id },
+      });
+      return this.store.updateIssue(created.id, { state: 'TRIAGE_PENDING', planningRequestId: requestId });
+    }
+    return created;
   }
 
   async tick({ schedule = true, adhocOnly = false } = {}) {

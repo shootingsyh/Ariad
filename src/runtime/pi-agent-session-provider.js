@@ -81,6 +81,19 @@ const anchorSchema = Type.Object({
   endLine: Type.Optional(Type.Integer({ minimum: 1 })),
 }, { additionalProperties: false });
 
+const discoveredIssueSchema = Type.Object({
+  title: Type.String({ minLength: 1 }),
+  description: Type.String({ minLength: 1 }),
+  severity: Type.Optional(Type.Union([
+    Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('critical'),
+  ])),
+  blocking: Type.Optional(Type.Boolean()),
+  affectedComponent: Type.Optional(Type.String()),
+  affectedInterface: Type.Optional(Type.String()),
+  evidence: Type.Optional(Type.Array(Type.Any())),
+  dedupeKey: Type.Optional(Type.String()),
+}, { additionalProperties: false });
+
 const commonFields = {
   summary: Type.String({ minLength: 1 }),
   keyPoints: Type.Optional(Type.Array(Type.String())),
@@ -100,6 +113,7 @@ export function piRoleResultToolSchema(role) {
   let result = Type.Optional(openResult());
   if (role === 'developer') {
     result = Type.Optional(openResult({
+      discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
       interfaceRealizations: Type.Optional(Type.Array(Type.Object({
         interfaceId: Type.String({ minLength: 1 }),
         anchors: Type.Array(anchorSchema),
@@ -107,6 +121,7 @@ export function piRoleResultToolSchema(role) {
     }));
   } else if (role === 'tester') {
     result = Type.Object({
+      discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
       criteria: Type.Array(Type.Object({
         criterionId: Type.String({ minLength: 1 }),
         status: Type.Union([
@@ -133,6 +148,7 @@ export function piRoleResultToolSchema(role) {
     }, { additionalProperties: true });
   } else if (role === 'reviewer') {
     result = Type.Optional(openResult({
+      discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
       interfaceReviews: Type.Optional(Type.Array(Type.Object({
         interfaceId: Type.String({ minLength: 1 }),
         status: Type.Literal('APPROVED'),
@@ -170,6 +186,7 @@ export function piRoleResultToolSchema(role) {
 }
 
 const deliveryDeclaredResultSchema = Type.Object({
+  discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
   interfaceRealizations: Type.Optional(Type.Array(Type.Object({
     interfaceId: Type.String({ minLength: 1 }),
     anchors: Type.Array(anchorSchema),

@@ -24,12 +24,37 @@ const inputSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop'],
+      enum: ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop', 'open_issue', 'list_issues'],
     },
     name: { type: 'string' },
     goal: { type: ['string', 'null'] },
     sourcePath: { type: 'string' },
     roleModels: { type: 'object', additionalProperties: { type: 'string' } },
+    states: { type: 'array', items: { type: 'string' } },
+    issue: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title', 'description'],
+      properties: {
+        id: { type: ['string', 'null'] },
+        source: {
+          type: 'object',
+          additionalProperties: true,
+          properties: { kind: { type: 'string' }, ref: { type: ['string', 'null'] } },
+        },
+        sourceTaskId: { type: ['string', 'null'] },
+        reportedBy: { type: ['string', 'null'] },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        evidence: { type: 'array' },
+        severity: { type: 'string' },
+        blocking: { type: 'boolean' },
+        affectedComponent: { type: ['string', 'null'] },
+        affectedInterface: { type: ['string', 'null'] },
+        fingerprint: { type: ['string', 'null'] },
+        context: { type: ['object', 'null'], additionalProperties: true },
+      },
+    },
   },
 };
 

@@ -2838,3 +2838,107 @@ test('migrating scheduler allows only migration control tasks even if delivery i
     store.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('issue intake deduplicates sources and tracks triage assignment through planning', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-issue' });
+    const first = store.createIssue({
+      projectId: 'P-issue',
+      source: { kind: 'github', ref: 'owner/repo#42' },
+      title: 'CH21 reinforcement overlap',
+      description: 'A rescued ally and enemy reinforcement can occupy the same live grid cell.',
+      severity: 'high',
+      blocking: true,
+      affectedComponent: 'content.m4.ch21',
+    });
+    const duplicate = store.createIssue({
+      projectId: 'P-issue',
+      source: { kind: 'github', ref: 'owner/repo#42' },
+      title: 'CH21 reinforcement overlap',
+      description: 'A rescued ally and enemy reinforcement can occupy the same live grid cell.',
+      severity: 'high',
+      blocking: true,
+      affectedComponent: 'content.m4.ch21',
+    });
+    assert.equal(first.id, duplicate.id);
+    assert.equal(store.listIssues('P-issue').length, 1);
+
+    const request = store.enqueuePlanningRequest({
+      id: 'R-issue',
+      projectId: 'P-issue',
+      request: { purpose: 'TRIAGE_AND_ASSIGN_ISSUE', issueId: first.id },
+    });
+    store.updateIssue(first.id, { state: 'TRIAGE_PENDING', planningRequestId: request.id });
+    store.createTask({
+      id: 'repair-ch21',
+      projectId: 'P-issue',
+      stage: 'developer',
+      state: 'READY',
+      issueRefs: [first.id],
+    });
+    store.createPlanningBatch({
+      projectId: 'P-issue',
+      batchId: 'B-issue',
+      requestIds: ['R-issue'],
+      tasks: [{
+        id: 'planner:B-issue:noop',
+        stage: 'tech_lead',
+        taskKind: 'PLANNING',
+        input: { purpose: 'PLANNER_DEPENDENCIES' },
+      }],
+    });
+    store.completePlanningBatch('P-issue', 'B-issue');
+    const assigned = store.getIssue(first.id);
+    assert.equal(assigned.state, 'ASSIGNED');
+    assert.deepEqual(assigned.assignedTaskIds, ['repair-ch21']);
+    assert.equal(assigned.triage.disposition, 'ASSIGNED');
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('delivery role blocks acceptance and reports a discovered cross-scope issue for TL triage', async () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-cross-scope' });
+    const reported = [];
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      reportIssue: issue => {
+        reported.push(issue);
+        return { id: 'issue:P-cross-scope:ch21', ...issue };
+      },
+    });
+    const followUp = await definitions.tester.afterPersist({
+      task: { id: 'regression-m4', projectId: 'P-cross-scope', stage: 'tester', history: [] },
+      result: {
+        outcome: 'PASS',
+        result: {
+          discoveredIssues: [{
+            title: 'CH21 live-unit overlap',
+            description: 'Two alive units share one cell and one becomes unselectable.',
+            severity: 'high',
+            blocking: true,
+            affectedComponent: 'content.m4.ch21',
+            evidence: [{ cell: [0, 3] }],
+          }],
+        },
+      },
+    });
+    assert.equal(reported.length, 1);
+    assert.equal(reported[0].sourceTaskId, 'regression-m4');
+    assert.equal(reported[0].reportedBy, 'tester');
+    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
+    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-cross-scope:ch21']);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

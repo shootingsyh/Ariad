@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, TASK_KINDS } from './control-task-policy.js';
 
@@ -24,6 +25,32 @@ function rowToTask(row) {
     version: row.version,
     updatedAt: row.updated_at,
   };
+}
+
+function rowToIssue(row) {
+  if (!row) return null;
+  return {
+    ...decode(row.data_json),
+    id: row.id,
+    projectId: row.project_id,
+    fingerprint: row.fingerprint,
+    state: row.state,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function issueFingerprint(issue) {
+  if (issue?.fingerprint) return String(issue.fingerprint);
+  const stable = JSON.stringify({
+    sourceKind: issue?.source?.kind ?? issue?.sourceKind ?? 'internal',
+    sourceRef: issue?.source?.ref ?? issue?.sourceRef ?? null,
+    sourceTaskId: issue?.sourceTaskId ?? null,
+    title: issue?.title ?? '',
+    description: issue?.description ?? '',
+    affectedComponent: issue?.affectedComponent ?? null,
+  });
+  return createHash('sha256').update(stable).digest('hex').slice(0, 24);
 }
 
 function normalizeTask(task) {
@@ -89,6 +116,20 @@ export class SQLiteV2Store {
       );
       CREATE INDEX IF NOT EXISTS idx_v2_planning_project_state
         ON v2_planning_requests(project_id, state, sequence);
+      CREATE TABLE IF NOT EXISTS v2_issues (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        state TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_issues_project_fingerprint
+        ON v2_issues(project_id, fingerprint);
+      CREATE INDEX IF NOT EXISTS idx_v2_issues_project_state
+        ON v2_issues(project_id, state, sequence);
       CREATE TABLE IF NOT EXISTS v2_system_incidents (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL,
@@ -406,6 +447,62 @@ export class SQLiteV2Store {
     }
   }
 
+  createIssue({ projectId, id = null, source = null, sourceTaskId = null, reportedBy = null, title, description, evidence = [], severity = 'medium', blocking = false, affectedComponent = null, affectedInterface = null, fingerprint = null, context = null }) {
+    if (!projectId || !this.getProject(projectId)) throw new Error('unknown project');
+    if (!String(title ?? '').trim()) throw new Error('issue title is required');
+    if (!String(description ?? '').trim()) throw new Error('issue description is required');
+    const issue = {
+      source: structuredClone(source ?? { kind: 'internal', ref: null }),
+      sourceTaskId, reportedBy,
+      title: String(title).trim(),
+      description: String(description).trim(),
+      evidence: structuredClone(evidence ?? []),
+      severity,
+      blocking: Boolean(blocking),
+      affectedComponent,
+      affectedInterface,
+      context: structuredClone(context),
+      triage: null,
+      planningRequestId: null,
+      assignedTaskIds: [],
+    };
+    const fp = issueFingerprint({ ...issue, fingerprint });
+    const existing = this.db.prepare('SELECT * FROM v2_issues WHERE project_id = ? AND fingerprint = ?').get(projectId, fp);
+    if (existing) return rowToIssue(existing);
+    const issueId = id ?? `issue:${projectId}:${fp}`;
+    const now = new Date().toISOString();
+    this.db.prepare("INSERT INTO v2_issues (id, project_id, fingerprint, state, data_json, created_at, updated_at) VALUES (?, ?, ?, 'OPEN', ?, ?, ?)")
+      .run(issueId, projectId, fp, encode(issue), now, now);
+    return this.getIssue(issueId);
+  }
+
+  getIssue(id) {
+    return rowToIssue(this.db.prepare('SELECT * FROM v2_issues WHERE id = ?').get(id));
+  }
+
+  listIssues(projectId, { states = null } = {}) {
+    let rows = this.db.prepare('SELECT * FROM v2_issues WHERE project_id = ? ORDER BY sequence').all(projectId);
+    if (Array.isArray(states) && states.length > 0) rows = rows.filter(row => states.includes(row.state));
+    return rows.map(rowToIssue);
+  }
+
+  updateIssue(id, patch) {
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`unknown issue: ${id}`);
+    const state = patch.state ?? current.state;
+    const data = { ...current, ...structuredClone(patch) };
+    delete data.id;
+    delete data.projectId;
+    delete data.fingerprint;
+    delete data.state;
+    delete data.createdAt;
+    delete data.updatedAt;
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE v2_issues SET state = ?, data_json = ?, updated_at = ? WHERE id = ?')
+      .run(state, encode(data), now, id);
+    return this.getIssue(id);
+  }
+
   enqueuePlanningRequest({ id, projectId, request, context = null }) {
     if (!id) throw new Error('planning request id is required');
     if (!projectId) throw new Error('planning request projectId is required');
@@ -514,11 +611,29 @@ export class SQLiteV2Store {
 
   completePlanningBatch(projectId, batchId) {
     const now = new Date().toISOString();
+    const batch = this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
     this.db.prepare(
       `UPDATE v2_planning_requests
        SET state = 'PLANNED', updated_at = ?
        WHERE project_id = ? AND batch_id = ? AND state = 'CLAIMED'`
     ).run(now, projectId, batchId);
+    const delivery = this.listTasks(projectId, { scope: 'delivery' });
+    for (const item of batch) {
+      if (item.request?.purpose !== 'TRIAGE_AND_ASSIGN_ISSUE' || !item.request?.issueId) continue;
+      const issueId = item.request.issueId;
+      const assigned = delivery.filter(task => (task.issueRefs ?? []).includes(issueId)).map(task => task.id);
+      const issue = this.getIssue(issueId);
+      if (!issue) continue;
+      this.updateIssue(issueId, {
+        state: assigned.length > 0 ? 'ASSIGNED' : 'TRIAGED_UNASSIGNED',
+        assignedTaskIds: assigned,
+        triage: {
+          planningBatchId: batchId,
+          deliveryPlanVersion: this.getProject(projectId)?.deliveryPlanVersion ?? null,
+          disposition: assigned.length > 0 ? 'ASSIGNED' : 'NO_ASSIGNEE_CREATED',
+        },
+      });
+    }
     return this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
   }
 

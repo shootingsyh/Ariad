@@ -286,6 +286,7 @@ function deliveryRoleSuffix(role) {
       "If an existing binding remains valid and unchanged, you do not need to restate it.",
       "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
       "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
+      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Return it in result.discoveredIssues with title, description, severity, blocking, affectedComponent/interface when known, and concrete evidence. Scope decides who repairs the defect; it does not make the defect acceptable. A blocking discovered issue must stop acceptance until Tech Lead triages and assigns repair ownership.",
     ].join('\n');
   }
   if (role === 'tester') {
@@ -300,6 +301,7 @@ function deliveryRoleSuffix(role) {
       "On a Tester repair attempt, inspect the canonical task artifact repair section before executing anything. If the latest repair event says rerunRequired=false or repairKind=RESULT_EVIDENCE_PACKAGING, reuse the immediately preceding fresh Tester execution evidence and DO NOT rerun tests. Repair only the structured result/evidence packaging requested by the seal and resubmit. Rerun only when the seal explicitly identifies stale, failed, contradictory, or behaviorally insufficient execution evidence.",
       "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
       "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
+      "If testing reveals a defect outside the current task ownership, report it in result.discoveredIssues instead of working around it or treating scope as permission to pass. A reachable invalid/ambiguous product state remains a defect even if a legal workaround can eventually complete the flow. Mark blocking=true when it blocks normal acceptance; Ariad will route it through Tech Lead triage/assignment.",
     ].join('\n');
   }
   if (role === 'reviewer') {
@@ -314,6 +316,7 @@ function deliveryRoleSuffix(role) {
       "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
       "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
       "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
+      "When review discovers an out-of-scope defect, report it in result.discoveredIssues; do not approve merely because the current task does not own the repair or because a workaround exists. Blocking defects are routed to Tech Lead for owner/scope triage and a separate repair task.",
     ].join('\n');
   }
   return null;
@@ -344,6 +347,7 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
 
   if (purpose === 'PLANNER_DECOMPOSE') {
     const nodeType = task.input?.frontierPhase ?? 'feature';
+    const issueRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE');
     const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
     const revision = revisionRoot && task.input?.sourceComplete !== true
       ? beginRevisionPass(revisionRoot, nodeType)
@@ -351,6 +355,15 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
     const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
+      issueRequests.length ? [
+        'ISSUE TRIAGE / ASSIGNMENT',
+        'One or more planning requests are issues. Triage each against current repository reality and feature/interface ownership before changing the plan.',
+        'Reject duplicates/non-defects by leaving delivery unchanged and documenting the disposition in planning artifacts/history.',
+        'For a valid issue, assign repair to the correct existing owning Feature/interface when possible; revise boundaries only when ownership is genuinely missing or wrong.',
+        'Create or update the smallest bounded delivery repair task. Preserve issueRefs:[issueId] on every delivery task created specifically to resolve that issue so Ariad can track assignment.',
+        'If the issue blocks a source task, add the repair task as a dependency of that source task rather than broadening the source task scope.',
+        JSON.stringify({ issueRequests }, null, 2),
+      ].join('\n\n') : null,
       frontierArtifactInstructions(artifactRoot, nodeType),
       revision && !revision.complete ? [
         'VERSION MIGRATION SOURCE FRONTIER',
@@ -476,6 +489,7 @@ export function createDefaultV2Roles({
   workspace,
   sourceControl = null,
   enqueuePlanning = null,
+  reportIssue = null,
   artifactRoot = null,
   executionCapabilities = [],
   executionProvenance = {},
@@ -494,6 +508,36 @@ export function createDefaultV2Roles({
     ...structuredClone(executionProvenance),
     ...executionMetadataFor(task),
   });
+
+  const processDiscoveredIssues = (task, result) => {
+    const issues = result?.result?.discoveredIssues ?? [];
+    if (!reportIssue || !Array.isArray(issues) || issues.length === 0) return null;
+    const opened = issues.map(issue => reportIssue({
+      source: { kind: 'internal-role', ref: `${task.id}:${task.stage}` },
+      sourceTaskId: task.id,
+      reportedBy: task.stage,
+      title: issue.title,
+      description: issue.description,
+      evidence: issue.evidence ?? [],
+      severity: issue.severity ?? 'medium',
+      blocking: issue.blocking === true,
+      affectedComponent: issue.affectedComponent ?? null,
+      affectedInterface: issue.affectedInterface ?? null,
+      fingerprint: issue.dedupeKey ?? null,
+      context: { roleOutcome: result.outcome },
+    }));
+    const blocking = opened.filter((_, i) => issues[i]?.blocking === true);
+    if (blocking.length === 0) return null;
+    return {
+      patch: { state: 'WAITING_REPLAN', execution: null },
+      transitionHistory: {
+        type: 'DISCOVERED_BLOCKING_ISSUE',
+        role: task.stage,
+        issueIds: blocking.map(issue => issue.id),
+        at: new Date().toISOString(),
+      },
+    };
+  };
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
@@ -644,6 +688,8 @@ export function createDefaultV2Roles({
       ].join('\n\n')),
       transition: () => ({ stage: 'tester', state: 'READY' }),
       async afterPersist({ task, result }) {
+        const issueFollowUp = processDiscoveredIssues(task, result);
+        if (issueFollowUp) return issueFollowUp;
         const sealFollowUp = await sealAfterPersist('developer', task, result);
         if (!sealFollowUp?.patch && result.outcome === 'PASS') {
           runAutomatedRegression({ workspace, artifactRoot, task, developerResult: result });
@@ -670,6 +716,8 @@ export function createDefaultV2Roles({
         return { stage: 'project_debugger', state: 'READY' };
       },
       async afterPersist({ task, result }) {
+        const issueFollowUp = processDiscoveredIssues(task, result);
+        if (issueFollowUp) return issueFollowUp;
         return sealAfterPersist('tester', task, result);
       },
     },
@@ -691,6 +739,8 @@ export function createDefaultV2Roles({
         return { state: 'DONE' };
       },
       async afterPersist({ task, result }) {
+        const issueFollowUp = processDiscoveredIssues(task, result);
+        if (issueFollowUp) return issueFollowUp;
         const sealFollowUp = await sealAfterPersist('reviewer', task, result);
         if (sealFollowUp) {
           if (sealFollowUp.patch) return sealFollowUp;

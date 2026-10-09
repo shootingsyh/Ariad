@@ -75,6 +75,14 @@ export class AriadControlTools {
     return this.service.ensureStopped(name);
   }
 
+  openIssue(name, issue) {
+    return this.service.openIssue(name, issue);
+  }
+
+  listIssues(name, states = null) {
+    return this.service.listIssues(name, states);
+  }
+
   async execute(action, input = {}) {
     switch (action) {
       case 'list': return this.list();
@@ -89,6 +97,8 @@ export class AriadControlTools {
       case 'soft_stop': return this.softStop(input.name);
       case 'resume': return this.resume(input.name);
       case 'stop': return this.stop(input.name);
+      case 'open_issue': return this.openIssue(input.name, input.issue ?? input);
+      case 'list_issues': return this.listIssues(input.name, input.states ?? null);
       default: throw new Error(`unknown Ariad control action: ${action}`);
     }
   }

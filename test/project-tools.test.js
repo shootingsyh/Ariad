@@ -277,7 +277,7 @@ test('control MCP exposes external Ariad project management tool', async () => {
     assert.equal(response.result.tools[0].name, 'ariad_project');
     assert.deepEqual(
       response.result.tools[0].inputSchema.properties.action.enum,
-      ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop'],
+      ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop', 'open_issue', 'list_issues'],
     );
 
     child.stdin.write(JSON.stringify({
