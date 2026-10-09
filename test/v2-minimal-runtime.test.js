@@ -3043,3 +3043,33 @@ test('planner artifact validator rejects human approval gates from Delivery mile
     /approval\/human gates belong to the PM control flow/,
   );
 });
+
+
+test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-issue-apply' });
+    store.applyDeliveryPlan('P-issue-apply', {
+      version: 3,
+      tasks: [{
+        id: 'repair-one',
+        title: 'Repair issue',
+        intent: 'Repair a triaged defect.',
+        dependsOn: [],
+        logicalRefs: ['feature.one'],
+        milestoneId: 'M1',
+        acceptanceCriteria: ['Defect is repaired.'],
+        testStrategy: 'Focused regression.',
+        verification: [],
+        issueRefs: ['issue:P-issue-apply:1'],
+      }],
+    });
+    const task = store.getTask('repair-one');
+    assert.deepEqual(task.issueRefs, ['issue:P-issue-apply:1']);
+    assert.deepEqual(task.input.issueRefs, ['issue:P-issue-apply:1']);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
