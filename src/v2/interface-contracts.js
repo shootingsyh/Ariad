@@ -842,6 +842,9 @@ export function validateTaskOwnershipCompilation(artifactRoot, executionTasks) {
     if (stableJson(compiled.acceptanceCriteria ?? []) !== stableJson(base.acceptanceCriteria ?? [])) {
       fail(`task:${taskId}: milestone compilation illegally overrode acceptanceCriteria`);
     }
+    if (stableJson(compiled.issueRefs ?? []) !== stableJson(base.issueRefs ?? [])) {
+      fail(`task:${taskId}: milestone compilation illegally dropped or changed issueRefs`);
+    }
     if (!(compiled.logicalRefs ?? []).includes(base.featureId)) {
       fail(`task:${taskId}: compiled feature task must retain owning feature ${base.featureId}`);
     }

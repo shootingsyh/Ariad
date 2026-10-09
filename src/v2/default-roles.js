@@ -405,7 +405,7 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       'You are Ariad\'s Tech Lead dependency compilation pass.',
       'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. Feature and milestone frontier passes already own task definition.',
       'Compile the already-defined canonical featureTasks, milestone taskLinks, and milestone integrationTasks into the legacy milestone/tasks compatibility artifacts and add only precise dependency edges required for execution ordering.',
-      'Feature task title, intent, acceptanceCriteria, testStrategy, and feature ownership are immutable in this pass.',
+      'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass.',
       'Milestone taskLinks may only add dependencies and verification. Milestone integrationTasks are already defined and must remain milestone-owned.',
       'Tester owns milestone/cross-feature integration, UI-journey, contract, and E2E test implementation/execution; Developer owns feature implementation plus local/unit/component correctness.',
       'Logical parentage is semantic only and never creates an execution dependency.',

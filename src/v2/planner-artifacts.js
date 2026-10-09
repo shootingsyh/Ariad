@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { buildExecutionGraph } from './execution-graph.js';
+import { isApprovalGateTask } from './developer-task-policy.js';
 
 const ID_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 
@@ -231,7 +232,7 @@ function normalizeLogicalNodes(rawNodes) {
 function normalizeTask(item, milestoneId, logicalById, taskIds) {
   const path = `milestone:${milestoneId}.task:${item?.id ?? '?'}`;
   if (!item || typeof item !== 'object' || Array.isArray(item)) fail(path, 'must be an object');
-  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'verification', 'art', 'history']);
+  const allowed = new Set(['id', 'title', 'intent', 'dependsOn', 'logicalRefs', 'acceptanceCriteria', 'testStrategy', 'verification', 'art', 'history', 'issueRefs']);
   for (const key of Object.keys(item)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
   assertId(item.id, `${path}.id`);
   if (taskIds.has(item.id)) fail(`${path}.id`, `duplicate task id ${item.id}`);
@@ -241,6 +242,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
   assertStringArray(item.dependsOn, `${path}.dependsOn`);
   assertStringArray(item.logicalRefs, `${path}.logicalRefs`, { nonEmpty: true });
   for (const ref of item.logicalRefs) if (!logicalById.has(ref)) fail(`${path}.logicalRefs`, `unknown logical ref ${ref}`);
+  if (item.issueRefs != null) assertStringArray(item.issueRefs, `${path}.issueRefs`);
   assertStringArray(item.acceptanceCriteria, `${path}.acceptanceCriteria`, { nonEmpty: true });
   assertString(item.testStrategy, `${path}.testStrategy`);
   if (item.verification != null) {
@@ -272,7 +274,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     if (typeof item.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
   }
   if (item.history != null && !Array.isArray(item.history)) fail(`${path}.history`, 'must be an array when present');
-  return {
+  const normalized = {
     id: item.id,
     title: item.title,
     intent: item.intent,
@@ -284,7 +286,12 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     verification: structuredClone(item.verification ?? []),
     art: item.art == null ? null : structuredClone(item.art),
     history: structuredClone(item.history ?? []),
+    ...(item.issueRefs?.length ? { issueRefs: [...item.issueRefs] } : {}),
   };
+  if (isApprovalGateTask(normalized)) {
+    fail(path, 'approval/human gates belong to the PM control flow and must not be compiled as Delivery tasks');
+  }
+  return normalized;
 }
 
 function normalizeMilestones(rawMilestones, logicalById) {
@@ -466,6 +473,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'During iteration, DO NOT hand-edit or rewrite the logical tree as the authoritative change description. Write feature-tree-diff.json instead. Shape: {"version":1,"targetVersion":2,"operations":[{"op":"add","node":{"id":"...","title":"...","summary":"...","parentId":"..."},"reason":"..."},{"op":"update","id":"...","patch":{"summary":"..."},"reason":"..."},{"op":"remove","id":"...","reason":"..."}]}. Ariad deterministically applies this diff to the immutable previous-version tree and materializes the new living logical tree.',
     'Milestone artifacts describe HOW work executes. A parent milestone implicitly executes after all direct child milestones and should own integration/E2E/acceptance work.',
     'Milestone dependsOn is only for extra prerequisite milestones outside parent-child ordering.',
+    'Human approval/review gates are control-plane concerns owned by PM/runtime. Never represent them as delivery milestones or milestone tasks (for example V2.GATE or approval_gate tasks), and never make delivery milestones depend on a human-gate milestone. Once takeover approval is satisfied, later technical replans must preserve that durable control-plane fact without recreating it in Delivery.',
     'Milestone artifact shape: {"id":"M1.1","title":"...","goal":"...","parentId":"M1","dependsOn":[],"logicalRefs":["battle"],"acceptanceCriteria":["..."],"testStrategy":"...","tasks":[...]}',
     'Task shape inside its owning milestone: {"id":"...","title":"...","intent":"...","dependsOn":[],"logicalRefs":["..."],"acceptanceCriteria":["..."],"testStrategy":"...","verification":[{"criterionId":"AC1","mode":"runtime","target":"windows.host-via-wsl"}],"art":null,"history":[]}',
     'Use verification only when evidence semantics matter. mode=runtime means the target behavior must actually execute; static/proxy/manual evidence cannot satisfy it. mode=static is artifact inspection; mode=behavioral is non-platform behavioral verification.',

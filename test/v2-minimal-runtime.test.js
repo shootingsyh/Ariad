@@ -1004,6 +1004,7 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
         logicalRefs: ['game.battle'],
         acceptanceCriteria: ['Battle is usable.'],
         testStrategy: 'Run battle test.',
+        issueRefs: ['issue:P:battle-1'],
       }],
     }));
 
@@ -1012,6 +1013,7 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
     assert.equal(validated.version, 3);
     assert.equal(validated.logicalRootId, 'game');
     assert.deepEqual(validated.tasks.find(task => task.id === 'T-BATTLE').dependsOn, []);
+    assert.deepEqual(validated.tasks.find(task => task.id === 'T-BATTLE').issueRefs, ['issue:P:battle-1']);
     assert.deepEqual(validated.tasks.find(task => task.id === 'T-INTEGRATE').dependsOn, ['T-BATTLE']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -3004,4 +3006,40 @@ test('assigned issue resolves automatically only after every repair task is DONE
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('planner artifact validator rejects human approval gates from Delivery milestones', () => {
+  const raw = {
+    version: 3,
+    logicalNodes: [{
+      id: 'product',
+      title: 'Product',
+      summary: 'Product root.',
+      parentId: null,
+    }],
+    milestones: [{
+      id: 'V2.GATE',
+      title: 'Human gate',
+      goal: 'Collect takeover approval.',
+      parentId: null,
+      dependsOn: [],
+      logicalRefs: ['product'],
+      acceptanceCriteria: ['Human approves delivery.'],
+      testStrategy: 'Ask human.',
+      tasks: [{
+        id: 'approval-task',
+        title: 'Approval',
+        intent: 'Persist a human approval.',
+        dependsOn: [],
+        logicalRefs: ['product'],
+        acceptanceCriteria: ['Approval recorded.'],
+        testStrategy: 'Human decision.',
+      }],
+    }],
+  };
+  assert.throws(
+    () => validatePlannerArtifactPlan(raw),
+    /approval\/human gates belong to the PM control flow/,
+  );
 });

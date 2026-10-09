@@ -134,6 +134,7 @@ test('canonical task compiler preserves feature ownership and applies only addit
         acceptanceCriteria: ['New game starts cleanly.'],
         testStrategy: 'Local entry tests.',
         verification: [],
+        issueRefs: ['issue:P:entry-1'],
       }],
     }));
     write(path.join(layout.milestoneDir, 'M1.json'), baseContract('M1', 'milestone', {
@@ -162,6 +163,7 @@ test('canonical task compiler preserves feature ownership and applies only addit
         testStrategy: 'Local entry tests.',
         verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'linux.native' }],
         interfaceIds: [],
+        issueRefs: ['issue:P:entry-1'],
         logicalRefs: ['entry'],
         dependsOn: ['asset-ready'],
         taskKind: 'feature',
