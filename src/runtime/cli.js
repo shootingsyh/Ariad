@@ -12,7 +12,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad daemon {start|status|stop} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
@@ -41,8 +41,13 @@ function parse(argv) {
   let sourcePath = null;
   let endpoint = null;
   let port = null;
+  let issue = null;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
+  if (scope === 'project' && action === 'issue-open') {
+    if (!arguments_.length) throw new Error('issue-open requires JSON');
+    issue = JSON.parse(arguments_.shift());
+  }
   if (scope === 'config' && action === 'local-endpoint') endpoint = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'set-role-models') {
     if (!arguments_.length) throw new Error('set-role-models requires JSON');
@@ -79,12 +84,12 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue };
 }
 
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue } = parse(argv);
   const root = resolve(process.env.ARIAD_PROJECTS_ROOT || projectsRoot || defaultProjectsRoot(homedir()));
   if (scope === 'daemon') {
     if (action === 'start') {
@@ -113,16 +118,17 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     const id = 'operator-' + Date.now().toString(36);
     return daemonRequest(root, { action: 'operator_analyze', name, id, instruction: analysisInstruction });
   }
-  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'set-role-models', 'list', 'create', 'takeover', 'adopt'].includes(action)) {
+  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
-    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'create', 'takeover', 'adopt'].includes(action)) await ensureAriadDaemon(root);
-    const actualAction = action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action;
+    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'create', 'takeover', 'adopt', 'issue-open'].includes(action)) await ensureAriadDaemon(root);
+    const actualAction = action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
     return daemonRequest(root, {
       action: actualAction,
       name,
       ...(roleModels != null ? { roleModels } : {}),
       ...(goal != null ? { goal } : {}),
       ...(sourcePath != null ? { sourcePath } : {}),
+      ...(issue != null ? { issue } : {}),
     });
   }
   return runAriadCli(argv);
