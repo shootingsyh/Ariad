@@ -1835,7 +1835,8 @@ test('later technical replans in an approved TAKEOVER project do not create anot
       project: store.getProject('P-take-replan'),
       task: pmTask,
     }).context.v2Prompt;
-    assert.doesNotMatch(prompt, /This is an existing-project takeover/);
+    assert.match(prompt, /one-time human takeover review has already been satisfied durably/);
+    assert.match(prompt, /Do NOT request another takeover\/delivery authorization/);
 
     const accepted = definitions.pm.transition({
       task: pmTask,
