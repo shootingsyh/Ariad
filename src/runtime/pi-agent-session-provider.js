@@ -340,7 +340,11 @@ export async function createDefaultPiRunSession(spec) {
       appendSystemPromptOverride: () => [],
     } : {}),
     extensionFactories: [(pi) => {
-      registerAriadProjectTools(pi, { workspace });
+      registerAriadProjectTools(pi, {
+        workspace,
+        reportIssue: spec.reportIssue ?? null,
+        taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
+      });
       if (DELIVERY_ROLES.has(spec.role)) {
         pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName) ?? undefined);
       }

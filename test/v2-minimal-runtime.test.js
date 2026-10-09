@@ -2913,7 +2913,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
       workspace: dir,
       reportIssue: issue => {
         reported.push(issue);
-        return { id: 'issue:P-cross-scope:ch21', ...issue };
+        return store.createIssue({ projectId: 'P-cross-scope', id: 'issue:P-cross-scope:ch21', ...issue });
       },
     });
     const followUp = await definitions.tester.afterPersist({
@@ -2937,6 +2937,68 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
     assert.equal(reported[0].reportedBy, 'tester');
     assert.equal(followUp.patch.state, 'WAITING_REPLAN');
     assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-cross-scope:ch21']);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('previously reported blocking issue gates final PASS even when role result omits discoveredIssues', async () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-early-issue' });
+    store.createIssue({
+      projectId: 'P-early-issue',
+      id: 'issue:P-early-issue:blocker',
+      source: { kind: 'internal-role', ref: 'T1:tester' },
+      sourceTaskId: 'T1',
+      reportedBy: 'tester',
+      title: 'Early blocker',
+      description: 'Reported before terminal role result.',
+      blocking: true,
+      severity: 'high',
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      reportIssue: issue => store.createIssue({ projectId: 'P-early-issue', ...issue }),
+    });
+    const followUp = await definitions.tester.afterPersist({
+      task: { id: 'T1', projectId: 'P-early-issue', stage: 'tester', history: [] },
+      result: { outcome: 'PASS', result: { criteria: [], interfaceVerifications: [] } },
+    });
+    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
+    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-early-issue:blocker']);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('assigned issue resolves automatically only after every repair task is DONE', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-resolve-issue' });
+    const issue = store.createIssue({
+      projectId: 'P-resolve-issue',
+      id: 'issue:P-resolve-issue:1',
+      source: { kind: 'user', ref: 'chat:1' },
+      title: 'Repair me',
+      description: 'Needs two bounded repairs.',
+      blocking: true,
+    });
+    store.createTask({ id: 'R1', projectId: 'P-resolve-issue', state: 'DONE' });
+    store.createTask({ id: 'R2', projectId: 'P-resolve-issue', state: 'READY' });
+    store.updateIssue(issue.id, { state: 'ASSIGNED', assignedTaskIds: ['R1', 'R2'] });
+    assert.deepEqual(store.reconcileAssignedIssues('P-resolve-issue'), []);
+    assert.equal(store.getIssue(issue.id).state, 'ASSIGNED');
+    const r2 = store.getTask('R2');
+    store.updateTask('R2', r2.version, { state: 'DONE' });
+    assert.deepEqual(store.reconcileAssignedIssues('P-resolve-issue'), [issue.id]);
+    assert.equal(store.getIssue(issue.id).state, 'RESOLVED');
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });

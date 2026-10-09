@@ -286,7 +286,7 @@ function deliveryRoleSuffix(role) {
       "If an existing binding remains valid and unchanged, you do not need to restate it.",
       "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
       "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
-      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Return it in result.discoveredIssues with title, description, severity, blocking, affectedComponent/interface when known, and concrete evidence. Scope decides who repairs the defect; it does not make the defect acceptable. A blocking discovered issue must stop acceptance until Tech Lead triages and assigns repair ownership.",
+      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Use blocking=true when normal acceptance must wait for repair. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Scope decides who repairs the defect; it does not make the defect acceptable. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
     ].join('\n');
   }
   if (role === 'tester') {
@@ -301,13 +301,13 @@ function deliveryRoleSuffix(role) {
       "On a Tester repair attempt, inspect the canonical task artifact repair section before executing anything. If the latest repair event says rerunRequired=false or repairKind=RESULT_EVIDENCE_PACKAGING, reuse the immediately preceding fresh Tester execution evidence and DO NOT rerun tests. Repair only the structured result/evidence packaging requested by the seal and resubmit. Rerun only when the seal explicitly identifies stale, failed, contradictory, or behaviorally insufficient execution evidence.",
       "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
       "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
-      "If testing reveals a defect outside the current task ownership, report it in result.discoveredIssues instead of working around it or treating scope as permission to pass. A reachable invalid/ambiguous product state remains a defect even if a legal workaround can eventually complete the flow. Mark blocking=true when it blocks normal acceptance; Ariad will route it through Tech Lead triage/assignment.",
+      "If testing reveals a defect outside the current task ownership, call ariad_report_issue immediately once evidence is concrete; the tool is non-terminal and starts Tech Lead triage/assignment without ending this Tester run. A reachable invalid/ambiguous product state remains a defect even if a legal workaround can eventually complete the flow. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as a fallback/final record when practical. Do not use the issue path for an ordinary failure clearly owned by this same task; return NOT_PASS for that.",
     ].join('\n');
   }
   if (role === 'reviewer') {
     return [
       "YOUR ROLE: REVIEWER",
-      "Available tools: read, grep, find, ls, bash, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_role_result. Do not try other tools.",
+      "Available tools: read, grep, find, ls, bash, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_report_issue, ariad_role_result. Do not try other tools.",
       "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
       "If and only if the review will PASS, finalize source control before ariad_role_result: use bash only for git status/diff/add/commit/push, stage only the reviewed product code/data/tests/assets for this delivery, commit them with a concise task-specific message, and push the current branch. Never stage runtime/generated state such as .ariad/state.db, .ariad/pi, .ariad/artifacts/task-context, or .godot. Do not use bash to run tests, edit files, or perform unrelated shell work. If source-control finalization fails, do not claim a clean PASS; report the failure explicitly.",
       "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
@@ -316,7 +316,7 @@ function deliveryRoleSuffix(role) {
       "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
       "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
       "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
-      "When review discovers an out-of-scope defect, report it in result.discoveredIssues; do not approve merely because the current task does not own the repair or because a workaround exists. Blocking defects are routed to Tech Lead for owner/scope triage and a separate repair task.",
+      "When review discovers an out-of-scope defect, call ariad_report_issue immediately once evidence is concrete; it is non-terminal and begins Tech Lead triage while review may continue. Do not approve merely because the current task does not own the repair or because a workaround exists. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as fallback/final record when practical. Ordinary defects owned by the reviewed task should remain NOT_PASS feedback to that task rather than unnecessary cross-scope issue work.",
     ].join('\n');
   }
   return null;
@@ -510,23 +510,32 @@ export function createDefaultV2Roles({
   });
 
   const processDiscoveredIssues = (task, result) => {
-    const issues = result?.result?.discoveredIssues ?? [];
-    if (!reportIssue || !Array.isArray(issues) || issues.length === 0) return null;
-    const opened = issues.map(issue => reportIssue({
-      source: { kind: 'internal-role', ref: `${task.id}:${task.stage}` },
-      sourceTaskId: task.id,
-      reportedBy: task.stage,
-      title: issue.title,
-      description: issue.description,
-      evidence: issue.evidence ?? [],
-      severity: issue.severity ?? 'medium',
-      blocking: issue.blocking === true,
-      affectedComponent: issue.affectedComponent ?? null,
-      affectedInterface: issue.affectedInterface ?? null,
-      fingerprint: issue.dedupeKey ?? null,
-      context: { roleOutcome: result.outcome },
-    }));
-    const blocking = opened.filter((_, i) => issues[i]?.blocking === true);
+    const declared = result?.result?.discoveredIssues ?? [];
+    if (reportIssue && Array.isArray(declared)) {
+      for (const issue of declared) {
+        reportIssue({
+          source: { kind: 'internal-role', ref: `${task.id}:${task.stage}` },
+          sourceTaskId: task.id,
+          reportedBy: task.stage,
+          title: issue.title,
+          description: issue.description,
+          evidence: issue.evidence ?? [],
+          severity: issue.severity ?? 'medium',
+          blocking: issue.blocking === true,
+          affectedComponent: issue.affectedComponent ?? null,
+          affectedInterface: issue.affectedInterface ?? null,
+          fingerprint: issue.dedupeKey ?? null,
+          context: { roleOutcome: result.outcome, reportedAtRoleResult: true },
+        });
+      }
+    }
+    const blocking = typeof store.listIssues === 'function'
+      ? store.listIssues(task.projectId).filter(issue =>
+          issue.sourceTaskId === task.id
+          && issue.blocking === true
+          && !['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)
+        )
+      : [];
     if (blocking.length === 0) return null;
     return {
       patch: { state: 'WAITING_REPLAN', execution: null },
@@ -568,6 +577,9 @@ export function createDefaultV2Roles({
         ...executionMetadata,
       },
       workspace,
+      ...(sharedDeliveryContext && reportIssue ? {
+        reportIssue: issue => reportIssue(issue),
+      } : {}),
       context: {
         role: task.stage,
         executionCapabilities: [...executionCapabilities],

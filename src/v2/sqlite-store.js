@@ -637,6 +637,26 @@ export class SQLiteV2Store {
     return this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
   }
 
+  reconcileAssignedIssues(projectId) {
+    const tasks = new Map(this.listTasks(projectId).map(task => [task.id, task]));
+    const resolved = [];
+    for (const issue of this.listIssues(projectId, { states: ['ASSIGNED'] })) {
+      const ids = issue.assignedTaskIds ?? [];
+      if (ids.length === 0) continue;
+      if (!ids.every(id => tasks.get(id)?.state === 'DONE')) continue;
+      this.updateIssue(issue.id, {
+        state: 'RESOLVED',
+        resolution: {
+          kind: 'ASSIGNED_TASKS_DONE',
+          taskIds: [...ids],
+          at: new Date().toISOString(),
+        },
+      });
+      resolved.push(issue.id);
+    }
+    return resolved;
+  }
+
   recordIncident(incident) {
     if (!incident?.projectId) throw new Error('incident.projectId is required');
     const at = incident.at ?? new Date().toISOString();

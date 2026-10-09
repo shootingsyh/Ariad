@@ -411,3 +411,41 @@ test('memory curator skips model calls when there is no recent non-maintenance h
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+
+test('ariad_report_issue is non-terminal and carries role/task provenance', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-report-issue-'));
+  try {
+    const registered = new Map();
+    const reported = [];
+    registerAriadProjectTools(
+      { registerTool(tool) { registered.set(tool.name, tool); } },
+      {
+        workspace,
+        taskContext: { taskId: 'T-cross-scope', role: 'tester' },
+        reportIssue(issue) {
+          reported.push(issue);
+          return { id: 'issue:P:test', state: 'TRIAGE_PENDING', ...issue };
+        },
+      },
+    );
+    const result = await registered.get('ariad_report_issue').execute('call-1', {
+      title: 'Cross-scope collision',
+      description: 'A live unit overlaps another live unit.',
+      severity: 'high',
+      blocking: true,
+      affectedComponent: 'battle.spawn',
+      evidence: [{ cell: [0, 3] }],
+      dedupeKey: 'spawn-overlap',
+    });
+    assert.equal(reported.length, 1);
+    assert.equal(reported[0].sourceTaskId, 'T-cross-scope');
+    assert.equal(reported[0].reportedBy, 'tester');
+    assert.equal(reported[0].fingerprint, 'spawn-overlap');
+    assert.equal(result.details.accepted, true);
+    assert.equal(result.details.nonTerminal, true);
+    assert.equal(result.details.issue.id, 'issue:P:test');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

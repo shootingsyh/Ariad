@@ -107,7 +107,10 @@ export class V2Scheduler {
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
     await this.#advanceResults(projectId, { migrating, adhocOnly });
-    if (!adhocOnly) this.#settlePlanningBatches(projectId);
+    if (!adhocOnly) {
+      this.store.reconcileAssignedIssues?.(projectId);
+      this.#settlePlanningBatches(projectId);
+    }
 
     if (!adhocOnly && this.store.hasUnplannedPlanningRequests(projectId)) {
       const pending = this.store.listPlanningRequests(projectId, { states: ['PENDING'] });

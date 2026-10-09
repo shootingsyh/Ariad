@@ -60,7 +60,7 @@ export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
   ...ARIAD_PI_DEFAULT_TOOLS,
   'ariad_code_search', 'ariad_interface_search',
   'ariad_memory_search', 'ariad_memory_write',
-  'ariad_session_history', 'ariad_role_result',
+  'ariad_session_history', 'ariad_report_issue', 'ariad_role_result',
 ]);
 
 // Ad-hoc analysis remains declaration-level read-only. Delivery roles deliberately

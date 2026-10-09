@@ -16,9 +16,10 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_memory_search',
   'ariad_memory_write',
   'ariad_session_history',
+  'ariad_report_issue',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace }) {
+export function registerAriadProjectTools(pi, { workspace, reportIssue = null, taskContext = null }) {
   pi.registerTool({
     name: 'ariad_code_search',
     label: 'Ariad code search',
@@ -85,6 +86,56 @@ export function registerAriadProjectTools(pi, { workspace }) {
     }, { additionalProperties: false }),
     async execute(_id, params) {
       return textResult({ events: sessionHistory(workspace, params) });
+    },
+  });
+
+  pi.registerTool({
+    name: 'ariad_report_issue',
+    label: 'Ariad report issue',
+    description: 'Report a newly discovered product/project defect immediately without ending the current role. Ariad deduplicates it and starts Tech Lead triage/assignment while this role may continue. Use blocking=true only when normal acceptance must not pass until the issue is repaired or explicitly dispositioned.',
+    parameters: Type.Object({
+      title: Type.String({ minLength: 1 }),
+      description: Type.String({ minLength: 1 }),
+      severity: Type.Optional(Type.Union([
+        Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('critical'),
+      ])),
+      blocking: Type.Optional(Type.Boolean()),
+      affectedComponent: Type.Optional(Type.String()),
+      affectedInterface: Type.Optional(Type.String()),
+      evidence: Type.Optional(Type.Array(Type.Any())),
+      dedupeKey: Type.Optional(Type.String({ minLength: 1 })),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      if (typeof reportIssue !== 'function') {
+        throw new Error('ARIAD_REPORT_ISSUE_UNAVAILABLE: this role run is not authorized for issue intake');
+      }
+      const issue = reportIssue({
+        source: {
+          kind: 'internal-role',
+          ref: taskContext?.taskId && taskContext?.role
+            ? taskContext.taskId + ':' + taskContext.role
+            : null,
+        },
+        sourceTaskId: taskContext?.taskId ?? null,
+        reportedBy: taskContext?.role ?? null,
+        title: params.title,
+        description: params.description,
+        evidence: params.evidence ?? [],
+        severity: params.severity ?? 'medium',
+        blocking: params.blocking === true,
+        affectedComponent: params.affectedComponent ?? null,
+        affectedInterface: params.affectedInterface ?? null,
+        fingerprint: params.dedupeKey ?? null,
+        context: { reportedDuringRoleExecution: true },
+      });
+      return textResult({
+        accepted: true,
+        nonTerminal: true,
+        issue,
+        guidance: params.blocking === true
+          ? 'The issue is being triaged now. Continue only useful bounded work/evidence collection; do not claim final PASS while this blocking issue remains unresolved.'
+          : 'The issue is being triaged now. Continue the assigned role normally.',
+      });
     },
   });
 
