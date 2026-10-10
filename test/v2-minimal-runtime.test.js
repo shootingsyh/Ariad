@@ -3073,3 +3073,31 @@ test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('TL inserts triaged fix into live delivery DAG without touching active roles or plan version', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-insert' });
+    store.createTask({ id: 'done', projectId: 'P-insert', state: 'DONE' });
+    store.createTask({ id: 'active', projectId: 'P-insert', state: 'WORKING', dependsOn: ['done'] });
+    store.createTask({ id: 'next', projectId: 'P-insert', state: 'READY', dependsOn: ['active'] });
+    const issue = store.createIssue({ projectId: 'P-insert', title: 'Independent regression', description: 'Needs fix' });
+    const before = store.getTask('active');
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tester', task: { id: 'fix' } }), /REQUIRES_TECH_LEAD/);
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', dependsOn: ['next'] }, beforeTaskIds: ['next'] }), /cycle/);
+    assert.equal(store.getTask('fix'), null);
+    assert.deepEqual(store.getTask('next').dependsOn, ['active']);
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix' }, beforeTaskIds: ['active'] }), /idle READY/);
+    const projectVersion = store.getProject('P-insert').version;
+    store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', title: 'Fix regression', dependsOn: ['done'] }, beforeTaskIds: ['next'] });
+    assert.deepEqual(store.getTask('next').dependsOn, ['active', 'fix']);
+    assert.equal(store.getTask('active').version, before.version);
+    assert.equal(store.getProject('P-insert').version, projectVersion);
+    assert.equal(store.getIssue(issue.id).state, 'ASSIGNED');
+    assert.deepEqual(store.getIssue(issue.id).assignedTaskIds, ['fix']);
+    assert.deepEqual(store.getTask('fix').issueRefs, [issue.id]);
+  } finally {
+    store.close(); fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

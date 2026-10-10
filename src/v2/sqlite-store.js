@@ -194,6 +194,63 @@ export class SQLiteV2Store {
     return this.#insertTask(task);
   }
 
+  // TL-only dynamic graph maintenance. Never rewrite running or completed tasks.
+  insertTriagedFixTask({ projectId, issueId, actor, task, beforeTaskIds = [] }) {
+    if (actor !== 'tech_lead') throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');
+    if (!this.getProject(projectId)) throw new Error('unknown project');
+    const issue = this.getIssue(issueId);
+    if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
+    if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
+    if (!task?.id || task.scope === 'control') throw new Error('delivery fix task id required');
+    if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.listTasks(projectId, { scope: 'delivery' });
+      if (this.getTask(task.id)) throw new Error('fix task id already exists');
+      const byId = new Map(current.map(item => [item.id, item]));
+      for (const id of beforeTaskIds) {
+        const target = byId.get(id);
+        if (!target || target.state !== 'READY' || target.execution) throw new Error(`insertion target must be idle READY: ${id}`);
+      }
+      const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
+      const fix = normalizeTask({ ...task, projectId, scope: 'delivery', issueRefs: refs,
+        input: { ...(task.input ?? {}), issueRefs: refs },
+        history: [...(task.history ?? []), { type: 'TL_INSERT_FIX_TASK', issueId, at: new Date().toISOString() }] });
+      if (fix.state !== 'READY' || fix.stage !== 'developer' || fix.execution) throw new Error('fix task must start READY/developer');
+      const proposed = current.map(item => beforeTaskIds.includes(item.id)
+        ? { ...item, dependsOn: [...new Set([...(item.dependsOn ?? []), fix.id])] }
+        : item).concat(fix);
+      // Validate dependency existence and acyclicity before any writes.
+      const edges = new Map(proposed.map(item => [item.id, item.dependsOn ?? []]));
+      const visited = new Set(), visiting = new Set();
+      const visit = id => {
+        if (!edges.has(id)) throw new Error(`unknown dependency: ${id}`);
+        if (visiting.has(id)) throw new Error('fix insertion creates dependency cycle');
+        if (visited.has(id)) return;
+        visiting.add(id);
+        for (const dep of edges.get(id)) visit(dep);
+        visiting.delete(id); visited.add(id);
+      };
+      for (const id of edges.keys()) visit(id);
+      const created = this.#insertTask(fix);
+      for (const id of beforeTaskIds) {
+        const target = byId.get(id);
+        this.updateTask(id, target.version, {
+          dependsOn: edges.get(id),
+          history: [...(target.history ?? []), { type: 'TL_INSERT_DEPENDENCY', issueId, fixTaskId: fix.id, at: new Date().toISOString() }],
+        });
+      }
+      const assignedTaskIds = [...new Set([...(issue.assignedTaskIds ?? []), fix.id])];
+      this.updateIssue(issueId, { state: 'ASSIGNED', assignedTaskIds,
+        triage: { ...(issue.triage ?? {}), disposition: 'ASSIGNED', decidedBy: 'tech_lead', insertedBefore: beforeTaskIds } });
+      this.db.exec('COMMIT');
+      return created;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   createAdhocAnalysis({ projectId, id, requestedBy, instruction, context = null }) {
     if (!this.getProject(projectId)) throw new Error('unknown project');
     if (!id || !/^[a-zA-Z0-9_.:-]+$/.test(id)) throw new Error('invalid adhoc id');
