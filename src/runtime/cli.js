@@ -125,6 +125,8 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     return daemonRequest(root, {
       action: actualAction,
       name,
+      auditSource: 'cli',
+      requestId: `${process.pid}-${Date.now()}`,
       ...(roleModels != null ? { roleModels } : {}),
       ...(action === 'set-ux-review' ? { uxReview: { enabled: goal === 'true' } } : {}),
       ...(goal != null ? { goal } : {}),
