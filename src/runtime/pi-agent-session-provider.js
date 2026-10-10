@@ -58,6 +58,7 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
   developer: ['PASS', 'NOT_PASS'],
   tester: ['PASS', 'NOT_PASS'],
   reviewer: ['PASS', 'NOT_PASS'],
+  ux_reviewer: ['PASS', 'NOT_PASS'],
   project_debugger: [
     'WRONG_IMPLEMENTATION_APPROACH',
     'TASK_TOO_LARGE',
@@ -231,7 +232,7 @@ export function piDeclaredRoleResultToolSchema(role) {
 }
 
 export function deliveryToolPolicy(role, toolName) {
-  if (role === 'reviewer' && REVIEWER_MUTATING_TOOLS.has(toolName)) {
+  if ((role === 'reviewer' || role === 'ux_reviewer') && REVIEWER_MUTATING_TOOLS.has(toolName)) {
     return { block: true, reason: `Ariad reviewer runtime policy denies mutating tool: ${toolName}` };
   }
   return null;

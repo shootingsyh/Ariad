@@ -30,6 +30,11 @@ export class AriadControlTools {
     };
   }
 
+  setUxReview(name, uxReview) {
+    if (!name) throw new Error('project name is required');
+    return this.manager.setUxReview(name, uxReview);
+  }
+
   setRoleModels(name, roleModels) {
     if (!name) throw new Error('project name is required');
     const normalized = normalizeRoleModels(roleModels ?? {});
@@ -89,6 +94,7 @@ export class AriadControlTools {
       case 'status': return this.status(input.name);
       case 'models': return this.models(input.name ?? null);
       case 'set_role_models': return this.setRoleModels(input.name, input.roleModels);
+      case 'set_ux_review': return this.setUxReview(input.name, input.uxReview);
       case 'create': return this.create(input);
       case 'takeover': return this.takeover(input);
       case 'adopt': return this.adopt(input);

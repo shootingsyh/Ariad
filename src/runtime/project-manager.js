@@ -275,6 +275,7 @@ export class AriadProjectManager {
       adopted: manifest.adopted ?? p.adopted ?? false,
       frontdeskBinding,
       roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
+      uxReview: manifest.uxReview?.enabled === true ? { enabled: true } : { enabled: false },
       executionState: manifest.executionState ?? 'IDLE',
       projectVersion: Number.isInteger(manifest.projectVersion) ? manifest.projectVersion : 0,
       activeVersion: Number.isInteger(manifest.activeVersion)
@@ -299,6 +300,13 @@ export class AriadProjectManager {
         ...normalizeRoleModels(roleModels),
       },
     });
+  }
+
+  setUxReview(name, { enabled }) {
+    if (typeof enabled !== 'boolean') throw new Error('uxReview.enabled must be boolean');
+    const project = this.status(name);
+    if (project.desiredState !== 'STOPPED') throw new Error('UX_REVIEW_CONFIGURATION_REQUIRES_STOPPED_PROJECT');
+    return this.writeManifest(name, { uxReview: { enabled } });
   }
 
   setDesiredState(name, desiredState) {

@@ -454,6 +454,7 @@ export class SQLiteV2Store {
           ownerFeatureId: spec.ownerFeatureId ?? null,
           ownerMilestoneId: spec.ownerMilestoneId ?? null,
           art: spec.art == null ? null : structuredClone(spec.art),
+          ux: spec.ux == null ? null : structuredClone(spec.ux),
           revisionMode: spec.revisionMode ?? 'implementation',
           milestoneId: spec.milestoneId ?? null,
           input: {
@@ -468,6 +469,7 @@ export class SQLiteV2Store {
             ownerFeatureId: spec.ownerFeatureId ?? null,
             ownerMilestoneId: spec.ownerMilestoneId ?? null,
             art: spec.art == null ? null : structuredClone(spec.art),
+          ux: spec.ux == null ? null : structuredClone(spec.ux),
             revisionMode: spec.revisionMode ?? 'implementation',
             milestoneId: spec.milestoneId ?? null,
             logicalRefs: [...(spec.logicalRefs ?? [])],
