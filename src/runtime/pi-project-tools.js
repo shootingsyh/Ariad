@@ -17,9 +17,10 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_memory_write',
   'ariad_session_history',
   'ariad_report_issue',
+  'ariad_insert_fix_task',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, reportIssue = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, taskContext = null }) {
   pi.registerTool({
     name: 'ariad_code_search',
     label: 'Ariad code search',
@@ -86,6 +87,34 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, t
     }, { additionalProperties: false }),
     async execute(_id, params) {
       return textResult({ events: sessionHistory(workspace, params) });
+    },
+  });
+
+  pi.registerTool({
+    name: 'ariad_insert_fix_task',
+    label: 'Ariad insert triaged fix task',
+    description: 'Tech Lead only: insert a new independent repair task into the active delivery DAG, adding prerequisite edges only to idle READY tasks. Does not pause active work or replan.',
+    parameters: Type.Object({
+      issueId: Type.String({ minLength: 1 }),
+      taskId: Type.String({ minLength: 1 }),
+      title: Type.String({ minLength: 1 }),
+      intent: Type.String({ minLength: 1 }),
+      acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }),
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      beforeTaskIds: Type.Optional(Type.Array(Type.String())),
+      milestoneId: Type.Optional(Type.String()),
+      ownerMilestoneId: Type.Optional(Type.String()),
+      ownerFeatureId: Type.Optional(Type.String()),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      if (taskContext?.role !== 'tech_lead' || typeof insertTriagedFixTask !== 'function') {
+        throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');
+      }
+      const { issueId, taskId, beforeTaskIds = [], ...spec } = params;
+      return textResult({ task: insertTriagedFixTask({ issueId, beforeTaskIds, task: {
+        id: taskId, ...spec, dependsOn: spec.dependsOn ?? [],
+        issueRefs: [issueId],
+      } }) });
     },
   });
 

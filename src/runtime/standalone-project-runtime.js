@@ -101,6 +101,7 @@ export class StandaloneProjectRuntime {
         });
       },
       reportIssue: issue => this.openIssue(issue),
+      insertTriagedFixTask: args => this.store.insertTriagedFixTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
     });
     for (const [name, definition] of Object.entries(roleDefinitions)) {
       roleRegistry.register(name, definition);

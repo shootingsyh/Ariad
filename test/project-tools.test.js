@@ -449,3 +449,24 @@ test('ariad_report_issue is non-terminal and carries role/task provenance', asyn
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+
+test('Pi fix insertion tool authorizes TL and forwards explicit dependency placement', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-fix-tool-'));
+  try {
+    const registered = new Map();
+    const calls = [];
+    const insertTriagedFixTask = args => { calls.push(args); return { id: args.task.id }; };
+    const pi = { registerTool(tool) { registered.set(tool.name, tool); } };
+    registerAriadProjectTools(pi, { workspace, taskContext: { role: 'tester' }, insertTriagedFixTask });
+    const params = { issueId: 'issue:1', taskId: 'fix:1', title: 'Fix', intent: 'Repair', acceptanceCriteria: ['works'], beforeTaskIds: ['next'] };
+    await assert.rejects(registered.get('ariad_insert_fix_task').execute('call', params), /REQUIRES_TECH_LEAD/);
+    assert.equal(calls.length, 0);
+    registered.clear();
+    registerAriadProjectTools(pi, { workspace, taskContext: { role: 'tech_lead' }, insertTriagedFixTask });
+    const result = await registered.get('ariad_insert_fix_task').execute('call', params);
+    assert.equal(result.details.task.id, 'fix:1');
+    assert.deepEqual(calls[0].beforeTaskIds, ['next']);
+    assert.deepEqual(calls[0].task.issueRefs, ['issue:1']);
+  } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+});
