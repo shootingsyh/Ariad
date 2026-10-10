@@ -2905,7 +2905,7 @@ test('issue intake deduplicates sources and tracks triage assignment through pla
 });
 
 
-test('delivery role blocks acceptance and reports a discovered cross-scope issue for TL triage', async () => {
+test('delivery role reports cross-scope issue without blocking source task', async () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
   try {
@@ -2914,6 +2914,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
+      artifactRoot: dir,
       reportIssue: issue => {
         reported.push(issue);
         return store.createIssue({ projectId: 'P-cross-scope', id: 'issue:P-cross-scope:ch21', ...issue });
@@ -2938,8 +2939,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
     assert.equal(reported.length, 1);
     assert.equal(reported[0].sourceTaskId, 'regression-m4');
     assert.equal(reported[0].reportedBy, 'tester');
-    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
-    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-cross-scope:ch21']);
+    assert.equal(followUp?.patch?.state, undefined);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2947,7 +2947,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
 });
 
 
-test('previously reported blocking issue gates final PASS even when role result omits discoveredIssues', async () => {
+test('previously reported issue cannot veto source task PASS before TL triage', async () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
   try {
@@ -2966,14 +2966,14 @@ test('previously reported blocking issue gates final PASS even when role result 
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
+      artifactRoot: dir,
       reportIssue: issue => store.createIssue({ projectId: 'P-early-issue', ...issue }),
     });
     const followUp = await definitions.tester.afterPersist({
       task: { id: 'T1', projectId: 'P-early-issue', stage: 'tester', history: [] },
       result: { outcome: 'PASS', result: { criteria: [], interfaceVerifications: [] } },
     });
-    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
-    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-early-issue:blocker']);
+    assert.equal(followUp?.patch?.state, undefined);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });

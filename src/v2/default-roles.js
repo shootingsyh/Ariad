@@ -286,7 +286,7 @@ function deliveryRoleSuffix(role) {
       "If an existing binding remains valid and unchanged, you do not need to restate it.",
       "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
       "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
-      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Use blocking=true when normal acceptance must wait for repair. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Scope decides who repairs the defect; it does not make the defect acceptable. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
+      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Task scope defines the goal, not a restriction on files or components you may change. Fix any code necessary for current acceptance; TL triages independent issues. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
     ].join('\n');
   }
   if (role === 'tester') {
@@ -301,7 +301,7 @@ function deliveryRoleSuffix(role) {
       "On a Tester repair attempt, inspect the canonical task artifact repair section before executing anything. If the latest repair event says rerunRequired=false or repairKind=RESULT_EVIDENCE_PACKAGING, reuse the immediately preceding fresh Tester execution evidence and DO NOT rerun tests. Repair only the structured result/evidence packaging requested by the seal and resubmit. Rerun only when the seal explicitly identifies stale, failed, contradictory, or behaviorally insufficient execution evidence.",
       "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
       "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
-      "If testing reveals a defect outside the current task ownership, call ariad_report_issue immediately once evidence is concrete; the tool is non-terminal and starts Tech Lead triage/assignment without ending this Tester run. A reachable invalid/ambiguous product state remains a defect even if a legal workaround can eventually complete the flow. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as a fallback/final record when practical. Do not use the issue path for an ordinary failure clearly owned by this same task; return NOT_PASS for that.",
+      "If testing reveals a defect outside the current task ownership, call ariad_report_issue immediately once evidence is concrete; the tool is non-terminal and starts Tech Lead triage/assignment without ending this Tester run. Judge this task against its acceptance criteria independently; TL determines cross-scope impact. and include it in result.discoveredIssues as a fallback/final record when practical. Do not use the issue path for an ordinary failure clearly owned by this same task; return NOT_PASS for that.",
     ].join('\n');
   }
   if (role === 'reviewer') {
@@ -316,7 +316,7 @@ function deliveryRoleSuffix(role) {
       "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
       "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
       "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
-      "When review discovers an out-of-scope defect, call ariad_report_issue immediately once evidence is concrete; it is non-terminal and begins Tech Lead triage while review may continue. Do not approve merely because the current task does not own the repair or because a workaround exists. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as fallback/final record when practical. Ordinary defects owned by the reviewed task should remain NOT_PASS feedback to that task rather than unnecessary cross-scope issue work.",
+      "When review discovers an out-of-scope defect, call ariad_report_issue immediately once evidence is concrete; it is non-terminal and begins Tech Lead triage while review may continue. Judge this task against its own acceptance criteria; TL determines whether an independent issue blocks other deliverables. and include it in result.discoveredIssues as fallback/final record when practical. Ordinary defects owned by the reviewed task should remain NOT_PASS feedback to that task rather than unnecessary cross-scope issue work.",
     ].join('\n');
   }
   return null;
@@ -529,23 +529,9 @@ export function createDefaultV2Roles({
         });
       }
     }
-    const blocking = typeof store.listIssues === 'function'
-      ? store.listIssues(task.projectId).filter(issue =>
-          issue.sourceTaskId === task.id
-          && issue.blocking === true
-          && !['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)
-        )
-      : [];
-    if (blocking.length === 0) return null;
-    return {
-      patch: { state: 'WAITING_REPLAN', execution: null },
-      transitionHistory: {
-        type: 'DISCOVERED_BLOCKING_ISSUE',
-        role: task.stage,
-        issueIds: blocking.map(issue => issue.id),
-        at: new Date().toISOString(),
-      },
-    };
+    // Reporting an issue never changes the source task's acceptance outcome.
+    // Only TL triage may establish cross-task or milestone dependencies.
+    return null;
   };
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
