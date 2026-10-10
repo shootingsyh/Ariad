@@ -86,12 +86,13 @@ export class StandaloneProjectRuntime {
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
       sourceControl,
+      uxReviewEnabled: project.uxReview?.enabled === true,
       artifactRoot: this.artifactRoot,
       executionCapabilities,
       executionProvenance,
       codeIntelligence,
       resolveRoleExecutionMetadata: role => ({
-        modelRef: this.resolveRoleModel(role) ?? null,
+        modelRef: this.resolveRoleModel(role === 'ux_reviewer' ? 'reviewer' : role) ?? null,
       }),
       enqueuePlanning: ({ request }) => {
         this.store.enqueuePlanningRequest({

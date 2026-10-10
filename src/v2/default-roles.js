@@ -488,6 +488,7 @@ export function createDefaultV2Roles({
   codeProviderId = 'ariad-code',
   workspace,
   sourceControl = null,
+  uxReviewEnabled = false,
   enqueuePlanning = null,
   reportIssue = null,
   insertTriagedFixTask = null,
@@ -724,6 +725,39 @@ export function createDefaultV2Roles({
       },
     },
 
+    // Dormant unless a project opts into UX review AND a task explicitly requires it.
+    ux_reviewer: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the independent UX reviewer. Evaluate only the task UX acceptance criteria against real rendered UI evidence (screenshots/video), interaction flows, accessibility and visual consistency.',
+        'Do not infer visual PASS from source code alone. Return NOT_PASS with specific missing evidence or defects when UX cannot be verified.',
+        'Do not modify implementation or project plans. Return PASS or NOT_PASS through the structured role-result tool.',
+        deliveryRoleSuffix('ux_reviewer'),
+      ].join('\n\n'), {
+        evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
+      }),
+      transition: ({ task, result }) => {
+        if (result.outcome === 'PASS') return { state: 'DONE' };
+        return failureCount(task) >= 3
+          ? { stage: 'project_debugger', state: 'READY' }
+          : { stage: 'developer', state: 'READY' };
+      },
+      async afterPersist({ task, result }) {
+        const issueFollowUp = processDiscoveredIssues(task, result);
+        if (issueFollowUp) return issueFollowUp;
+        if (!sourceControl || task.state !== 'DONE' || result.outcome !== 'PASS') return null;
+        store.checkpoint?.();
+        const finalized = await sourceControl.finalize({
+          taskId: task.id, strategyEpoch: strategyEpoch(task),
+          devCycle: Math.max(1, failureCount(task) + 1),
+        });
+        if (finalized.ok) return null;
+        return { patch: { stage: 'ux_reviewer', state: 'READY' }, transitionHistory: {
+          type: 'SYSTEM_INTERRUPTION', role: 'source_control',
+          failure: finalized.failure ?? 'SOURCE_CONTROL_FAILED', at: new Date().toISOString(),
+        } };
+      },
+    },
+
     reviewer: {
       prepare: ({ task }) => prepareLlm(task, [
         REVIEWER_FRESH_EVIDENCE_PROMPT,
@@ -738,6 +772,7 @@ export function createDefaultV2Roles({
             : { stage: 'developer', state: 'READY' };
         }
         if (result.outcome !== 'PASS') return { stage: 'project_debugger', state: 'READY' };
+        if (uxReviewEnabled && task.ux?.required === true) return { stage: 'ux_reviewer', state: 'READY' };
         return { state: 'DONE' };
       },
       async afterPersist({ task, result }) {
