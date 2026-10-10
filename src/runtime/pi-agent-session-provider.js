@@ -31,7 +31,7 @@ const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
 export function isCodexQuotaExhaustion(error) {
   const message = String(error?.message ?? error ?? '');
-  return /usage limit has been reached|usage limit reached|quota (?:has been )?exceeded|insufficient_quota|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:usage|weekly|monthly) limit/i.test(message);
+  return /usage limit has been reached|usage limit reached|quota (?:has been )?exceeded|insufficient_quota|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:ChatGPT )?(?:usage|weekly|monthly) limit/i.test(message);
 }
 
 function codexQuotaFallbackSpec(spec) {
