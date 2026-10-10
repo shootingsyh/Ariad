@@ -344,6 +344,7 @@ export async function createDefaultPiRunSession(spec) {
         workspace,
         reportIssue: spec.reportIssue ?? null,
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
+        recoverLegacyIssueBlockedTask: spec.recoverLegacyIssueBlockedTask ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
       });
       if (DELIVERY_ROLES.has(spec.role)) {

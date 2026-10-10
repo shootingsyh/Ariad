@@ -18,9 +18,10 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_session_history',
   'ariad_report_issue',
   'ariad_insert_fix_task',
+  'ariad_recover_legacy_issue_task',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, taskContext = null }) {
   pi.registerTool({
     name: 'ariad_code_search',
     label: 'Ariad code search',
@@ -87,6 +88,22 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
     }, { additionalProperties: false }),
     async execute(_id, params) {
       return textResult({ events: sessionHistory(workspace, params) });
+    },
+  });
+
+  pi.registerTool({
+    name: 'ariad_recover_legacy_issue_task',
+    label: 'Ariad recover legacy issue-blocked task',
+    description: 'Tech Lead only, explicit operator-requested one-time repair. Restore an idle delivery task to READY only if WAITING_REPLAN was caused by legacy DISCOVERED_BLOCKING_ISSUE and no subsequent Debugger/Replan evidence exists. Preserve Issue and audit trail.',
+    parameters: Type.Object({
+      taskId: Type.String({ minLength: 1 }),
+      reason: Type.String({ minLength: 1 }),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      if (taskContext?.role !== 'tech_lead' || typeof recoverLegacyIssueBlockedTask !== 'function') {
+        throw new Error('TASK_RECOVERY_REQUIRES_TECH_LEAD');
+      }
+      return textResult({ task: recoverLegacyIssueBlockedTask(params) });
     },
   });
 

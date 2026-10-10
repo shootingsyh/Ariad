@@ -491,6 +491,7 @@ export function createDefaultV2Roles({
   enqueuePlanning = null,
   reportIssue = null,
   insertTriagedFixTask = null,
+  recoverLegacyIssueBlockedTask = null,
   artifactRoot = null,
   executionCapabilities = [],
   executionProvenance = {},
@@ -565,6 +566,7 @@ export function createDefaultV2Roles({
       },
       workspace,
       ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
+      ...(task.stage === 'tech_lead' && recoverLegacyIssueBlockedTask ? { recoverLegacyIssueBlockedTask } : {}),
       ...(sharedDeliveryContext && reportIssue ? {
         reportIssue: issue => reportIssue(issue),
       } : {}),
@@ -1003,7 +1005,7 @@ export function createDefaultV2Roles({
           const prompt = [
             'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
             'Read and investigate the repository as needed. Do not modify any files, planning artifacts, task graph, or implementation.',
-            'Do not initiate Delivery, Replan, or task creation. Return findings and concrete recommendations only.',
+            'Do not initiate Delivery, Replan, or task creation. For an explicitly operator-requested one-off recovery of a legacy issue-induced WAITING_REPLAN task, you MAY use ariad_recover_legacy_issue_task after verifying its provenance. Do not recover genuine Debugger/Replan tasks. Otherwise return findings only.',
             'Request:', task.input.instruction,
             'Context:', JSON.stringify(task.input.context ?? {}),
             'Return outcome PLANNED with your findings through the structured role-result tool.',

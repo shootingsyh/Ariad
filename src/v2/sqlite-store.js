@@ -194,6 +194,35 @@ export class SQLiteV2Store {
     return this.#insertTask(task);
   }
 
+  // Explicit one-off TL recovery of legacy issue-induced WAITING_REPLAN.
+  recoverLegacyIssueBlockedTask({ projectId, taskId, actor, reason }) {
+    if (actor !== 'tech_lead') throw new Error('TASK_RECOVERY_REQUIRES_TECH_LEAD');
+    if (!String(reason ?? '').trim()) throw new Error('task recovery requires a reason');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.getTask(taskId);
+      if (!task || task.projectId !== projectId || task.scope !== 'delivery') throw new Error('unknown project delivery task');
+      if (task.state !== 'WAITING_REPLAN' || task.execution) throw new Error('task is not idle WAITING_REPLAN');
+      const history = task.history ?? [];
+      const marker = [...history].reverse().find(entry => entry?.type === 'DISCOVERED_BLOCKING_ISSUE');
+      if (!marker || !Array.isArray(marker.issueIds) || !marker.issueIds.length) throw new Error('legacy blocking issue evidence missing');
+      const markerIndex = history.lastIndexOf(marker);
+      if (history.slice(markerIndex + 1).some(entry =>
+        /REPLAN|DEBUGGER|HUMAN_DECISION/.test(String(entry?.type ?? ''))
+      )) throw new Error('subsequent replan or debugger activity requires normal recovery');
+      for (const issueId of marker.issueIds) {
+        const issue = this.getIssue(issueId);
+        if (!issue || issue.projectId !== projectId || issue.sourceTaskId !== taskId) throw new Error('blocking issue provenance mismatch');
+      }
+      const recovered = this.appendTaskHistory(taskId, task.version, {
+        type: 'TL_LEGACY_ISSUE_BLOCK_RECOVERY', role: 'tech_lead',
+        issueIds: marker.issueIds, reason: reason.trim(), at: new Date().toISOString(),
+      }, { state: 'READY', execution: null });
+      this.db.exec('COMMIT');
+      return recovered;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   // TL-only dynamic graph maintenance. Never rewrite running or completed tasks.
   insertTriagedFixTask({ projectId, issueId, actor, task, beforeTaskIds = [] }) {
     if (actor !== 'tech_lead') throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');

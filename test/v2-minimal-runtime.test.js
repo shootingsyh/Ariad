@@ -3101,3 +3101,24 @@ test('TL inserts triaged fix into live delivery DAG without touching active role
     store.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('TL one-off legacy issue recovery preserves issue and refuses genuine replans', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-recover' });
+    store.createTask({ id: 'legacy', projectId: 'P-recover', stage: 'tester', state: 'WAITING_REPLAN' });
+    const issue = store.createIssue({ projectId: 'P-recover', sourceTaskId: 'legacy', title: 'Unrelated defect', description: 'Reported from dev' });
+    const task = store.getTask('legacy');
+    store.appendTaskHistory(task.id, task.version, { type: 'DISCOVERED_BLOCKING_ISSUE', issueIds: [issue.id] });
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tester', reason: 'legacy bug' }), /REQUIRES_TECH_LEAD/);
+    const restored = store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'Legacy issue incorrectly blocked AC' });
+    assert.equal(restored.state, 'READY');
+    assert.equal(restored.stage, 'tester');
+    assert.equal(restored.history.at(-1).type, 'TL_LEGACY_ISSUE_BLOCK_RECOVERY');
+    assert.equal(store.getIssue(issue.id).state, 'OPEN');
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'again' }), /not idle/);
+    store.createTask({ id: 'real', projectId: 'P-recover', state: 'WAITING_REPLAN' });
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'real', actor: 'tech_lead', reason: 'bad' }), /evidence missing/);
+  } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
