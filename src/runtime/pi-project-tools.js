@@ -1,4 +1,7 @@
 import { Type } from 'typebox';
+import { resolve, relative, isAbsolute } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { sessionHistory } from './session-history.js';
@@ -13,6 +16,7 @@ function textResult(value) {
 export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_code_search',
   'ariad_interface_search',
+  'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search',
   'ariad_memory_write',
   'ariad_session_history',
@@ -22,6 +26,41 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
 ]);
 
 export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, taskContext = null }) {
+  const resolveFile = file => {
+    const path = resolve(workspace, file);
+    if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
+    return path;
+  };
+  let lsp = null;
+  const languageServer = () => {
+    if (!lsp) lsp = new GodotLspProvider({ projectPath: workspace, port: 7200 + [...workspace].reduce((n, c) => (n + c.charCodeAt(0)) % 1000, 0) });
+    return lsp;
+  };
+  const addTool = (name, description, parameters, run) => pi.registerTool({
+    name, label: name, description, parameters,
+    async execute(_id, args) { return textResult(await run(args)); },
+  });
+  addTool('ariad_document_symbols', 'List GDScript functions, classes and variables with locations without reading the entire file.', Type.Object({file: Type.String()}), async ({file}) => ({symbols: await languageServer().documentSymbols(resolveFile(file))}));
+  addTool('ariad_definition', 'Resolve a GDScript symbol definition at zero-based line and character.', Type.Object({file:Type.String(),line:Type.Integer({minimum:0}),character:Type.Optional(Type.Integer({minimum:0}))}), async ({file,line,character}) => ({definitions: await languageServer().definition(resolveFile(file),line,character??0)}));
+  addTool('ariad_references', 'Find references to a GDScript symbol at zero-based line and character.', Type.Object({file:Type.String(),line:Type.Integer({minimum:0}),character:Type.Optional(Type.Integer({minimum:0}))}), async ({file,line,character}) => ({references: await languageServer().references(resolveFile(file),line,character??0)}));
+  addTool('ariad_workspace_symbols', 'Search GDScript symbols across the workspace.', Type.Object({query:Type.String()}), async ({query}) => ({symbols: await languageServer().workspaceSymbols(query)}));
+  addTool('ariad_call_graph', 'Best-effort static direct/recursive GDScript call graph. Dynamic calls and signals may be unresolved; do not treat this as exhaustive. Depth defaults to 1.', Type.Object({file:Type.String(),symbol:Type.String(),depth:Type.Optional(Type.Integer({minimum:1,maximum:4}))}), async ({file,symbol,depth=1}) => {
+    const source=readFileSync(resolveFile(file),'utf8').split(/\r?\n/);
+    const funcs=new Map();let current=null;
+    for(let i=0;i<source.length;i++){
+      const match=source[i].match(/^(?:static\s+)?func\s+([\w]+)\s*\(/);
+      if(match){current={name:match[1],line:i+1,body:[]};funcs.set(match[1],current);}
+      else if(current && source[i].match(/^(?:func|class|signal|enum|const|var|@)/))current=null;
+      else if(current)current.body.push(source[i].replace(/#.*$/,''));
+    }
+    const visit=(name,remaining,seen)=>{
+      const fn=funcs.get(name);if(!fn)return {symbol:name,resolved:false};
+      const calls=[...new Set([...fn.body.join('\n').matchAll(/(?<![\w])([a-zA-Z_]\w*)\s*\(/g)].map(m=>m[1]).filter(n=>!['if','while','for','match','return','await','print','assert'].includes(n)))];
+      return {symbol:name,line:fn.line,calls:calls.map(n=>({symbol:n,local:funcs.has(n),...(remaining>1 && funcs.has(n) && !seen.has(n)?{graph:visit(n,remaining-1,new Set([...seen,n]))}:{})})),limitations:['regex-based best-effort; dynamic calls, inherited functions, signals and cross-file targets are not resolved']};
+    };
+    return visit(symbol,depth,new Set([symbol]));
+  });
+
   pi.registerTool({
     name: 'ariad_code_search',
     label: 'Ariad code search',

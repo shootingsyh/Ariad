@@ -59,6 +59,7 @@ export function resolveAriadPiModelRef(modelRef) {
 export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
   ...ARIAD_PI_DEFAULT_TOOLS,
   'ariad_code_search', 'ariad_interface_search',
+  'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search', 'ariad_memory_write',
   'ariad_session_history', 'ariad_report_issue', 'ariad_role_result',
 ]);
@@ -69,6 +70,7 @@ export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
 export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
   'read', 'grep', 'find', 'ls',
   'ariad_code_search', 'ariad_interface_search',
+  'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search', 'ariad_session_history', 'ariad_role_result',
 ]);
 
