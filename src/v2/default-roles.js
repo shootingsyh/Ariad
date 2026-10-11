@@ -247,6 +247,12 @@ const ARTIST_PROMPT = [
   'When revisiting after Tester/Reviewer/Debugger feedback, inspect latest history and modify only the affected assets. Developer and the normal regression flow will run afterward.',
 ].join(' ');
 
+const CODE_NAVIGATION_PROMPT = [
+  'CODE NAVIGATION: For GDScript, first use ariad_document_symbols to inspect a file structure and ariad_call_graph to inspect functions reachable from an entrypoint, before reading large implementation or test files.',
+  'Use ariad_definition and ariad_references for symbol resolution, and ariad_workspace_symbols for cross-file discovery. Read only the relevant function bodies and dependencies after navigating the structure.',
+  'The call graph is best-effort and not exhaustive for dynamic calls, signals or inherited behavior. Fall back to grep/read when a tool fails or cannot resolve a needed target; do not blindly trust static output.',
+].join('\n');
+
 const DEVELOPER_REUSE_PROMPT = [
   "You are Ariad's developer role.",
   'Inspect task history before changing code.',
@@ -307,7 +313,7 @@ function deliveryRoleSuffix(role) {
   if (role === 'reviewer') {
     return [
       "YOUR ROLE: REVIEWER",
-      "Available tools: read, grep, find, ls, bash, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_report_issue, ariad_role_result. Do not try other tools.",
+      CODE_NAVIGATION_PROMPT,
       "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
       "If and only if the review will PASS, finalize source control before ariad_role_result: use bash only for git status/diff/add/commit/push, stage only the reviewed product code/data/tests/assets for this delivery, commit them with a concise task-specific message, and push the current branch. Never stage runtime/generated state such as .ariad/state.db, .ariad/pi, .ariad/artifacts/task-context, or .godot. Do not use bash to run tests, edit files, or perform unrelated shell work. If source-control finalization fails, do not claim a clean PASS; report the failure explicitly.",
       "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
@@ -687,6 +693,7 @@ export function createDefaultV2Roles({
     developer: {
       prepare: ({ task }) => prepareLlm(task, [
         DEVELOPER_REUSE_PROMPT,
+        CODE_NAVIGATION_PROMPT,
         deliveryRoleSuffix('developer'),
       ].join('\n\n')),
       transition: () => ({ stage: 'test_engineer', state: 'READY' }),
@@ -702,7 +709,7 @@ export function createDefaultV2Roles({
     },
 
     test_engineer: {
-      prepare: ({ task }) => prepareLlm(task, deliveryRoleSuffix('test_engineer')),
+      prepare: ({ task }) => prepareLlm(task, [CODE_NAVIGATION_PROMPT, deliveryRoleSuffix('test_engineer')].join('\n\n')),
       transition: ({ task, result }) => {
         if (result.outcome !== 'PASS') return failureCount(task) >= 3
           ? { stage: 'project_debugger', state: 'READY' }
