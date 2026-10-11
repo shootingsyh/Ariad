@@ -74,7 +74,7 @@ export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
 
 export function piToolsForTask({ role, taskKind } = {}) {
   if (taskKind === 'ADHOC_ANALYSIS') return [...ARIAD_PI_REVIEW_TOOLS];
-  if (['developer', 'tester', 'reviewer'].includes(role)) return [...ARIAD_PI_DELIVERY_TOOLS];
+  if (['developer', 'test_engineer', 'tester', 'reviewer'].includes(role)) return [...ARIAD_PI_DELIVERY_TOOLS];
   return [...ARIAD_PI_DELIVERY_TOOLS];
 }
 

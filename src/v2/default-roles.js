@@ -254,6 +254,14 @@ const DEVELOPER_REUSE_PROMPT = [
   'Historical completion is context only. Produce the current implementation required by the acceptance criteria.',
 ].join(' ');
 
+const TEST_ENGINEER_PROMPT = [
+  "You are Ariad's Test Engineer. Own real integration, journey and E2E test discovery, selection, authoring and repair; never execute the actual integration tests.",
+  "Read task acceptance criteria, required interfaces, changed code and automated CI evidence. Inspect BOTH test names and the real execution call graph, phases, setup and side effects.",
+  "Find the minimal complete test selection for this task. If a broad test includes unrelated chapters or phases, author a scope-limited entry first; do not authorize its broad entry.",
+  "You may write, split or repair integration tests but not product implementation. Static syntax and load checks are allowed, full behavioral execution is not.",
+  "Return PASS only with result.testPlan containing scope, excluded, testCases and testRepairs. Each testCase must have id, entry, command, covers and executionScope. Cover every AC, and include every new or modified relevant test. Use repository-relative entry paths. Return NOT_PASS if the plan cannot safely be prepared.",
+].join('\n');
+
 const TESTER_REUSE_PROMPT = [
   "You are Ariad's tester role. Verify the current task's acceptance criteria and required interface behavior using executable evidence.",
   'Inspect the canonical task, its repair instructions, task history, automatedRegression, and existing tests before deciding what to execute.',
@@ -286,16 +294,14 @@ function deliveryRoleSuffix(role) {
       "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Task scope defines the goal, not a restriction on files or components you may change. Fix any code necessary for current acceptance; TL triages independent issues. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
     ].join('\n');
   }
+  if (role === 'test_engineer') return TEST_ENGINEER_PROMPT;
   if (role === 'tester') {
     return [
-      "YOUR ROLE: TESTER",
-      "SCOPE: The current task's acceptance criteria and required interfaces define the verification boundary. Include affected behavior from implementation/test changes made for this task. Parent-feature aggregate goals provide context, not permission to test unrelated child tasks. Verify Executor input/output/sideEffects and both Provider production and produced behavior as relevant.",
-      "DISCOVERY: Inspect automatedRegression (changedArtifacts, selected cases, results, coverageGaps), the current workspace, and relevant __integration_tests__ and legacy tests/ cases. Ariad's cheap __tests__ CI searches only the changed artifact's directory and direct parent. A coverage gap does not authorize broad-suite execution. Historical commands and paths are hints; resolve current paths and code.",
-      "SELECTION GATE BEFORE EACH RUN: Check BOTH test name/declared purpose AND the real executable scope (entry point, called helpers, runtime phases, assertions, setup, and side effects). Build an explicit mapping from task criteria, required interfaces, and changed behavior to the smallest sufficient set of cases. Reject both missing coverage and unrelated phases, chapters, features, or expensive services. A matching filename alone is not evidence. A broad reusable script is acceptable only through a verified scope-limited entry point; never invoke its ALL mode for a narrower task.",
-      "TEST REPAIR: Tester owns real integration/journey/E2E tests in __integration_tests__ and legacy tests/. If no candidate has the right scope, first repair, split, parameterize, or add focused test entry points, then execute them. After changing/splitting tests, run every new or modified relevant case needed to cover the current feature and changed-test impact, not just one convenient case. Do not silently weaken assertions, inject the result/transition under test, or broaden task scope to avoid fixing tests. If safe repair is impossible, return NOT_PASS with a concrete gap.",
-      "EVIDENCE: Reuse fresh PASS automated CI evidence from this task when applicable; do not rerun merely for freshness. Execute selected task-triggered cases now and capture fresh results. Historical runs are context, not current execution evidence. On a repair event with rerunRequired=false or repairKind=RESULT_EVIDENCE_PACKAGING, reuse the immediately preceding valid Tester execution and fix only packaging; rerun if evidence is stale, failed, contradictory, or insufficient, or the seal explicitly requires it.",
-      "RESULT: Supply criterion-level verdicts and behavioral evidence. For PASS include result.interfaceVerifications for each required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Use stable code anchors when available. Do not claim PASS for an unverified or unsatisfied contract; report NOT_PASS with precise reasons.",
-      "ISSUES: If concrete evidence reveals an independent defect outside this task, call ariad_report_issue immediately for TL triage, and include it in result.discoveredIssues when practical. Continue judging the current task on its own criteria. For failures owned by this task, return NOT_PASS instead of opening a redundant cross-scope issue.",
+      "YOUR ROLE: TESTER. Execute only the Test Engineer's approved testPlan from the most recent test_engineer PASS in task history.",
+      "Before running, check each planned entry exists and the executable scope matches the task. Never expand the test selection or run an ALL/full-campaign entry for a narrow task.",
+      "Run every selected case and every newly authored/repaired relevant test. Do not edit test or product code. If a plan is missing, stale, or incorrect, return NOT_PASS with result.testPlanInvalid=true and concrete feedback so Scheduler routes to Test Engineer.",
+      "Use fresh execution evidence for each acceptance criterion and required interface. Reuse fresh task-specific automated CI results when applicable; historical integration results alone are insufficient.",
+      "Return criterion-level statuses and interfaceVerifications, and report independent defects through ariad_report_issue. A product failure is NOT_PASS and follows Developer repair; never silently broaden scope.",
     ].join('\n');
   }
   if (role === 'reviewer') {
@@ -533,7 +539,7 @@ export function createDefaultV2Roles({
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
-    const sharedDeliveryContext = ['developer', 'tester', 'reviewer'].includes(task.stage);
+    const sharedDeliveryContext = ['developer', 'test_engineer', 'tester', 'reviewer'].includes(task.stage);
     const roleBoundaryContext = buildRoleBoundaryContext({
       artifactRoot,
       task,
@@ -683,7 +689,7 @@ export function createDefaultV2Roles({
         DEVELOPER_REUSE_PROMPT,
         deliveryRoleSuffix('developer'),
       ].join('\n\n')),
-      transition: () => ({ stage: 'tester', state: 'READY' }),
+      transition: () => ({ stage: 'test_engineer', state: 'READY' }),
       async afterPersist({ task, result }) {
         const issueFollowUp = processDiscoveredIssues(task, result);
         if (issueFollowUp) return issueFollowUp;
@@ -695,16 +701,44 @@ export function createDefaultV2Roles({
       },
     },
 
+    test_engineer: {
+      prepare: ({ task }) => prepareLlm(task, deliveryRoleSuffix('test_engineer')),
+      transition: ({ task, result }) => {
+        if (result.outcome !== 'PASS') return failureCount(task) >= 3
+          ? { stage: 'project_debugger', state: 'READY' }
+          : { stage: 'developer', state: 'READY' };
+        const plan = result.result?.testPlan;
+        const criteria = acceptanceCriterionIds(task);
+        const cases = plan?.testCases;
+        const valid = Array.isArray(cases) && cases.length > 0
+          && cases.every(c => c && typeof c.entry === 'string' && c.entry.length > 0
+            && typeof c.command === 'string' && c.command.length > 0
+            && Array.isArray(c.covers) && Array.isArray(c.executionScope))
+          && criteria.every(id => cases.some(c => c.covers.includes(id)));
+        if (!valid) return { stage: 'project_debugger', state: 'READY' };
+        return { stage: 'tester', state: 'READY' };
+      },
+      async afterPersist({ task, result }) {
+        return processDiscoveredIssues(task, result);
+      },
+    },
+
     tester: {
-      prepare: ({ task }) => prepareLlm(task, [
+      prepare: ({ task }) => {
+        const approved = [...(task.history ?? [])].reverse().find(h => h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS');
+        if (!approved?.result?.testPlan?.testCases?.length) throw new Error('TEST_PLAN_MISSING: tester cannot start without Test Engineer plan');
+        return prepareLlm(task, [
         TESTER_REUSE_PROMPT,
         deliveryRoleSuffix('tester'),
       ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
-      }),
+        approvedTestPlan: approved.result.testPlan,
+      });
+      },
       transition: ({ task, result }) => {
         if (result.outcome === 'PASS') return { stage: 'reviewer', state: 'READY' };
         if (result.outcome === 'NOT_PASS') {
+          if (result.result?.testPlanInvalid === true) return { stage: 'test_engineer', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };

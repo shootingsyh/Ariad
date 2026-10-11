@@ -23,7 +23,7 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
-const DELIVERY_ROLES = new Set(['developer', 'tester', 'reviewer']);
+const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'reviewer']);
 const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
@@ -56,6 +56,7 @@ function codexQuotaFallbackSpec(spec) {
 const ROLE_RESULT_OUTCOMES = Object.freeze({
   artist: ['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY'],
   developer: ['PASS', 'NOT_PASS'],
+  test_engineer: ['PASS', 'NOT_PASS'],
   tester: ['PASS', 'NOT_PASS'],
   reviewer: ['PASS', 'NOT_PASS'],
   ux_reviewer: ['PASS', 'NOT_PASS'],
@@ -120,6 +121,22 @@ export function piRoleResultToolSchema(role) {
         anchors: Type.Array(anchorSchema),
       }, { additionalProperties: false }))),
     }));
+  } else if (role === 'test_engineer') {
+    result = Type.Object({
+      testPlan: Type.Object({
+        scope: Type.Array(Type.String()),
+        excluded: Type.Array(Type.String()),
+        testCases: Type.Array(Type.Object({
+          id: Type.String({ minLength: 1 }),
+          entry: Type.String({ minLength: 1 }),
+          command: Type.String({ minLength: 1 }),
+          covers: Type.Array(Type.String()),
+          executionScope: Type.Array(Type.String()),
+        }, { additionalProperties: true })),
+        testRepairs: Type.Array(Type.Any()),
+      }, { additionalProperties: true }),
+      discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
+    }, { additionalProperties: true });
   } else if (role === 'tester') {
     result = Type.Object({
       discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),

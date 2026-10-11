@@ -11,7 +11,7 @@ export function legacyHumanGateTarget(stage, task = null) {
     return 'pm';
   }
 
-  if (['artist', 'developer', 'tester', 'reviewer', 'ux_reviewer'].includes(stage)) return 'project_debugger';
+  if (['artist', 'developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer'].includes(stage)) return 'project_debugger';
   if (['tech_lead', 'plan_validator', 'tech_lead_critic'].includes(stage)) return 'pm';
   return 'pm';
 }
