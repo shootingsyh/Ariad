@@ -51,6 +51,10 @@ export function buildUnifiedTaskTree(artifactRoot) {
     });
   }
   for (const task of byId.values()) {
+    if (task.executionMode === 'aggregate') {
+      const directChildren = [...byId.values()].filter(child => child.parentId === task.id).map(child => child.id);
+      task.dependsOn = [...new Set([...task.dependsOn, ...directChildren])];
+    }
     task.dependsOn = [...new Set(task.dependsOn.map(id => promoted.get(id) ?? id))];
     for (const dep of task.dependsOn) if (!byId.has(dep)) issues.push({ code: 'UNKNOWN_DEPENDENCY', taskId: task.id, dependsOn: dep });
     if (task.parentId && !byId.has(task.parentId)) issues.push({ code: 'UNKNOWN_PARENT', taskId: task.id, parentId: task.parentId });
