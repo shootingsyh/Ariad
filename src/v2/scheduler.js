@@ -124,6 +124,19 @@ export class V2Scheduler {
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
+    // Upgrade pre-split READY tester work to Test Engineer. Never interrupt
+    // an in-flight tester; stopped/cancelled work is READY and safe to migrate.
+    for (const task of this.store.listTasks(projectId)) {
+      if (task.state !== 'READY' || task.stage !== 'tester') continue;
+      const approved = [...(task.history ?? [])].reverse().find(h =>
+        h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS'
+      );
+      if (approved?.result?.testPlan?.testCases?.length) continue;
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'TEST_ENGINEER_WORKFLOW_UPGRADE',
+        fromStage: 'tester', toStage: 'test_engineer', at: new Date().toISOString(),
+      }, { stage: 'test_engineer', execution: null });
+    }
     const allTasks = this.store.listTasks(projectId);
     // A human-approved PM review remains resumable after its planning request
     // has been marked PLANNED. It must finish the review gate before Delivery
