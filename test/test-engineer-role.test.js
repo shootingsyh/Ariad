@@ -17,7 +17,9 @@ test('test engineer plan gates tester and is validated in role result schema',()
  assert.equal(roles.test_engineer.transition({task,result:{outcome:'PASS',result:{testPlan:{...plan,testCases:[]}}}}).stage,'project_debugger');
  assert.equal(Check(piRoleResultToolSchema('test_engineer'),{outcome:'PASS',summary:'ready',result:{testPlan:plan}}),true);
  assert.equal(Check(piRoleResultToolSchema('test_engineer'),{outcome:'PASS',summary:'ready',result:{testPlan:{}}}),false);
- assert.ok(piDeclaredRoleResultToolSchema('test_engineer'));
+ assert.deepEqual(piDeclaredRoleResultToolSchema('test_engineer'),piRoleResultToolSchema('test_engineer'));
+ assert.equal(Check(piDeclaredRoleResultToolSchema('test_engineer'),{outcome:'PASS',summary:'ready',result:{testPlan:plan}}),true);
+ assert.equal(Check(piDeclaredRoleResultToolSchema('test_engineer'),{outcome:'PASS',summary:'ready',result:{criteria:[]}}),false);
 });
 test('tester requires approved plan and routes invalid plan back to engineer',()=>{
  const testerTask={...task,stage:'tester'};

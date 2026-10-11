@@ -240,6 +240,7 @@ const deliveryDeclaredResultSchema = Type.Object({
 }, { additionalProperties: false });
 
 export function piDeclaredRoleResultToolSchema(role) {
+  if (role === "test_engineer") return piRoleResultToolSchema(role);
   if (!DELIVERY_ROLES.has(role)) return piRoleResultToolSchema(role);
   return Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
