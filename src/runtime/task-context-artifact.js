@@ -7,21 +7,14 @@ function clone(value) {
   return value == null ? value : structuredClone(value);
 }
 
-function compactResolved(resolved) {
-  if (!resolved) return null;
-  if (resolved.error) return { error: resolved.error };
-  return {
-    fileHash: resolved.fileHash ?? null,
-    range: clone(resolved.range ?? null),
-    resolver: resolved.resolver ?? null,
-  };
-}
-
 function compactBoundAnchor(entry) {
-  return {
-    anchor: clone(entry?.anchor ?? null),
-    resolved: compactResolved(entry?.resolved),
-  };
+  const anchor = entry?.anchor ?? {};
+  const locator = { file: anchor.file ?? null };
+  if (anchor.symbol) locator.symbol = anchor.symbol;
+  else if (anchor.startLine != null) locator.startLine = anchor.startLine;
+  if (anchor.status && anchor.status !== 'VALID') locator.status = anchor.status;
+  if (entry?.resolved?.error) locator.error = entry.resolved.error;
+  return locator;
 }
 
 function stripBinding(feature) {
@@ -47,7 +40,7 @@ function collectBindings(boundary, kind) {
         interfaces.push({
           featureId: feature.id,
           interfaceId: iface.id,
-          anchors: anchors.map(compactBoundAnchor),
+          anchors: [...new Map(anchors.map(item => { const anchor = compactBoundAnchor(item); return [JSON.stringify(anchor), anchor]; })).values()],
         });
       }
     }

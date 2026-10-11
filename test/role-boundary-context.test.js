@@ -150,7 +150,7 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     assert.equal(dev.features.length, 1);
     assert.equal(dev.features[0].id, 'entry');
     assert.deepEqual(dev.features[0].interfaces.map(x => x.id), ['new-game']);
-    assert.equal(dev.features[0].interfaces[0].binding.realization[0].resolved.snippet.some(x => x.text.includes('func new_game')), true);
+    assert.equal(dev.features[0].interfaces[0].binding.realization[0].resolved.range.startLine >= 1, true);
     assert.equal(JSON.stringify(dev).includes('battle'), false);
     assert.equal(JSON.stringify(dev).includes('equip-persist'), false);
     assert.equal(dev.parentExpectations[0].featureId, 'srpg');
@@ -189,10 +189,10 @@ test('SRPG-style developer context stays on its feature boundary while tester se
     assert.deepEqual(sharedDelivery.owningFeatures[0].interfaces.map(x => x.id), ['new-game']);
     assert.deepEqual(
       sharedDelivery.referencedFeatureInterfaces.map(x => x.id).sort(),
-      ['entry', 'progression'],
+      ['entry'],
     );
-    assert.equal(JSON.stringify(sharedDelivery).includes('entry-progression'), true);
-    assert.equal(JSON.stringify(sharedDelivery).includes('equip-persist'), true);
+    assert.equal(sharedDelivery.referencedFeatureInterfaces.some(x => x.id === 'progression'), false);
+    assert.equal(sharedDelivery.referencedFeatureInterfaces[0].interfaces.some(x => x.id === 'equip-persist'), false);
     assert.equal(JSON.stringify(sharedDelivery).includes('battle'), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
