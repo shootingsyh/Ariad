@@ -69,7 +69,10 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
     'MODEL_CAPABILITY_MISMATCH',
     'UNKNOWN_PROJECT_CAUSE',
   ],
-  tech_lead: ['PLANNED', 'REPLANNED'],
+  tech_lead: ['PLANNED', 'REPLANNED', 'PLANNING_ROUTE'],
+  feature_planner: ['PASS', 'NOT_PASS'],
+  milestone_planner: ['PASS', 'NOT_PASS'],
+  interface_architect: ['PASS', 'NOT_PASS'],
   tech_lead_critic: ['CLEAN', 'MINOR_ONLY', 'ISSUES'],
   pm: ['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN'],
   memory_curator: ['PASS', 'NOT_PASS'],
@@ -173,6 +176,26 @@ export function piRoleResultToolSchema(role) {
         reason: Type.String({ minLength: 1 }),
       }, { additionalProperties: false }))),
     }));
+  } else if (role === 'tech_lead') {
+    const stage = Type.Union([Type.Literal('RUN'), Type.Literal('SKIP')]);
+    const route = Type.Object({
+      requestType: Type.Union([
+        Type.Literal('PLAN'), Type.Literal('REPLAN'),
+        Type.Literal('TASK_SPLIT'), Type.Literal('TASK_REPAIR'),
+        Type.Literal('INTERFACE_REPAIR'),
+      ]),
+      reason: Type.String({ minLength: 1 }),
+      scope: Type.Object({
+        featureRoots: Type.Array(Type.String({ minLength: 1 })),
+        milestoneRoots: Type.Array(Type.String({ minLength: 1 })),
+      }, { additionalProperties: false }),
+      stages: Type.Object({ feature: stage, milestone: stage, interface: stage }, { additionalProperties: false }),
+      constraints: Type.Optional(Type.Object({
+        preserveCompletedTasks: Type.Optional(Type.Boolean()),
+        preserveProductSemantics: Type.Optional(Type.Boolean()),
+      }, { additionalProperties: false })),
+    }, { additionalProperties: false });
+    result = Type.Optional(Type.Union([route, openResult()]));
   } else if (role === 'tech_lead_critic') {
     result = Type.Object({
       issues: Type.Array(Type.Object({
@@ -196,6 +219,13 @@ export function piRoleResultToolSchema(role) {
     }, { additionalProperties: true });
   }
 
+  if (role === 'tech_lead') {
+    const routeSchema = result.anyOf[0];
+    return Type.Union([
+      Type.Object({ outcome: Type.Literal('PLANNING_ROUTE'), ...commonFields, result: routeSchema }, { additionalProperties: false }),
+      Type.Object({ outcome: Type.Union([Type.Literal('PLANNED'), Type.Literal('REPLANNED')]), ...commonFields, result: Type.Optional(openResult()) }, { additionalProperties: false }),
+    ]);
+  }
   return Type.Object({
     outcome,
     ...commonFields,

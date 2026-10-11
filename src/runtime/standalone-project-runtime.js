@@ -92,7 +92,7 @@ export class StandaloneProjectRuntime {
       executionProvenance,
       codeIntelligence,
       resolveRoleExecutionMetadata: role => ({
-        modelRef: this.resolveRoleModel(role === 'ux_reviewer' ? 'reviewer' : role === 'test_engineer' ? 'tester' : role) ?? null,
+        modelRef: this.resolveRoleModel(['feature_planner', 'milestone_planner', 'interface_architect'].includes(role) ? 'tech_lead' : role === 'ux_reviewer' ? 'reviewer' : role === 'test_engineer' ? 'tester' : role) ?? null,
       }),
       enqueuePlanning: ({ request }) => {
         this.store.enqueuePlanningRequest({

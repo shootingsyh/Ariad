@@ -543,6 +543,18 @@ export function createDefaultV2Roles({
     return null;
   };
 
+  const specialistTransition = (task, result, current) => {
+    if (result.outcome !== 'PASS') return { state: 'NEEDS_HUMAN', transitionHistory: {
+      type: 'PLANNING_SPECIALIST_BLOCKED', specialist: current,
+      reason: result.summary ?? null, at: new Date().toISOString(),
+    } };
+    const stages = task.input?.planningRoute?.stages ?? {};
+    const order = ['feature', 'milestone', 'interface'];
+    const roleNames = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
+    const next = order.slice(order.indexOf(current) + 1).find(name => stages[name] === 'RUN');
+    return next ? { stage: roleNames[next], state: 'READY' } : { state: 'DONE' };
+  };
+
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
     const sharedDeliveryContext = ['developer', 'test_engineer', 'tester', 'reviewer'].includes(task.stage);
@@ -1067,9 +1079,50 @@ export function createDefaultV2Roles({
       },
     },
 
+    feature_planner: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Feature Planner. Work only on product feature semantics, feature hierarchy, and acceptance intent.',
+        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
+        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'feature'),
+    },
+    milestone_planner: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Milestone Planner. Work only on delivery semantics, milestone hierarchy, scenarios, and task intent/dependencies.',
+        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
+        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'milestone'),
+    },
+    interface_architect: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Interface Architect. Translate existing Feature and Milestone semantics into strict interface contracts and exact task interface bindings.',
+        'Process child Feature nodes before parents, then resolve Milestone interface dependencies. Do not alter product or delivery semantics.',
+        'If upstream semantics are insufficient, report NOT_PASS with a concrete upstream revision request. Never invent product behavior.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Existing interface artifact layout:', String(artifactRoot ?? ''),
+        'Submit outcome PASS or NOT_PASS through ariad_role_result with evidence and changed artifact paths.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'interface'),
+    },
+
     tech_lead: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE') {
+          return prepareLlm(task, [
+            'You are the Overall Tech Lead. Triage the request and choose a controlled planning route.',
+            'Do not edit Feature, Milestone, Interface or delivery artifacts yourself.',
+            'Use ariad_role_result with outcome PLANNING_ROUTE and a strict result containing requestType, reason, scope, stages and constraints.',
+            'Stage order is feature -> milestone -> interface. RUN only affected stages, SKIP unchanged stages.',
+            'Planning requests:', JSON.stringify(task.input.requests ?? []),
+          ].join('\n'));
+        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           const prompt = [
             'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
@@ -1091,6 +1144,14 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE') {
+          if (result.outcome !== 'PLANNING_ROUTE') return { state: 'NEEDS_HUMAN' };
+          const route = result.result;
+          const next = ['feature', 'milestone', 'interface'].find(name => route.stages[name] === 'RUN');
+          const roles = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
+          return next ? { stage: roles[next], state: 'READY', input: { ...task.input, planningRoute: route } }
+            : { state: 'DONE', input: { ...task.input, planningRoute: route } };
+        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           return {
             state: 'DONE',
@@ -1200,8 +1261,20 @@ export function createDefaultV2Roles({
     },
 
     tech_lead_critic: {
-      prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
+      prepare: ({ project, task }) => prepareLlm(task,
+        task.input?.purpose === 'PLANNING_ROUTE_CRITIC'
+          ? ['Review the completed controlled planning route and current artifacts.',
+             'Verify no unrequested semantic changes and that interface bindings are precise.',
+             'Do not modify artifacts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.',
+             'Route result:', JSON.stringify(flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE')?.input?.planningRoute ?? {})].join('\n')
+          : criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_CRITIC') {
+          return ['CLEAN', 'MINOR_ONLY'].includes(result.outcome)
+            ? { state: 'DONE' }
+            : { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'PLANNING_ROUTE_CRITIC_FAILED', at: new Date().toISOString() } };
+        }
         if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
           const batchId = task.input?.planningBatchId;
           const round = task.input?.round ?? 1;
@@ -1248,6 +1321,20 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
+            const routeTask = flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE');
+            const route = routeTask?.input?.planningRoute;
+            if (!route) return { outcome: 'NOT_PASS', result: { error: 'MISSING_PLANNING_ROUTE' } };
+            try {
+              if (route.stages.interface === 'RUN') {
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+              }
+              return { outcome: 'PASS', result: { valid: true, route } };
+            } catch (error) {
+              return { outcome: 'NOT_PASS', result: { valid: false, error: error.message } };
+            }
+          }
           if (task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE') {
             const frontier = latestFrontierCompletion(store, task);
             const nodeType = task.input?.frontierPhase ?? frontier?.nodeType ?? 'feature';
@@ -1358,6 +1445,11 @@ export function createDefaultV2Roles({
         },
       }),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
+          return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
+            transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
+              reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
+        }
         if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
           const phase = task.input?.frontierPhase ?? 'feature';
           const complete = result.result?.complete === true;
