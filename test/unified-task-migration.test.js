@@ -6,3 +6,7 @@ test('aggregate depends on children and cycles fail closed',()=>{
  assert.equal(validateUnifiedTaskTree(p).ok,true);
  p.tasks[1].dependsOn=['parent'];assert.throws(()=>validateUnifiedTaskTree(p),/cycle/);
 });
+import {applyUnifiedTaskMigrationToCopy} from '../src/v2/unified-task-migration.js';
+test('migration write path is locked unless isolated copy explicitly confirmed',()=>{
+ assert.throws(()=>applyUnifiedTaskMigrationToCopy({}),/isolated database copy/);
+});
