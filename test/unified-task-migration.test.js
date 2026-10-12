@@ -52,3 +52,18 @@ test('preflight does not invent scheduler or interface migration blockers', asyn
  assert.doesNotMatch(block,/SCHEDULER_AGGREGATE_GATE_NOT_WIRED|LIVE_INTERFACE_BINDINGS_NOT_MIGRATED/);
  assert.equal(typeof preflightUnifiedTaskMigration,'function');
 });
+
+test('historical aggregate audit preserves reviewer acceptance and unfinished regressions',async()=>{
+ const {auditAggregateHistoryConflicts}=await import('../src/v2/unified-task-migration.js');
+ const tasks=[
+  {id:'A',executionMode:'aggregate',state:'DONE',dependsOn:['B'],history:[{type:'ROLE_RESULT',role:'reviewer',outcome:'PASS'}]},
+  {id:'B',state:'READY',history:[{type:'TAKEOVER_NOTE',summary:'VALID_NONBLOCKING_INTEGRATION_REGRESSION'}]},
+ ];
+ const issues=auditAggregateHistoryConflicts(tasks);
+ assert.equal(issues.length,1);
+ assert.equal(issues[0].reviewerPass,true);
+ assert.equal(issues[0].declaredNonblocking,true);
+ assert.equal(issues[0].disposition,'REVIEW_REQUIRED');
+ assert.equal(tasks[0].state,'DONE');
+ assert.equal(tasks[1].state,'READY');
+});

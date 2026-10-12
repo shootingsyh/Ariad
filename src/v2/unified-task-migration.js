@@ -156,3 +156,24 @@ export function validateMigratedTaskRuntime(tasks) {
   }
   return {ok:issues.length===0,issues};
 }
+
+// Explain historical aggregate conflicts without changing any task state.
+// A previous reviewer PASS is evidence of historical acceptance, not proof
+// that newly compiled prerequisites have completed.
+export function auditAggregateHistoryConflicts(tasks) {
+  const byId=new Map(tasks.map(t=>[t.id,t]));
+  const conflicts=validateMigratedAggregateStates(tasks).issues;
+  return conflicts.map(issue=>{
+    const aggregate=byId.get(issue.taskId);
+    const prerequisite=byId.get(issue.prerequisiteId);
+    const history=aggregate?.history??[];
+    const reviewerPass=history.some(h=>h.type==='ROLE_RESULT'&&h.role==='reviewer'&&h.outcome==='PASS');
+    const triage=(prerequisite?.history??[]).filter(h=>h.type==='TAKEOVER_NOTE').map(h=>h.summary??'');
+    const declaredNonblocking=triage.some(s=>s.includes('VALID_NONBLOCKING_INTEGRATION_REGRESSION'));
+    return {...issue,reviewerPass,declaredNonblocking,
+      disposition:'REVIEW_REQUIRED',
+      explanation:reviewerPass&&declaredNonblocking
+        ? 'Historical reviewer acceptance and nonblocking regression triage coexist with an unfinished compiled dependency; preserve both until explicit reconciliation.'
+        : 'Unfinished compiled prerequisite requires explicit historical acceptance review.'};
+  });
+}
