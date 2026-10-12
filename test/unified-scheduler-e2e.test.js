@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {SQLiteV2Store} from '../src/v2/sqlite-store.js';
+import {V2Scheduler} from '../src/v2/scheduler.js';
+import {V2Supervisor} from '../src/v2/supervisor.js';
+import {RoleRegistry} from '../src/v2/role-registry.js';
+import {ProviderRegistry} from '../src/v2/provider-registry.js';
+import {ResourcePool} from '../src/v2/resource-pool.js';
+
+// All provider interactions are fake; this suite cannot run SRPG or real models.
+test('unified scheduler gates aggregate children and completes dev-test-review without legacy recompilation',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'ariad-unified-scheduler-'));
+ const store=new SQLiteV2Store(join(dir,'state.db'));
+ try {
+  store.createProject({id:'p',spec:'fixture',deliveryEnabled:true,unifiedTaskCompilerVersion:1,deliveryPlanVersion:3});
+  const mk=(id,mode,deps,parent=null)=>({id,projectId:'p',scope:'delivery',stage:'developer',state:'READY',milestoneId:'A',parentId:parent,executionMode:mode,unifiedTaskSchemaVersion:1,dependsOn:deps,interfaceIds:['iface'],input:{interfaceIds:['iface'],milestoneId:'A'},history:[]});
+  store.createTask(mk('A','aggregate',['leaf']));
+  store.createTask(mk('leaf','implementation',[],'A'));
+  const roles=new RoleRegistry();
+  for(const role of ['developer','test_engineer','reviewer'])roles.register(role,{
+   prepare:()=>({provider:'fake',resources:['gpu']}),
+   transition:()=>role==='developer'?{stage:'test_engineer',state:'READY'}:role==='test_engineer'?{stage:'reviewer',state:'READY'}:{stage:'reviewer',state:'DONE'},
+  });
+  let counter=0;
+  const statuses=new Map();const starts=[];
+  const provider={id:'fake',async start(spec){const externalId=`f-${++counter}`;starts.push({id:spec.taskId,role:spec.role});statuses.set(externalId,{state:'RUNNING'});return {externalId};},async poll({externalId}){return statuses.get(externalId);},async cancel(){}};
+  const providers=new ProviderRegistry();providers.register(provider);
+  const resources=new ResourcePool({gpu:1});
+  const scheduler=new V2Scheduler({store,roles,providers,resources});
+  const supervisor=new V2Supervisor({store,providers,resources});
+  assert.throws(()=>store.applyDeliveryPlan('p',{version:3,tasks:[{id:'old'}]}),/UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER/);
+  for(const id of ['leaf','A']) {
+   for(const role of ['developer','test_engineer','reviewer']) {
+    if(store.getTask(id).state!=='WORKING') await scheduler.tick('p');
+    const task=store.getTask(id);
+    assert.equal(task.stage,role);
+    assert.equal(task.state,'WORKING');
+    if(id==='leaf')assert.equal(store.getTask('A').state,'READY');
+    statuses.set(task.execution.externalId,{state:'COMPLETED',outcome:'PASS'});
+    await supervisor.audit('p');
+    assert.equal(store.getTask(id).state,'RESULT_READY');
+   }
+   await scheduler.tick('p');
+   assert.equal(store.getTask(id).state,'DONE');
+  }
+  assert.deepEqual(starts.map(x=>`${x.id}:${x.role}`),['leaf:developer','leaf:test_engineer','leaf:reviewer','A:developer','A:test_engineer','A:reviewer']);
+  assert.equal(store.getTask('A').history.filter(h=>h.type==='ROLE_RESULT').length,3);
+ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});
