@@ -2,6 +2,7 @@
 import { buildUnifiedTaskTree, validateUnifiedTaskTree } from './unified-task-tree.js';
 import { buildExecutionGraph } from './execution-graph.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
+import { realpathSync } from 'node:fs';
 
 export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
   const preview = buildUnifiedTaskTree(artifactRoot);
@@ -39,8 +40,11 @@ export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
 
 // Apply to an explicitly supplied COPY of state.db, never the live path.
 // Keep old task records in an archive table so history/evidence can be audited.
-export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId, isolatedCopyConfirmed = false }) {
+export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId, isolatedCopyConfirmed = false, liveDatabasePath = null }) {
   if (!isolatedCopyConfirmed) throw new Error('refusing migration: isolated database copy not explicitly confirmed');
+  const openedPath = store?.db?.prepare('PRAGMA database_list').all().find(row => row.name === 'main')?.file;
+  if (!liveDatabasePath || !openedPath) throw new Error('migration requires a live database path and an identifiable copy path');
+  if (realpathSync(openedPath) === realpathSync(liveDatabasePath)) throw new Error('refusing migration of live database');
   const liveTasks = store.listTasks(projectId);
   const report = preflightUnifiedTaskMigration({artifactRoot,liveTasks});
   const fatal = report.blockers.filter(x => !['UNMAPPED_LIVE_TASKS','SCHEDULER_AGGREGATE_GATE_NOT_WIRED','LIVE_INTERFACE_BINDINGS_NOT_MIGRATED'].includes(x));
