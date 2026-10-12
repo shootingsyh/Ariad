@@ -22,7 +22,7 @@ export function buildUnifiedTaskTree(artifactRoot) {
     put({
       id: node.id, parentId: node.parentId ?? null,
       title: node.title, intent: node.goal,
-      executionMode: 'aggregate',
+      executionMode: 'aggregate', // Full developer -> tester -> reviewer execution, after child prerequisites.
       dependsOn: [...new Set([...(node.dependsOn ?? []), ...(ownIntegration?.dependsOn ?? [])])],
       logicalRefs: [...(node.logicalRefs ?? [])],
       acceptanceCriteria: [...(node.acceptanceCriteria ?? [])],

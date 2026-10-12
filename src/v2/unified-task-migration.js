@@ -73,11 +73,13 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
       for(const key of ['id','projectId','version','updatedAt']) delete data[key];
       data.parentId=task.parentId;
       data.executionMode=task.executionMode;
+      // Preserve the original stage/state/execution and all role history.
       data.dependsOn=[...task.dependsOn];
       data.legacyTaskId=task.legacyIntegrationTaskId ?? null;
       data.unifiedTaskSchemaVersion=1;
       data.input={...data.input,executionMode:task.executionMode,interfaceIds:[...(data.input?.interfaceIds ?? [])]};
-      // Never infer a successful aggregate verdict from completed children.
+      // Aggregate tasks retain their normal developer/tester/reviewer lifecycle.
+      // Child completion is only a prerequisite, never an automatic verdict.
       if(task.executionMode==='aggregate' && data.state==='DONE' && !(data.history??[]).some(h=>h.type==='ROLE_RESULT')) {
         throw new Error(`aggregate ${task.id} has DONE without recorded role result`);
       }

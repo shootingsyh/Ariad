@@ -10,3 +10,16 @@ import {applyUnifiedTaskMigrationToCopy} from '../src/v2/unified-task-migration.
 test('migration write path is locked unless isolated copy explicitly confirmed',()=>{
  assert.throws(()=>applyUnifiedTaskMigrationToCopy({}),/isolated database copy/);
 });
+
+test('aggregate task remains executable and is blocked only by child prerequisites', async () => {
+ const {buildExecutionGraph} = await import('../src/v2/execution-graph.js');
+ const tasks=[
+  {id:'child',scope:'delivery',state:'READY',stage:'developer',dependsOn:[],executionMode:'implementation'},
+  {id:'parent',scope:'delivery',state:'READY',stage:'developer',dependsOn:['child'],executionMode:'aggregate'}
+ ];
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[0]),true);
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[1]),false);
+ tasks[0].state='DONE';
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[1]),true);
+ assert.equal(tasks[1].stage,'developer');
+});
