@@ -72,12 +72,16 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
       const data={...structuredClone(source)};
       for(const key of ['id','projectId','version','updatedAt']) delete data[key];
       data.parentId=task.parentId;
+      data.milestoneId=task.milestoneId;
+      data.taskKind=task.taskKind ?? data.taskKind;
+      data.ownerMilestoneId=task.ownerMilestoneId ?? data.ownerMilestoneId;
       data.executionMode=task.executionMode;
       // Preserve the original stage/state/execution and all role history.
       data.dependsOn=[...task.dependsOn];
       data.legacyTaskId=task.legacyIntegrationTaskId ?? null;
       data.unifiedTaskSchemaVersion=1;
-      data.input={...data.input,executionMode:task.executionMode,interfaceIds:[...(data.input?.interfaceIds ?? [])]};
+      data.interfaceIds=[...(task.interfaceIds ?? [])];
+      data.input={...data.input,executionMode:task.executionMode,interfaceIds:[...(task.interfaceIds ?? [])],milestoneId:task.milestoneId,taskKind:data.taskKind,ownerMilestoneId:data.ownerMilestoneId};
       // Aggregate tasks retain their normal developer/tester/reviewer lifecycle.
       // Child completion is only a prerequisite, never an automatic verdict.
       if(task.executionMode==='aggregate' && data.state==='DONE' && !(data.history??[]).some(h=>h.type==='ROLE_RESULT')) {
@@ -93,4 +97,21 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     return {applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};
   } catch(e) {db.exec('ROLLBACK');throw e;}
+}
+
+// Structural state consistency: a completed aggregate with unfinished current
+// prerequisites needs explicit review; never silently downgrade DONE or rerun.
+export function validateMigratedAggregateStates(tasks) {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const issues = [];
+  for (const task of tasks.filter(t => t.executionMode === 'aggregate' && t.state === 'DONE')) {
+    for (const depId of task.dependsOn ?? []) {
+      const dep = byId.get(depId);
+      if (!dep || !['DONE', 'SKIPPED'].includes(dep.state)) {
+        issues.push({ code: 'DONE_AGGREGATE_UNFINISHED_PREREQUISITE', taskId: task.id,
+          prerequisiteId: depId, prerequisiteState: dep?.state ?? 'MISSING' });
+      }
+    }
+  }
+  return {ok: issues.length === 0, issues};
 }

@@ -23,3 +23,13 @@ test('aggregate task remains executable and is blocked only by child prerequisit
  assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[1]),true);
  assert.equal(tasks[1].stage,'developer');
 });
+
+test('validator reports legacy completed aggregate with unfinished prerequisites',async()=>{
+ const {validateMigratedAggregateStates}=await import('../src/v2/unified-task-migration.js');
+ const result=validateMigratedAggregateStates([
+  {id:'parent',state:'DONE',executionMode:'aggregate',dependsOn:['child']},
+  {id:'child',state:'READY',executionMode:'implementation',dependsOn:[]}
+ ]);
+ assert.equal(result.ok,false);
+ assert.equal(result.issues[0].code,'DONE_AGGREGATE_UNFINISHED_PREREQUISITE');
+});

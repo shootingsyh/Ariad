@@ -31,6 +31,7 @@ export function buildUnifiedTaskTree(artifactRoot) {
       interfaceOwner: { graph: 'milestone', nodeId: node.id },
       legacyIntegrationTaskId: ownIntegration?.id ?? null,
       verification: ownIntegration?.verification ?? [],
+      taskKind: 'integration', ownerMilestoneId: node.id, milestoneId: node.id,
     });
   }
   const promoted = new Map(hierarchy.items.flatMap(node => {
@@ -46,7 +47,7 @@ export function buildUnifiedTaskTree(artifactRoot) {
     if (promoted.has(task.id)) continue;
     const parentId = owner.get(task.id) ?? task.milestoneRefs?.[0] ?? null;
     if (!parentId || !byId.has(parentId)) issues.push({ code: 'UNOWNED_TASK', taskId: task.id, parentId });
-    put({ ...task, parentId, executionMode: 'implementation',
+    put({ ...task, parentId, milestoneId: parentId, executionMode: 'implementation',
       dependsOn: [...(task.dependsOn ?? [])].map(id => promoted.get(id) ?? id),
     });
   }
