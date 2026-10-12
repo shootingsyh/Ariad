@@ -97,6 +97,7 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     for(const task of remaining) for(const dep of task.dependsOn) if(!remaining.some(t=>t.id===dep)) throw new Error(`dangling dependency ${task.id}->${dep}`);
     const aggregateValidation=validateMigratedAggregateStates(remaining);
     const runtimeValidation=validateMigratedTaskRuntime(remaining);
+    if(!runtimeValidation.ok) throw new Error('migration runtime validation failed: '+JSON.stringify(runtimeValidation.issues));
     db.exec('COMMIT');
     return {aggregateValidation,runtimeValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};
