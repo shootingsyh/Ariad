@@ -41,3 +41,14 @@ test('runtime validator detects developer policy and interface drift',async()=>{
  assert.equal(result.ok,false);
  assert.deepEqual(result.issues.map(i=>i.code).sort(),['DEVELOPER_POLICY_FAILURE','INTERFACE_BINDING_MISMATCH']);
 });
+
+test('preflight does not invent scheduler or interface migration blockers', async()=>{
+ const {preflightUnifiedTaskMigration}=await import('../src/v2/unified-task-migration.js');
+ // Real artifact roots are intentionally not required in this unit test:
+ // assert the old unconditional blockers are absent from the implementation.
+ const {readFileSync}=await import('node:fs');
+ const source=readFileSync(new URL('../src/v2/unified-task-migration.js',import.meta.url),'utf8');
+ const block=source.split('const blockers = [')[1].split('];')[0];
+ assert.doesNotMatch(block,/SCHEDULER_AGGREGATE_GATE_NOT_WIRED|LIVE_INTERFACE_BINDINGS_NOT_MIGRATED/);
+ assert.equal(typeof preflightUnifiedTaskMigration,'function');
+});

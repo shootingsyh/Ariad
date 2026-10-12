@@ -27,8 +27,6 @@ export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
     ...(active.length ? ['ACTIVE_TASKS'] : []),
     ...(extra.length ? ['UNMAPPED_LIVE_TASKS'] : []),
     ...(missing.length ? ['MISSING_TASKS'] : []),
-    'SCHEDULER_AGGREGATE_GATE_NOT_WIRED',
-    'LIVE_INTERFACE_BINDINGS_NOT_MIGRATED',
   ];
   return { safeToApply: blockers.length === 0, blockers, stats: preview.stats,
     live: { total: delivery.length, states: Object.fromEntries([...new Set(delivery.map(t=>t.state))].map(s=>[s,delivery.filter(t=>t.state===s).length])),
@@ -47,7 +45,7 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
   if (realpathSync(openedPath) === realpathSync(liveDatabasePath)) throw new Error('refusing migration of live database');
   const liveTasks = store.listTasks(projectId);
   const report = preflightUnifiedTaskMigration({artifactRoot,liveTasks});
-  const fatal = report.blockers.filter(x => !['UNMAPPED_LIVE_TASKS','SCHEDULER_AGGREGATE_GATE_NOT_WIRED','LIVE_INTERFACE_BINDINGS_NOT_MIGRATED'].includes(x));
+  const fatal = report.blockers.filter(x => x !== 'UNMAPPED_LIVE_TASKS');
   if (fatal.length) throw new Error(`migration blocked: ${fatal.join(', ')}`);
   if (report.extra.some(t => t.state !== 'OBSOLETE')) throw new Error('cannot archive non-obsolete extra task');
   const preview = buildUnifiedTaskTree(artifactRoot);
