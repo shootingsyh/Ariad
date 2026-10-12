@@ -93,8 +93,9 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     const oldIds=new Set(Object.keys(aliases));
     if(remaining.length!==preview.tasks.length || remaining.some(t=>oldIds.has(t.id))) throw new Error('postmigration count/ID mismatch');
     for(const task of remaining) for(const dep of task.dependsOn) if(!remaining.some(t=>t.id===dep)) throw new Error(`dangling dependency ${task.id}->${dep}`);
+    const aggregateValidation=validateMigratedAggregateStates(remaining);
     db.exec('COMMIT');
-    return {applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
+    return {aggregateValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};
   } catch(e) {db.exec('ROLLBACK');throw e;}
 }
