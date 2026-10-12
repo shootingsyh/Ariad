@@ -50,3 +50,19 @@ test('unified scheduler gates aggregate children and completes dev-test-review w
   assert.equal(store.getTask('A').history.filter(h=>h.type==='ROLE_RESULT').length,3);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('unified scheduler never dispatches delivery while locked',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'ariad-unified-locked-'));
+ const store=new SQLiteV2Store(join(dir,'state.db'));
+ try {
+  store.createProject({id:'locked',deliveryEnabled:false,unifiedTaskCompilerVersion:1});
+  store.createTask({id:'A',projectId:'locked',scope:'delivery',stage:'developer',state:'READY',milestoneId:'A',executionMode:'aggregate',unifiedTaskSchemaVersion:1,dependsOn:[]});
+  const roles=new RoleRegistry();roles.register('developer',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
+  const providers=new ProviderRegistry();let calls=0;
+  providers.register({id:'fake',async start(){calls++;return {externalId:'x'};},async poll(){return {state:'RUNNING'};},async cancel(){}});
+  const scheduler=new V2Scheduler({store,roles,providers,resources:new ResourcePool({})});
+  assert.deepEqual((await scheduler.tick('locked')).started,[]);
+  assert.equal(calls,0);
+  assert.equal(store.getTask('A').state,'READY');
+ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});
