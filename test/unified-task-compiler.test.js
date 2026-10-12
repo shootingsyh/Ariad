@@ -16,3 +16,15 @@ test('unified compiler emits runnable delivery-shaped tasks without mutating art
    assert.ok(graph.prerequisitesOf(task.id).length>0);
  }
 });
+
+test('compiler/store verifier flags missing and incompatible migrated tasks',async()=>{
+ const {verifyUnifiedCompilerAgainstStore}=await import('../src/v2/unified-task-compiler.js');
+ const compiled=compileUnifiedTaskTree(root);
+ const rows=compiled.tasks.map(t=>({...t,unifiedTaskSchemaVersion:1}));
+ const store={listTasks:()=>rows};
+ assert.equal(verifyUnifiedCompilerAgainstStore({artifactRoot:root,store,projectId:'p'}).ok,true);
+ rows[0]={...rows[0],dependsOn:['invalid']};
+ const mismatch=verifyUnifiedCompilerAgainstStore({artifactRoot:root,store,projectId:'p'});
+ assert.equal(mismatch.ok,false);
+ assert.equal(mismatch.issues[0].code,'DEPENDENCY_DRIFT');
+});
