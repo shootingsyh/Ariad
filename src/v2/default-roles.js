@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
+import { verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
@@ -1691,6 +1692,21 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          // A migrated unified tree must not pass through the legacy plan writer.
+          // Verify the compiled view without mutating tasks, history, or delivery state.
+          if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
+            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                summary: compatibility.ok
+                  ? 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.'
+                  : 'Unified Task Tree compiler/store mismatch; delivery remains unchanged.',
+                compatibility, at: new Date().toISOString(),
+              },
+            };
+          }
           const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
