@@ -2,7 +2,7 @@
 import { buildUnifiedTaskTree, validateUnifiedTaskTree } from './unified-task-tree.js';
 import { buildExecutionGraph } from './execution-graph.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 
 export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
   const preview = buildUnifiedTaskTree(artifactRoot);
@@ -42,7 +42,14 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
   if (!isolatedCopyConfirmed) throw new Error('refusing migration: isolated database copy not explicitly confirmed');
   const openedPath = store?.db?.prepare('PRAGMA database_list').all().find(row => row.name === 'main')?.file;
   if (!liveDatabasePath || !openedPath) throw new Error('migration requires a live database path and an identifiable copy path');
-  if (realpathSync(openedPath) === realpathSync(liveDatabasePath)) throw new Error('refusing migration of live database');
+  const openedRealPath = realpathSync(openedPath);
+  const liveRealPath = realpathSync(liveDatabasePath);
+  const openedStat = statSync(openedRealPath);
+  const liveStat = statSync(liveRealPath);
+  if (openedRealPath === liveRealPath ||
+      (openedStat.dev === liveStat.dev && openedStat.ino === liveStat.ino)) {
+    throw new Error('refusing migration of live database');
+  }
   const liveTasks = store.listTasks(projectId);
   const report = preflightUnifiedTaskMigration({artifactRoot,liveTasks});
   const fatal = report.blockers.filter(x => x !== 'UNMAPPED_LIVE_TASKS');

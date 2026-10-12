@@ -14,3 +14,18 @@ test('legacy delivery compiler cannot overwrite migrated unified task tree',()=>
   assert.equal(store.listTasks('p',{scope:'delivery'}).length,1);
  }finally{store.close();rmSync(dir,{recursive:true,force:true})}
 });
+
+test('migration rejects hardlink aliases of live database even when paths differ',async()=>{
+ const {linkSync}=await import('node:fs');
+ const {applyUnifiedTaskMigrationToCopy}=await import('../src/v2/unified-task-migration.js');
+ const dir=mkdtempSync(join(tmpdir(),'ariad-hardlink-'));
+ const live=join(dir,'live.db');
+ const alias=join(dir,'alias.db');
+ const original=new SQLiteV2Store(live);
+ original.close();
+ linkSync(live,alias);
+ const linked=new SQLiteV2Store(alias);
+ try {
+  assert.throws(()=>applyUnifiedTaskMigrationToCopy({artifactRoot:'unused',store:linked,projectId:'p',isolatedCopyConfirmed:true,liveDatabasePath:live}),/refusing migration of live database/);
+ }finally{linked.close();rmSync(dir,{recursive:true,force:true})}
+});
