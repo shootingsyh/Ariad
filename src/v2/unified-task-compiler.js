@@ -46,3 +46,18 @@ export function verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId}
   for(const task of existing) if(!compiledById.has(task.id)) issues.push({code:'UNEXPECTED_MIGRATED_TASK',taskId:task.id});
   return {ok:issues.length===0,issues,compiledCount:compiled.tasks.length,storedCount:existing.length};
 }
+
+// Runtime loading gate for projects explicitly prepared on an isolated copy.
+// It never invokes the legacy planner and never writes the database.
+export function loadPreparedUnifiedTaskTree({artifactRoot,store,projectId}) {
+  const project=store.getProject(projectId);
+  if(project?.unifiedTaskCompilerVersion!==1) throw new Error('UNIFIED_TASK_COMPILER_NOT_PREPARED');
+  if(project.deliveryEnabled!==false) throw new Error('UNIFIED_TASK_DELIVERY_NOT_LOCKED');
+  const compatibility=verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId});
+  if(!compatibility.ok) throw new Error('UNIFIED_TASK_COMPILER_STORE_DRIFT: '+JSON.stringify(compatibility.issues));
+  const compiled=compileUnifiedTaskTree(artifactRoot);
+  const stored=store.listTasks(projectId,{scope:'delivery'});
+  return {schema:compiled.schema,version:compiled.version,tasks:stored,
+    executionOrder:compiled.executionOrder,stats:compiled.stats,
+    historicalExceptions:project.unifiedTaskHistoricalExceptions??[]};
+}

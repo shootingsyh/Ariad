@@ -28,3 +28,17 @@ test('compiler/store verifier flags missing and incompatible migrated tasks',asy
  assert.equal(mismatch.ok,false);
  assert.equal(mismatch.issues[0].code,'DEPENDENCY_DRIFT');
 });
+
+test('prepared unified loader refuses unprepared, unlocked, or drifted projects',async()=>{
+ const {loadPreparedUnifiedTaskTree}=await import('../src/v2/unified-task-compiler.js');
+ const compiled=compileUnifiedTaskTree(root);
+ let project={unifiedTaskCompilerVersion:1,deliveryEnabled:false,unifiedTaskHistoricalExceptions:[]};
+ let rows=compiled.tasks.map(t=>({...t}));
+ const store={getProject:()=>project,listTasks:()=>rows};
+ assert.equal(loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}).tasks.length,78);
+ project={...project,deliveryEnabled:true};
+ assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/DELIVERY_NOT_LOCKED/);
+ project={...project,deliveryEnabled:false};
+ rows=rows.slice(1);
+ assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/STORE_DRIFT/);
+});
