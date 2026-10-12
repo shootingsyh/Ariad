@@ -387,6 +387,11 @@ export class SQLiteV2Store {
 
   applyDeliveryPlan(projectId, plan) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
+    // A legacy plan must never silently obsolete promoted aggregate tasks or
+    // restore legacy integration IDs after a unified-tree migration.
+    if (this.listTasks(projectId, { scope: 'delivery' }).some(task => task.unifiedTaskSchemaVersion === 1)) {
+      throw new Error('UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER');
+    }
     const deliverySpecs = plan?.tasks;
     if (!Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
       throw new Error('delivery plan requires tasks');
