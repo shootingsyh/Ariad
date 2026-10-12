@@ -1,5 +1,7 @@
 // Read-only state-aware migration preflight. Never mutates the live project.
 import { buildUnifiedTaskTree, validateUnifiedTaskTree } from './unified-task-tree.js';
+import { buildExecutionGraph } from './execution-graph.js';
+import { developerTaskPolicyFailure } from './developer-task-policy.js';
 
 export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
   const preview = buildUnifiedTaskTree(artifactRoot);
@@ -94,8 +96,9 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     if(remaining.length!==preview.tasks.length || remaining.some(t=>oldIds.has(t.id))) throw new Error('postmigration count/ID mismatch');
     for(const task of remaining) for(const dep of task.dependsOn) if(!remaining.some(t=>t.id===dep)) throw new Error(`dangling dependency ${task.id}->${dep}`);
     const aggregateValidation=validateMigratedAggregateStates(remaining);
+    const runtimeValidation=validateMigratedTaskRuntime(remaining);
     db.exec('COMMIT');
-    return {aggregateValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
+    return {aggregateValidation,runtimeValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};
   } catch(e) {db.exec('ROLLBACK');throw e;}
 }
@@ -115,4 +118,31 @@ export function validateMigratedAggregateStates(tasks) {
     }
   }
   return {ok: issues.length === 0, issues};
+}
+
+
+// Validate runtime scheduling invariants against the migrated delivery graph.
+// This does not dispatch any role or mutate task state.
+export function validateMigratedTaskRuntime(tasks) {
+  const issues=[];
+  let graph;
+  try { graph=buildExecutionGraph(tasks); }
+  catch(error) { return {ok:false,issues:[{code:'EXECUTION_GRAPH_INVALID',message:String(error.message)}]}; }
+  for(const task of tasks) {
+    if(!['aggregate','implementation','verification'].includes(task.executionMode)) {
+      issues.push({code:'INVALID_EXECUTION_MODE',taskId:task.id});
+    }
+    if(task.stage==='developer') {
+      const error=developerTaskPolicyFailure(task,{requireMilestone:true});
+      if(error) issues.push({code:'DEVELOPER_POLICY_FAILURE',taskId:task.id,reason:error});
+    }
+    if(JSON.stringify(task.interfaceIds??[])!==JSON.stringify(task.input?.interfaceIds??[])) {
+      issues.push({code:'INTERFACE_BINDING_MISMATCH',taskId:task.id});
+    }
+    if(task.executionMode==='aggregate' && task.state==='READY') {
+      const unfinished=(task.dependsOn??[]).filter(id=>!['DONE','SKIPPED'].includes(graph.byId.get(id)?.state));
+      if(unfinished.length && graph.isRunnable(task)) issues.push({code:'AGGREGATE_PREMATURELY_RUNNABLE',taskId:task.id});
+    }
+  }
+  return {ok:issues.length===0,issues};
 }

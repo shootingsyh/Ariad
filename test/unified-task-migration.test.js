@@ -33,3 +33,11 @@ test('validator reports legacy completed aggregate with unfinished prerequisites
  assert.equal(result.ok,false);
  assert.equal(result.issues[0].code,'DONE_AGGREGATE_UNFINISHED_PREREQUISITE');
 });
+
+test('runtime validator detects developer policy and interface drift',async()=>{
+ const {validateMigratedTaskRuntime}=await import('../src/v2/unified-task-migration.js');
+ const tasks=[{id:'a',scope:'delivery',stage:'developer',state:'READY',executionMode:'aggregate',dependsOn:[],interfaceIds:['x'],input:{interfaceIds:[]}}];
+ const result=validateMigratedTaskRuntime(tasks);
+ assert.equal(result.ok,false);
+ assert.deepEqual(result.issues.map(i=>i.code).sort(),['DEVELOPER_POLICY_FAILURE','INTERFACE_BINDING_MISMATCH']);
+});
