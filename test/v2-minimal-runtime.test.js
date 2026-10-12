@@ -40,6 +40,7 @@ function roles() {
       ? { stage: 'tester', state: 'READY' }
       : { stage: 'developer', state: 'READY' },
   });
+  registry.register('test_engineer', {prepare: ({task}) => ({provider:'fake',prompt:'plan tests',resources:['gpu']}),transition:()=>({stage:'tester',state:'READY'})});
   registry.register('tester', {
     prepare: ({ task }) => ({ provider: 'fake', prompt: `test ${task.id}`, resources: ['gpu'] }),
     transition: ({ result }) => result.outcome === 'PASS'
@@ -127,9 +128,15 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
 
     await scheduler.tick('P1');
     task = store.getTask('T1');
-    assert.equal(task.stage, 'tester');
+    assert.equal(task.stage, 'test_engineer');
     assert.equal(task.state, 'WORKING');
 
+    provider.complete(task.execution.externalId, {result:{testPlan:{testCases:[{entry:'fixture',command:'node --test',covers:[],executionScope:[]}]}}});
+    await supervisor.audit('P1');
+    await scheduler.tick('P1');
+    task = store.getTask('T1');
+    assert.equal(task.stage, 'tester');
+    assert.equal(task.state, 'WORKING');
     provider.complete(task.execution.externalId);
     await supervisor.audit('P1');
     await scheduler.tick('P1');
@@ -142,7 +149,7 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
     await scheduler.tick('P1');
     task = store.getTask('T1');
     assert.equal(task.state, 'DONE');
-    assert.equal(task.history.filter(x => x.type === 'ROLE_RESULT').length, 3);
+    assert.equal(task.history.filter(x => x.type === 'ROLE_RESULT').length, 4);
     assert.deepEqual(task.artifacts, ['review.txt']);
     store.close();
   } finally {
@@ -176,7 +183,7 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
     await supervisor.audit('P2');
     await scheduler.tick('P2');
     a = store.getTask('A');
-    assert.equal(a.stage, 'tester');
+    assert.equal(a.stage, 'test_engineer');
     assert.equal(a.state, 'WORKING');
     assert.equal(store.getTask('B').state, 'READY');
     assert.equal(store.getTask('C').state, 'READY');
@@ -1617,7 +1624,9 @@ test('default delivery roles are reuse-first but require fresh verification evid
     });
     const task = store.getTask('T-reuse');
     assert.match(definitions.developer.prepare({ task }).context.roleProtocol, /reuse\/fix\/extend/i);
-    assert.match(definitions.tester.prepare({ task }).context.roleProtocol, /freshly executed/i);
+    assert.throws(() => definitions.tester.prepare({ task }), /TEST_PLAN_MISSING/);
+    const approved = store.appendTaskHistory(task.id, task.version, {type:'ROLE_RESULT',role:'test_engineer',outcome:'PASS',result:{testPlan:{testCases:[{entry:'fixture',command:'node --test',covers:[],executionScope:[]}]}}});
+    assert.match(definitions.tester.prepare({ task: approved }).context.roleProtocol, /fresh execution evidence/i);
     assert.match(definitions.reviewer.prepare({ task }).context.roleProtocol, /fresh evidence/i);
     store.close();
   } finally {
