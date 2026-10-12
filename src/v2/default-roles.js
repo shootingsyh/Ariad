@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
+import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
@@ -1695,7 +1695,18 @@ export function createDefaultV2Roles({
           // A migrated unified tree must not pass through the legacy plan writer.
           // Verify the compiled view without mutating tasks, history, or delivery state.
           if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
+            const project = store.getProject(task.projectId);
             const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+            if (project?.unifiedTaskCompilerVersion === 1 && compatibility.ok) {
+              // The migrated tree is already compiled and accepted. Re-accepting
+              // it must not rewrite existing delivery state or enable scheduling.
+              const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
+              return {state:'DONE',transitionHistory:{
+                type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
+                summary:'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
+                taskCount:loaded.tasks.length,at:new Date().toISOString(),
+              }};
+            }
             return {
               state: 'NEEDS_HUMAN',
               transitionHistory: {
