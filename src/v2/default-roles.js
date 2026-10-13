@@ -1117,6 +1117,16 @@ export function createDefaultV2Roles({
     tech_lead: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
+          return prepareLlm(task, [
+            'You are the node-level Tech Lead. Work ONLY on the specified planning node.',
+            'Phase:', task.input.phase, 'Node:', task.input.nodeId,
+            'Planning context:', JSON.stringify(task.input.planningContext),
+            'Previous validation failure:', JSON.stringify(task.input.previousGateFailure ?? null),
+            'Do not change ancestors or sibling nodes. Apply direct-child-only changes and preserve existing unrelated semantics.',
+            'Return PLANNED through ariad_role_result only after saving verifiable artifacts.',
+          ].join('\n'), { sessionKey: `workflow:${task.id}:planner` });
+        }
         if (task.input?.purpose === 'PLANNING_ROUTE') {
           return prepareLlm(task, [
             'You are the Overall Tech Lead. Triage the request and choose a controlled planning route.',
@@ -1265,7 +1275,9 @@ export function createDefaultV2Roles({
 
     tech_lead_critic: {
       prepare: ({ project, task }) => prepareLlm(task,
-        task.input?.purpose === 'PLANNING_ROUTE_CRITIC'
+        task.input?.purpose === 'NODE_PLANNING_WORKFLOW'
+          ? ['Review the node planning artifacts without editing them.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Scope:', JSON.stringify(task.input.planningContext), 'Reject missing evidence, invalid direct-child changes, or broken cross-node contracts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.'].join('\n')
+          : task.input?.purpose === 'PLANNING_ROUTE_CRITIC'
           ? ['Review the completed controlled planning route and current artifacts.',
              'Verify no unrequested semantic changes and that interface bindings are precise.',
              'Do not modify artifacts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.',
@@ -1324,6 +1336,15 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
+            try {
+              if (!artifactRoot) throw new Error('WORKFLOW_ARTIFACT_ROOT_MISSING');
+              validateBoundaryContracts(artifactRoot, task.input.phase, { allowFrontier: false });
+              return { outcome: 'PASS', result: { nodeId: task.input.nodeId, validated: true } };
+            } catch (error) {
+              return { outcome: 'NOT_PASS', result: { nodeId: task.input.nodeId, error: error.message } };
+            }
+          }
           if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
             const routeTask = flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE');
             const route = routeTask?.input?.planningRoute;

@@ -1,4 +1,4 @@
-import { nodePlanningSchedule } from './node-planning-algorithm.js';
+import { nodePlanningContext, nodePlanningSchedule } from './node-planning-algorithm.js';
 
 const finished = task => task && task.state === 'DONE';
 
@@ -30,7 +30,7 @@ export function advanceNodePlanningWorkflows(store, projectId) {
     const child = {
       id: childId, projectId, scope: 'control', flowId: parent.flowId,
       parentTaskId: parent.id, taskKind: unit.kind, stage: unit.stages[0],
-      input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: parent.input.phase, nodeId: unit.nodeId, stages: unit.stages, reason: parent.input.reason, nodes, rootId },
+      input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: parent.input.phase, nodeId: unit.nodeId, stages: unit.stages, reason: parent.input.reason, nodes, rootId, planningContext: nodePlanningContext({ phase: parent.input.phase, operation: parent.input.operation ?? 'REPLAN', nodes, nodeId: unit.nodeId }) },
     };
     store.advanceNodePlanningWorkflow({ parentTaskId: parent.id, expectedVersion: parent.version,
       childTask: child, workflowState: { cursor: index + 1, activeChildTaskId: childId, completedNodes: completed } });
@@ -42,7 +42,13 @@ export function workflowChildTransition(task, result) {
   const stages = task.input?.stages ?? [];
   const index = stages.indexOf(task.stage);
   if (index < 0) throw new Error('WORKFLOW_STAGE_MISMATCH');
-  const passed = ['PASS', 'PLANNED', 'REPLANNED', 'CLEAN', 'MINOR_ONLY'].includes(result.outcome);
-  if (!passed) return { state: 'NEEDS_HUMAN', transitionHistory: { type: 'WORKFLOW_GATE_FAILED', role: task.stage, outcome: result.outcome, at: new Date().toISOString() } };
+  const allowed = task.stage === 'tech_lead' ? ['PLANNED', 'REPLANNED'] : task.stage === 'tech_lead_critic' ? ['CLEAN', 'MINOR_ONLY'] : ['PASS'];
+  const passed = allowed.includes(result.outcome);
+  if (!passed) {
+    const retries = task.input?.workflowRetries ?? 0;
+    const isNode = task.taskKind === 'NODE_PLANNING';
+    if (isNode && retries < 2) return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: retries + 1, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } } };
+    return { state: 'NEEDS_HUMAN', transitionHistory: { type: isNode ? 'WORKFLOW_DEBUGGER_REQUIRED' : 'WORKFLOW_GLOBAL_REVIEW_FAILED', role: task.stage, outcome: result.outcome, attempts: retries, at: new Date().toISOString() } };
+  }
   return index + 1 < stages.length ? { state: 'READY', stage: stages[index + 1] } : { state: 'DONE' };
 }

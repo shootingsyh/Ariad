@@ -26,7 +26,7 @@ test('durable interface postorder, role steps, global review, restart and idempo
     child = store.getTask('wf:0');
     for (const stage of child.input.stages) {
       assert.equal(child.stage, stage);
-      const next = workflowChildTransition(child, { outcome: stage === 'tech_lead' ? 'PLANNED' : 'PASS' });
+      const next = workflowChildTransition(child, { outcome: stage === 'tech_lead' ? 'PLANNED' : stage === 'tech_lead_critic' ? 'CLEAN' : 'PASS' });
       child = store.updateTask(child.id, child.version, next);
     }
     assert.equal(child.state, 'DONE');
@@ -34,7 +34,7 @@ test('durable interface postorder, role steps, global review, restart and idempo
     assert.equal(store.getTask('wf:1').input.nodeId, 'root');
     for (let index = 1; index <= 2; index++) {
       let task = store.getTask(`wf:${index}`);
-      for (const stage of task.input.stages) task = store.updateTask(task.id, task.version, workflowChildTransition(task, { outcome: 'PASS' }));
+      for (const stage of task.input.stages) task = store.updateTask(task.id, task.version, workflowChildTransition(task, { outcome: stage === 'tech_lead' ? 'PLANNED' : stage === 'tech_lead_critic' ? 'CLEAN' : 'PASS' }));
       advanceNodePlanningWorkflows(store, 'P');
     }
     assert.equal(store.getTask('wf:2').taskKind, 'GLOBAL_REVIEW');
@@ -47,5 +47,10 @@ test('durable interface postorder, role steps, global review, restart and idempo
 
 test('failed gate blocks downstream and cannot be mistaken for success', () => {
   const task = { taskKind: 'NODE_PLANNING', stage: 'plan_validator', input: { stages: ['tech_lead', 'plan_validator'] } };
-  assert.equal(workflowChildTransition(task, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
+  const first = workflowChildTransition(task, { outcome: 'NOT_PASS' });
+  assert.equal(first.state, 'READY');
+  assert.equal(first.stage, 'tech_lead');
+  assert.equal(first.input.workflowRetries, 1);
+  assert.equal(workflowChildTransition({ ...task, input: { ...task.input, workflowRetries: 2 } }, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
+  assert.equal(workflowChildTransition({ ...task, taskKind: 'GLOBAL_REVIEW' }, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
 });
