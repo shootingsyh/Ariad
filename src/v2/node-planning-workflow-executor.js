@@ -39,6 +39,7 @@ export function advanceNodePlanningWorkflows(store, projectId) {
 
 export function workflowChildTransition(task, result) {
   if (!['NODE_PLANNING', 'GLOBAL_REVIEW'].includes(task.taskKind)) return null;
+  if (task.stage === 'project_debugger') return { state: 'NEEDS_HUMAN', transitionHistory: { type: 'WORKFLOW_DEBUGGER_DIAGNOSIS', outcome: result.outcome, guidance: result.result?.guidance ?? result.summary ?? null, at: new Date().toISOString() } };
   const stages = task.input?.stages ?? [];
   const index = stages.indexOf(task.stage);
   if (index < 0) throw new Error('WORKFLOW_STAGE_MISMATCH');
@@ -48,7 +49,7 @@ export function workflowChildTransition(task, result) {
     const retries = task.input?.workflowRetries ?? 0;
     const isNode = task.taskKind === 'NODE_PLANNING';
     if (isNode && retries < 2) return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: retries + 1, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } } };
-    return { state: 'NEEDS_HUMAN', transitionHistory: { type: isNode ? 'WORKFLOW_DEBUGGER_REQUIRED' : 'WORKFLOW_GLOBAL_REVIEW_FAILED', role: task.stage, outcome: result.outcome, attempts: retries, at: new Date().toISOString() } };
+    return isNode ? { state: 'READY', stage: 'project_debugger', input: { ...task.input, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } }, transitionHistory: { type: 'WORKFLOW_DEBUGGER_ROUTED', attempts: retries, at: new Date().toISOString() } } : { state: 'NEEDS_HUMAN', transitionHistory: { type: 'WORKFLOW_GLOBAL_REVIEW_FAILED', role: task.stage, outcome: result.outcome, at: new Date().toISOString() } };
   }
   return index + 1 < stages.length ? { state: 'READY', stage: stages[index + 1] } : { state: 'DONE' };
 }

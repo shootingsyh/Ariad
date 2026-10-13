@@ -861,6 +861,7 @@ export function createDefaultV2Roles({
     project_debugger: {
       sessionPolicy: 'persistent',
       prepare: ({ task }) => {
+        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') return prepareLlm(task, ['Diagnose this node planning failure without changing artifacts.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Failure:', JSON.stringify(task.input.previousGateFailure), 'Provide precise operator guidance and distinguish artifact, requirement, and model failures. Submit structured debugger diagnosis.'].join('\n'));
         if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
           const critics = flowTasks(store, task)
             .filter(item => item.input?.purpose === 'PLANNER_FRONTIER_CRITIC')

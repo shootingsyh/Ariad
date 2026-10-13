@@ -51,6 +51,8 @@ test('failed gate blocks downstream and cannot be mistaken for success', () => {
   assert.equal(first.state, 'READY');
   assert.equal(first.stage, 'tech_lead');
   assert.equal(first.input.workflowRetries, 1);
-  assert.equal(workflowChildTransition({ ...task, input: { ...task.input, workflowRetries: 2 } }, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
+  const routed = workflowChildTransition({ ...task, input: { ...task.input, workflowRetries: 2 } }, { outcome: 'NOT_PASS' });
+  assert.equal(routed.stage, 'project_debugger');
+  assert.equal(workflowChildTransition({ ...task, stage: 'project_debugger' }, { outcome: 'UNKNOWN_PROJECT_CAUSE' }).state, 'NEEDS_HUMAN');
   assert.equal(workflowChildTransition({ ...task, taskKind: 'GLOBAL_REVIEW' }, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
 });
