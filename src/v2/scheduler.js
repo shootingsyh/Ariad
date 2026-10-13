@@ -147,7 +147,8 @@ export class V2Scheduler {
       && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
       && (task.history ?? []).some(entry => entry.type === 'HUMAN_DECISION')
     );
-    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId) || resumedHumanReview;
+    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId)
+      || this.store.hasActiveNodePlanningJobs(projectId) || resumedHumanReview;
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
@@ -165,6 +166,8 @@ export class V2Scheduler {
             && (task.scope !== 'delivery' || deliveryEnabled)
           );
     const candidates = [];
+    // Workflow parents are orchestrators, never Pi role sessions.
+    // They must not be dispatched until a durable workflow executor owns them.
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {

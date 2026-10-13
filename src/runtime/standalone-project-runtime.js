@@ -101,6 +101,11 @@ export class StandaloneProjectRuntime {
           request,
         });
       },
+      requestPlanning: ({ phase, reason, scopeNodeId = null, requestedByTaskId = null }) =>
+        this.store.createNodePlanningWorkflow({
+          id: `${project.id}:node-plan:${Date.now()}:${++this.requestSequence}`,
+          projectId: project.id, phase, reason, scopeNodeId, requestedByTaskId,
+        }),
       reportIssue: issue => this.openIssue(issue),
       recoverLegacyIssueBlockedTask: args => this.store.recoverLegacyIssueBlockedTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
       insertTriagedFixTask: args => this.store.insertTriagedFixTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
