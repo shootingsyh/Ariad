@@ -72,3 +72,15 @@ test('failed child propagates human gate to parent without creating next node', 
     assert.equal(store.listTasks('P').length, 2);
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('debugger can grant one bounded guided repair but never auto-approve failed work', () => {
+  const task = { taskKind: 'NODE_PLANNING', stage: 'project_debugger', input: { stages: ['tech_lead', 'plan_validator'], workflowRetries: 2, previousGateFailure: { outcome: 'NOT_PASS' } } };
+  const repaired = workflowChildTransition(task, { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'Repair the missing binding' } });
+  assert.equal(repaired.state, 'READY');
+  assert.equal(repaired.stage, 'tech_lead');
+  assert.equal(repaired.input.debuggerRecoveryCount, 1);
+  assert.equal(repaired.input.previousGateFailure.debuggerGuidance, 'Repair the missing binding');
+  assert.equal(workflowChildTransition({ ...task, input: repaired.input }, { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'again' } }).state, 'NEEDS_HUMAN');
+  assert.equal(workflowChildTransition(task, { outcome: 'RETRY_WITH_GUIDANCE', result: {} }).state, 'NEEDS_HUMAN');
+  assert.equal(workflowChildTransition(task, { outcome: 'OVERRIDE_CRITIC' }).state, 'NEEDS_HUMAN');
+});
