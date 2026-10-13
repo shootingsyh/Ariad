@@ -3,12 +3,9 @@ import {resolve,relative,isAbsolute,sep} from 'node:path';
 import {loadBoundaryContracts} from './interface-contracts.js';
 
 // Read-only: source-location candidates do not establish semantic compatibility.
-const migratedTestPaths = Object.freeze({
- 'tests/test_rout_policy.gd':'scripts/policies/__integration_tests__/rout_policy__test.gd',
- 'tests/test_save_roundtrip.gd':'scripts/autoload/__tests__/game_state__test.gd',
-});
-
-export function locateInterfaceSymbols(artifactRoot,sourceRoot) {
+// Migration hints belong to the audited project, never to Ariad's core.
+// A candidate is not proof that the new implementation satisfies the contract.
+export function locateInterfaceSymbols(artifactRoot,sourceRoot,{migratedPaths={}}={}) {
  const root=resolve(sourceRoot), results=[], cache=new Map();
  for(const kind of ['feature','milestone']) for(const c of loadBoundaryContracts(artifactRoot,kind).values()) {
   for(const b of c.bindings??[]) for(const a of b.realizationAnchors??[]) {
@@ -19,9 +16,12 @@ export function locateInterfaceSymbols(artifactRoot,sourceRoot) {
     results.push({...entry,status:'UNSAFE_PATH'});continue;
    }
    if(!existsSync(absolute)){
-    const replacement=migratedTestPaths[a.file];
+    const replacement=migratedPaths[a.file];
     if(!replacement){results.push({...entry,status:'FILE_MISSING'});continue;}
-    const migrated=resolve(root,replacement);
+    const migrated=resolve(root,replacement),migratedRel=relative(root,migrated);
+    if(isAbsolute(replacement)||migratedRel==='..'||migratedRel.startsWith('..'+sep)){
+     results.push({...entry,status:'UNSAFE_MIGRATED_PATH',replacement});continue;
+    }
     if(!existsSync(migrated)){results.push({...entry,status:'MIGRATED_TARGET_MISSING',replacement});continue;}
     const content=readFileSync(migrated,'utf8');
     const symbol=a.symbol.split('.').at(-1);
