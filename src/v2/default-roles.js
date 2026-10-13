@@ -16,6 +16,8 @@ import {
   validateFrontierPass,
   hasBoundaryContracts,
   validateBoundaryContracts,
+  loadPlannerHierarchy,
+  loadBoundaryContracts,
   validateTaskOwnershipCompilation,
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
@@ -1340,8 +1342,23 @@ export function createDefaultV2Roles({
           if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
             try {
               if (!artifactRoot) throw new Error('WORKFLOW_ARTIFACT_ROOT_MISSING');
-              validateBoundaryContracts(artifactRoot, task.input.phase, { allowFrontier: false });
-              return { outcome: 'PASS', result: { nodeId: task.input.nodeId, validated: true } };
+              const nodeType = task.input.phase === 'interface' ? 'milestone' : task.input.phase;
+              if (!['feature', 'milestone'].includes(nodeType)) throw new Error('WORKFLOW_PHASE_UNSUPPORTED');
+              const isGlobal = task.taskKind === 'GLOBAL_REVIEW';
+              const hierarchy = loadPlannerHierarchy(artifactRoot, nodeType);
+              const target = hierarchy.byId.get(task.input.nodeId);
+              if (!target) throw new Error(`WORKFLOW_NODE_MISSING: ${task.input.nodeId}`);
+              const expected = task.input.nodes?.find(node => node.id === task.input.nodeId);
+              if (!expected || (target.parentId ?? null) !== (expected.parentId ?? null)) {
+                throw new Error(`WORKFLOW_NODE_SCOPE_MISMATCH: ${task.input.nodeId}`);
+              }
+              const contracts = loadBoundaryContracts(artifactRoot, nodeType);
+              if (!contracts.has(task.input.nodeId)) throw new Error(`WORKFLOW_CONTRACT_MISSING: ${task.input.nodeId}`);
+              const validation = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: !isGlobal });
+              if (!validation.ok || validation.count === 0 || (isGlobal && !validation.complete)) {
+                throw new Error('WORKFLOW_BOUNDARY_INCOMPLETE');
+              }
+              return { outcome: 'PASS', result: { nodeId: task.input.nodeId, validated: true, global: isGlobal } };
             } catch (error) {
               return { outcome: 'NOT_PASS', result: { nodeId: task.input.nodeId, error: error.message } };
             }
