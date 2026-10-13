@@ -1,9 +1,10 @@
+import { advanceNodePlanningWorkflows, workflowChildTransition } from './node-planning-workflow-executor.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -49,7 +50,7 @@ export class V2Scheduler {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = await role.transition({ task, result });
+      const next = workflowChildTransition(task, result) ?? await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
       const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
       const transitionEvent = ({
@@ -107,6 +108,7 @@ export class V2Scheduler {
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
     await this.#advanceResults(projectId, { migrating, adhocOnly });
+    if (!adhocOnly && !migrating) advanceNodePlanningWorkflows(this.store, projectId);
     if (!adhocOnly) {
       this.store.reconcileAssignedIssues?.(projectId);
       this.#settlePlanningBatches(projectId);
@@ -160,7 +162,7 @@ export class V2Scheduler {
       : migrating
       ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
       : planningBlocked
-        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task))
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(effectiveTaskKind(task)))
         : allTasks.filter(task =>
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
             && (task.scope !== 'delivery' || deliveryEnabled)
@@ -171,7 +173,7 @@ export class V2Scheduler {
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {
-        if (!graph.isRunnable(task)) continue;
+        if (!graph.isRunnable(task) || effectiveTaskKind(task) === TASK_KINDS.WORKFLOW) continue;
         candidates.push({
           task,
           graphKey: key,
