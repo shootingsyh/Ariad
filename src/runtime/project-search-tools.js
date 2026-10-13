@@ -58,7 +58,7 @@ function rgHits(workspace, needle, limit) {
   try {
     const stdout = execFileSync('rg', [
       '--json', '--smart-case', '--hidden',
-      '--glob', '!.git/**', '--glob', '!.ariad/pi/**',
+      '--glob', '!.git/**', '--glob', '!.ariad/**',
       '--glob', '!.ariad/memory.db*',
       '--max-count', String(Math.max(1, Math.min(limit, 100))),
       needle, '.',
