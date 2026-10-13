@@ -78,11 +78,11 @@ function makeRoles(store) {
       context: { roleModelRef: 'fake/runtime' },
     }),
     transition: ({ result }) => result.outcome === 'PASS'
-      ? { stage: 'tester', state: 'READY' }
+      ? { stage: 'test_engineer', state: 'READY' }
       : { stage: 'developer', state: 'READY' },
   });
 
-  roles.register('tester', {
+  roles.register('test_engineer', {
     prepare: ({ task }) => ({
       provider: 'pi-agent-session',
       workspace: task.input.workspace,
@@ -138,7 +138,7 @@ function scriptedPiSessionFactory(workspace) {
               path: spec.taskId === 'T2' ? 'feature-2.txt' : 'feature-1.txt',
             });
 
-    const testerShouldFail = spec.role === 'tester' && spec.taskId === 'T1' && runNo === 1;
+    const testerShouldFail = spec.role === 'test_engineer' && spec.taskId === 'T1' && runNo === 1;
     const outcome = testerShouldFail ? 'NOT_PASS' : 'PASS';
 
     faux.setResponses([
@@ -309,9 +309,9 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
         .map(entry => [entry.role, entry.outcome]),
       [
         ['developer', 'PASS'],
-        ['tester', 'NOT_PASS'],
+        ['test_engineer', 'NOT_PASS'],
         ['developer', 'PASS'],
-        ['tester', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['reviewer', 'PASS'],
       ],
     );
@@ -369,7 +369,7 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
         .map(entry => [entry.role, entry.outcome]),
       [
         ['developer', 'PASS'],
-        ['tester', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['reviewer', 'PASS'],
       ],
     );
@@ -377,7 +377,7 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
     assert.equal(scripted.roleRuns.get('pm'), 2);
     assert.equal(scripted.roleRuns.get('tech_lead'), 2);
     assert.equal(scripted.roleRuns.get('developer'), 3);
-    assert.equal(scripted.roleRuns.get('tester'), 3);
+    assert.equal(scripted.roleRuns.get('test_engineer'), 3);
     assert.equal(scripted.roleRuns.get('reviewer'), 2);
 
     const tools = scripted.toolCalls.map(entry => entry.tool);
