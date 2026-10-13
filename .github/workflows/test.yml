@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Test workflow transaction, planning policy, and scheduler integration
-        run: node --test test/node-planning-workflow-transaction.test.js test/node-planning-workflow-executor.test.js test/node-planning-algorithm.test.js test/adhoc-control-tasks.test.js
+        run: node --test test/node-planning-workflow-transaction.test.js test/node-planning-workflow-executor.test.js test/node-planning-fake-provider-e2e.test.js test/node-planning-algorithm.test.js test/adhoc-control-tasks.test.js
 
   test:
     runs-on: ubuntu-latest

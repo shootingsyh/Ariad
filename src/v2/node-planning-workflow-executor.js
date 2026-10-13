@@ -18,6 +18,10 @@ export function advanceNodePlanningWorkflows(store, projectId) {
     }
     units.push({ kind: 'GLOBAL_REVIEW', nodeId: rootId, stages: ['plan_validator', 'tech_lead_critic'] });
     const active = state.activeChildTaskId && store.getTask(state.activeChildTaskId);
+    if (state.activeChildTaskId && active?.state === 'NEEDS_HUMAN') {
+      store.updateTask(parent.id, parent.version, { state: 'NEEDS_HUMAN', workflowState: { ...state, blockedChildTaskId: active.id } });
+      continue;
+    }
     if (state.activeChildTaskId && !finished(active)) continue;
     const completed = active && !state.completedNodes.includes(active.id) ? [...state.completedNodes, active.id] : state.completedNodes;
     const index = state.cursor;

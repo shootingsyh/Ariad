@@ -56,3 +56,19 @@ test('failed gate blocks downstream and cannot be mistaken for success', () => {
   assert.equal(workflowChildTransition({ ...task, stage: 'project_debugger' }, { outcome: 'UNKNOWN_PROJECT_CAUSE' }).state, 'NEEDS_HUMAN');
   assert.equal(workflowChildTransition({ ...task, taskKind: 'GLOBAL_REVIEW' }, { outcome: 'NOT_PASS' }).state, 'NEEDS_HUMAN');
 });
+
+test('failed child propagates human gate to parent without creating next node', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-wf-failure-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'P' });
+    store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'fix', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null }] });
+    advanceNodePlanningWorkflows(store, 'P');
+    const child = store.getTask('wf:0');
+    store.updateTask(child.id, child.version, { state: 'NEEDS_HUMAN' });
+    advanceNodePlanningWorkflows(store, 'P');
+    assert.equal(store.getTask('wf').state, 'NEEDS_HUMAN');
+    assert.equal(store.getTask('wf').workflowState.blockedChildTaskId, 'wf:0');
+    assert.equal(store.listTasks('P').length, 2);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
