@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, TASK_KINDS } from './control-task-policy.js';
 
@@ -598,15 +599,16 @@ export class SQLiteV2Store {
     return this.getIssue(id);
   }
 
-  createNodePlanningWorkflow({ id, projectId, phase, reason, scopeNodeId = null, requestedByTaskId = null }) {
+  createNodePlanningWorkflow({ id, projectId, phase, reason, scopeNodeId = null, nodes = null, requestedByTaskId = null }) {
     if (!id || !projectId || !['feature', 'milestone', 'interface'].includes(phase) || !String(reason ?? '').trim()) {
       throw new Error('INVALID_NODE_PLANNING_WORKFLOW');
     }
+    if (nodes !== null) nodePlanningSchedule({ phase, nodes, rootId: scopeNodeId });
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     return this.createTask({
       id, projectId, scope: 'control', flowId: `workflow:${projectId}:${id}`,
       stage: 'tech_lead', taskKind: 'WORKFLOW', executorType: 'node-planning',
-      input: { phase, reason, scopeNodeId, requestedByTaskId },
+      input: { phase, reason, scopeNodeId, nodes, requestedByTaskId },
       workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null },
     });
   }

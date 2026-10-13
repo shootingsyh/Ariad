@@ -23,9 +23,12 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_report_issue',
   'ariad_insert_fix_task',
   'ariad_recover_legacy_issue_task',
+  'ariad_plan_features',
+  'ariad_plan_milestones',
+  'ariad_build_interfaces',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
   const resolveFile = file => {
     const path = resolve(workspace, file);
     if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
@@ -129,6 +132,22 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
       return textResult({ events: sessionHistory(workspace, params) });
     },
   });
+
+  for (const [name, phase, downstream] of [
+    ['ariad_plan_features', 'feature', ['milestone', 'interface']],
+    ['ariad_plan_milestones', 'milestone', ['interface']],
+    ['ariad_build_interfaces', 'interface', []],
+  ]) {
+    addTool(name, `Tech Lead only. Request deterministic ${phase} node planning; downstream dependency validation: ${downstream.join(', ') || 'none'}. This only queues work, never declares completion.`, Type.Object({
+      reason: Type.String({ minLength: 1 }),
+      scopeNodeId: Type.String({ minLength: 1 }),
+      nodes: Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), parentId: Type.Union([Type.String(), Type.Null()]) }), { minItems: 1 }),
+    }, { additionalProperties: false }), async params => {
+      if (taskContext?.role !== 'tech_lead') throw new Error('PLANNING_REQUIRES_TECH_LEAD');
+      if (typeof requestPlanning !== 'function') throw new Error('PLANNING_SCHEDULER_NOT_CONNECTED');
+      return requestPlanning({ phase, downstream, ...params, requestedByTaskId: taskContext.taskId });
+    });
+  }
 
   pi.registerTool({
     name: 'ariad_recover_legacy_issue_task',

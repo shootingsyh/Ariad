@@ -500,6 +500,7 @@ export function createDefaultV2Roles({
   reportIssue = null,
   insertTriagedFixTask = null,
   recoverLegacyIssueBlockedTask = null,
+  requestPlanning = null,
   artifactRoot = null,
   executionCapabilities = [],
   executionProvenance = {},
@@ -587,6 +588,7 @@ export function createDefaultV2Roles({
       workspace,
       ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
       ...(task.stage === 'tech_lead' && recoverLegacyIssueBlockedTask ? { recoverLegacyIssueBlockedTask } : {}),
+      ...(task.stage === 'tech_lead' && requestPlanning ? { requestPlanning } : {}),
       ...(sharedDeliveryContext && reportIssue ? {
         reportIssue: issue => reportIssue(issue),
       } : {}),
