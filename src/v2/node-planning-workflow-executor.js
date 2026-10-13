@@ -52,14 +52,14 @@ export function workflowChildTransition(task, result) {
   }
   const stages = task.input?.stages ?? [];
   const index = stages.indexOf(task.stage);
-  if (index < 0) throw new Error('WORKFLOW_STAGE_MISMATCH');
+  if (index < 0 && !(task.taskKind === 'GLOBAL_REVIEW' && task.stage === 'tech_lead' && (task.input?.workflowRetries ?? 0) > 0)) throw new Error('WORKFLOW_STAGE_MISMATCH');
   const allowed = task.stage === 'tech_lead' ? ['PLANNED', 'REPLANNED'] : task.stage === 'tech_lead_critic' ? ['CLEAN', 'MINOR_ONLY'] : ['PASS'];
   const passed = allowed.includes(result.outcome);
   if (!passed) {
     const retries = task.input?.workflowRetries ?? 0;
-    const isNode = task.taskKind === 'NODE_PLANNING';
-    if (isNode && retries < 2) return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: retries + 1, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } } };
-    return isNode ? { state: 'READY', stage: 'project_debugger', input: { ...task.input, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } }, transitionHistory: { type: 'WORKFLOW_DEBUGGER_ROUTED', attempts: retries, at: new Date().toISOString() } } : { state: 'NEEDS_HUMAN', transitionHistory: { type: 'WORKFLOW_GLOBAL_REVIEW_FAILED', role: task.stage, outcome: result.outcome, at: new Date().toISOString() } };
+    if (retries < 2) return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: retries + 1, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } } };
+    return { state: 'READY', stage: 'project_debugger', input: { ...task.input, previousGateFailure: { stage: task.stage, outcome: result.outcome, details: result.result ?? null } }, transitionHistory: { type: 'WORKFLOW_DEBUGGER_ROUTED', attempts: retries, at: new Date().toISOString() } };
   }
+  if (task.taskKind === 'GLOBAL_REVIEW' && task.stage === 'tech_lead') return { state: 'READY', stage: 'plan_validator' };
   return index + 1 < stages.length ? { state: 'READY', stage: stages[index + 1] } : { state: 'DONE' };
 }

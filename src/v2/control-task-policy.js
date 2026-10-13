@@ -40,7 +40,7 @@ export function controlTaskPolicyFailure(task) {
     if (!task.parentTaskId || !String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_CHILD_REQUIRES_PARENT';
     const allowed = kind === TASK_KINDS.NODE_PLANNING
       ? ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger']
-      : ['plan_validator', 'tech_lead_critic', 'project_debugger'];
+      : ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger'];
     if (!allowed.includes(task.stage)) return 'WORKFLOW_CHILD_INVALID_STAGE';
     return null;
   }
