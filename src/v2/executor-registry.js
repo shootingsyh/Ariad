@@ -22,16 +22,16 @@ export function executorFamily(task) {
   switch (kind) {
     case TASK_KINDS.MILESTONE_TASK: return EXECUTOR_FAMILIES.MILESTONE;
     case TASK_KINDS.WORKFLOW:
+      return EXECUTOR_FAMILIES.PLANNING;
     case TASK_KINDS.PLANNING:
     case TASK_KINDS.REVIEW_GATE:
-      return EXECUTOR_FAMILIES.PLANNING;
     case TASK_KINDS.NODE_PLANNING:
     case TASK_KINDS.GLOBAL_REVIEW:
       return EXECUTOR_FAMILIES.SUB_PLAN;
     case TASK_KINDS.ADHOC_ANALYSIS:
       return EXECUTOR_FAMILIES.ADHOC;
     case TASK_KINDS.DIAGNOSTIC:
-      // Diagnostics currently use a role session and share the sub-plan queue.
+      // Diagnostics are role sessions; the planning queue is reserved for tree orchestrators.
       return EXECUTOR_FAMILIES.SUB_PLAN;
     default: throw new Error(`unsupported task kind: ${kind}`);
   }
