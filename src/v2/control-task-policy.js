@@ -1,6 +1,9 @@
 export const TASK_KINDS = Object.freeze({
   MILESTONE_TASK: 'MILESTONE_TASK',
   ADHOC_ANALYSIS: 'ADHOC_ANALYSIS',
+  WORKFLOW: 'WORKFLOW',
+  NODE_PLANNING: 'NODE_PLANNING',
+  GLOBAL_REVIEW: 'GLOBAL_REVIEW',
   PLANNING: 'PLANNING',
   REVIEW_GATE: 'REVIEW_GATE',
   DIAGNOSTIC: 'DIAGNOSTIC',
@@ -28,6 +31,19 @@ export function controlTaskPolicyFailure(task) {
   }
   if (task.scope !== 'control') return 'INVALID_TASK_SCOPE';
   if (kind === TASK_KINDS.MILESTONE_TASK) return 'MILESTONE_TASK_REQUIRES_DELIVERY';
+  if (kind === TASK_KINDS.WORKFLOW) {
+    if (task.executorType !== 'node-planning') return 'WORKFLOW_REQUIRES_EXECUTOR';
+    if (!String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_REQUIRES_WORKFLOW_FLOW';
+    return null;
+  }
+  if (kind === TASK_KINDS.NODE_PLANNING || kind === TASK_KINDS.GLOBAL_REVIEW) {
+    if (!task.parentTaskId || !String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_CHILD_REQUIRES_PARENT';
+    const allowed = kind === TASK_KINDS.NODE_PLANNING
+      ? ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger']
+      : ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger'];
+    if (!allowed.includes(task.stage)) return 'WORKFLOW_CHILD_INVALID_STAGE';
+    return null;
+  }
   if (kind === TASK_KINDS.ADHOC_ANALYSIS) {
     if (task.stage !== 'tech_lead') return 'ADHOC_ANALYSIS_REQUIRES_TECH_LEAD';
     if (!String(task.flowId ?? '').startsWith('adhoc:')) return 'ADHOC_ANALYSIS_REQUIRES_ADHOC_FLOW';

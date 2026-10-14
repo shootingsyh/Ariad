@@ -1,9 +1,10 @@
+import { advanceNodePlanningWorkflows, workflowChildTransition } from './node-planning-workflow-executor.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -49,7 +50,7 @@ export class V2Scheduler {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = await role.transition({ task, result });
+      const next = workflowChildTransition(task, result) ?? await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
       const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
       const transitionEvent = ({
@@ -107,6 +108,7 @@ export class V2Scheduler {
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
     await this.#advanceResults(projectId, { migrating, adhocOnly });
+    if (!adhocOnly && !migrating) advanceNodePlanningWorkflows(this.store, projectId);
     if (!adhocOnly) {
       this.store.reconcileAssignedIssues?.(projectId);
       this.#settlePlanningBatches(projectId);
@@ -124,6 +126,19 @@ export class V2Scheduler {
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`unknown project: ${projectId}`);
 
+    // Upgrade pre-split READY tester work to Test Engineer. Never interrupt
+    // an in-flight tester; stopped/cancelled work is READY and safe to migrate.
+    for (const task of this.store.listTasks(projectId)) {
+      if (task.state !== 'READY' || task.stage !== 'tester') continue;
+      const approved = [...(task.history ?? [])].reverse().find(h =>
+        h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS'
+      );
+      if (approved?.result?.testPlan?.testCases?.length) continue;
+      this.store.appendTaskHistory(task.id, task.version, {
+        type: 'TEST_ENGINEER_WORKFLOW_UPGRADE',
+        fromStage: 'tester', toStage: 'test_engineer', at: new Date().toISOString(),
+      }, { stage: 'test_engineer', execution: null });
+    }
     const allTasks = this.store.listTasks(projectId);
     // A human-approved PM review remains resumable after its planning request
     // has been marked PLANNED. It must finish the review gate before Delivery
@@ -134,7 +149,8 @@ export class V2Scheduler {
       && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
       && (task.history ?? []).some(entry => entry.type === 'HUMAN_DECISION')
     );
-    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId) || resumedHumanReview;
+    const planningBlocked = this.store.hasUnplannedPlanningRequests(projectId)
+      || this.store.hasActiveNodePlanningJobs(projectId) || resumedHumanReview;
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
@@ -146,16 +162,18 @@ export class V2Scheduler {
       : migrating
       ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
       : planningBlocked
-        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task))
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(effectiveTaskKind(task)))
         : allTasks.filter(task =>
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
             && (task.scope !== 'delivery' || deliveryEnabled)
           );
     const candidates = [];
+    // Workflow parents are orchestrators, never Pi role sessions.
+    // They must not be dispatched until a durable workflow executor owns them.
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {
-        if (!graph.isRunnable(task)) continue;
+        if (!graph.isRunnable(task) || effectiveTaskKind(task) === TASK_KINDS.WORKFLOW) continue;
         candidates.push({
           task,
           graphKey: key,

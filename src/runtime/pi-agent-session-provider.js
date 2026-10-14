@@ -23,7 +23,7 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
-const DELIVERY_ROLES = new Set(['developer', 'tester', 'reviewer']);
+const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'reviewer']);
 const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
@@ -31,7 +31,7 @@ const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
 export function isCodexQuotaExhaustion(error) {
   const message = String(error?.message ?? error ?? '');
-  return /usage limit has been reached|usage limit reached|quota (?:has been )?exceeded|insufficient_quota|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:usage|weekly|monthly) limit/i.test(message);
+  return /usage limit has been reached|usage limit reached|quota (?:has been )?exceeded|insufficient_quota|you(?:'ve| have) (?:hit|reached) (?:your|the) (?:ChatGPT )?(?:usage|weekly|monthly) limit/i.test(message);
 }
 
 function codexQuotaFallbackSpec(spec) {
@@ -56,8 +56,10 @@ function codexQuotaFallbackSpec(spec) {
 const ROLE_RESULT_OUTCOMES = Object.freeze({
   artist: ['PASS', 'NOT_PASS', 'NEEDS_CAPABILITY'],
   developer: ['PASS', 'NOT_PASS'],
+  test_engineer: ['PASS', 'NOT_PASS'],
   tester: ['PASS', 'NOT_PASS'],
   reviewer: ['PASS', 'NOT_PASS'],
+  ux_reviewer: ['PASS', 'NOT_PASS'],
   project_debugger: [
     'WRONG_IMPLEMENTATION_APPROACH',
     'TASK_TOO_LARGE',
@@ -67,7 +69,10 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
     'MODEL_CAPABILITY_MISMATCH',
     'UNKNOWN_PROJECT_CAUSE',
   ],
-  tech_lead: ['PLANNED', 'REPLANNED'],
+  tech_lead: ['PLANNED', 'REPLANNED', 'PLANNING_ROUTE'],
+  feature_planner: ['PASS', 'NOT_PASS'],
+  milestone_planner: ['PASS', 'NOT_PASS'],
+  interface_architect: ['PASS', 'NOT_PASS'],
   tech_lead_critic: ['CLEAN', 'MINOR_ONLY', 'ISSUES'],
   pm: ['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN'],
   memory_curator: ['PASS', 'NOT_PASS'],
@@ -119,6 +124,22 @@ export function piRoleResultToolSchema(role) {
         anchors: Type.Array(anchorSchema),
       }, { additionalProperties: false }))),
     }));
+  } else if (role === 'test_engineer') {
+    result = Type.Object({
+      testPlan: Type.Object({
+        scope: Type.Array(Type.String()),
+        excluded: Type.Array(Type.String()),
+        testCases: Type.Array(Type.Object({
+          id: Type.String({ minLength: 1 }),
+          entry: Type.String({ minLength: 1 }),
+          command: Type.String({ minLength: 1 }),
+          covers: Type.Array(Type.String()),
+          executionScope: Type.Array(Type.String()),
+        }, { additionalProperties: true })),
+        testRepairs: Type.Array(Type.Any()),
+      }, { additionalProperties: true }),
+      discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
+    }, { additionalProperties: true });
   } else if (role === 'tester') {
     result = Type.Object({
       discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
@@ -155,6 +176,26 @@ export function piRoleResultToolSchema(role) {
         reason: Type.String({ minLength: 1 }),
       }, { additionalProperties: false }))),
     }));
+  } else if (role === 'tech_lead') {
+    const stage = Type.Union([Type.Literal('RUN'), Type.Literal('SKIP')]);
+    const route = Type.Object({
+      requestType: Type.Union([
+        Type.Literal('PLAN'), Type.Literal('REPLAN'),
+        Type.Literal('TASK_SPLIT'), Type.Literal('TASK_REPAIR'),
+        Type.Literal('INTERFACE_REPAIR'),
+      ]),
+      reason: Type.String({ minLength: 1 }),
+      scope: Type.Object({
+        featureRoots: Type.Array(Type.String({ minLength: 1 })),
+        milestoneRoots: Type.Array(Type.String({ minLength: 1 })),
+      }, { additionalProperties: false }),
+      stages: Type.Object({ feature: stage, milestone: stage, interface: stage }, { additionalProperties: false }),
+      constraints: Type.Optional(Type.Object({
+        preserveCompletedTasks: Type.Optional(Type.Boolean()),
+        preserveProductSemantics: Type.Optional(Type.Boolean()),
+      }, { additionalProperties: false })),
+    }, { additionalProperties: false });
+    result = Type.Optional(Type.Union([route, openResult()]));
   } else if (role === 'tech_lead_critic') {
     result = Type.Object({
       issues: Type.Array(Type.Object({
@@ -178,6 +219,13 @@ export function piRoleResultToolSchema(role) {
     }, { additionalProperties: true });
   }
 
+  if (role === 'tech_lead') {
+    const routeSchema = result.anyOf[0];
+    return Type.Union([
+      Type.Object({ outcome: Type.Literal('PLANNING_ROUTE'), ...commonFields, result: routeSchema }, { additionalProperties: false }),
+      Type.Object({ outcome: Type.Union([Type.Literal('PLANNED'), Type.Literal('REPLANNED')]), ...commonFields, result: Type.Optional(openResult()) }, { additionalProperties: false }),
+    ]);
+  }
   return Type.Object({
     outcome,
     ...commonFields,
@@ -222,6 +270,7 @@ const deliveryDeclaredResultSchema = Type.Object({
 }, { additionalProperties: false });
 
 export function piDeclaredRoleResultToolSchema(role) {
+  if (role === "test_engineer") return piRoleResultToolSchema(role);
   if (!DELIVERY_ROLES.has(role)) return piRoleResultToolSchema(role);
   return Type.Object({
     outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
@@ -231,7 +280,7 @@ export function piDeclaredRoleResultToolSchema(role) {
 }
 
 export function deliveryToolPolicy(role, toolName) {
-  if (role === 'reviewer' && REVIEWER_MUTATING_TOOLS.has(toolName)) {
+  if ((role === 'reviewer' || role === 'ux_reviewer') && REVIEWER_MUTATING_TOOLS.has(toolName)) {
     return { block: true, reason: `Ariad reviewer runtime policy denies mutating tool: ${toolName}` };
   }
   return null;
@@ -343,6 +392,9 @@ export async function createDefaultPiRunSession(spec) {
       registerAriadProjectTools(pi, {
         workspace,
         reportIssue: spec.reportIssue ?? null,
+        insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
+        recoverLegacyIssueBlockedTask: spec.recoverLegacyIssueBlockedTask ?? null,
+        requestPlanning: spec.requestPlanning ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
       });
       if (DELIVERY_ROLES.has(spec.role)) {

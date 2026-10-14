@@ -165,7 +165,7 @@ export async function serveAriad(root) {
               id: input.id, instruction: input.instruction,
             });
           } else if (input.action === 'daemon_shutdown') {
-            const active = manager.list().filter(p => p.desiredState !== 'STOPPED');
+            const active = manager.list().filter(p => p.desiredState === 'RUNNING');
             if (active.length) throw new Error('ARIAD_DAEMON_HAS_ACTIVE_PROJECTS: stop projects first: ' + active.map(p => p.id).join(', '));
             value = { stopping: true, pid: process.pid };
             setTimeout(() => { void shutdown(); }, 100);

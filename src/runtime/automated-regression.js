@@ -32,6 +32,7 @@ function changedArtifacts(workspace) {
   return uniq([...tracked, ...untracked]).filter(rel => {
     if (rel.startsWith('.ariad/') || rel.startsWith('.godot/')) return false;
     if (rel.includes('/__tests__/') || rel.startsWith('__tests__/')) return false;
+    if (rel.includes('/__integration_tests__/') || rel.startsWith('__integration_tests__/')) return false;
     if (rel.startsWith('tests/')) return false;
     return TRACKED_EXTENSIONS.has(extname(rel).toLowerCase());
   });

@@ -40,6 +40,7 @@ function roles() {
       ? { stage: 'tester', state: 'READY' }
       : { stage: 'developer', state: 'READY' },
   });
+  registry.register('test_engineer', {prepare: ({task}) => ({provider:'fake',prompt:'plan tests',resources:['gpu']}),transition:()=>({stage:'tester',state:'READY'})});
   registry.register('tester', {
     prepare: ({ task }) => ({ provider: 'fake', prompt: `test ${task.id}`, resources: ['gpu'] }),
     transition: ({ result }) => result.outcome === 'PASS'
@@ -127,9 +128,15 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
 
     await scheduler.tick('P1');
     task = store.getTask('T1');
-    assert.equal(task.stage, 'tester');
+    assert.equal(task.stage, 'test_engineer');
     assert.equal(task.state, 'WORKING');
 
+    provider.complete(task.execution.externalId, {result:{testPlan:{testCases:[{entry:'fixture',command:'node --test',covers:[],executionScope:[]}]}}});
+    await supervisor.audit('P1');
+    await scheduler.tick('P1');
+    task = store.getTask('T1');
+    assert.equal(task.stage, 'tester');
+    assert.equal(task.state, 'WORKING');
     provider.complete(task.execution.externalId);
     await supervisor.audit('P1');
     await scheduler.tick('P1');
@@ -142,7 +149,7 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
     await scheduler.tick('P1');
     task = store.getTask('T1');
     assert.equal(task.state, 'DONE');
-    assert.equal(task.history.filter(x => x.type === 'ROLE_RESULT').length, 3);
+    assert.equal(task.history.filter(x => x.type === 'ROLE_RESULT').length, 4);
     assert.deepEqual(task.artifacts, ['review.txt']);
     store.close();
   } finally {
@@ -176,7 +183,7 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
     await supervisor.audit('P2');
     await scheduler.tick('P2');
     a = store.getTask('A');
-    assert.equal(a.stage, 'tester');
+    assert.equal(a.stage, 'test_engineer');
     assert.equal(a.state, 'WORKING');
     assert.equal(store.getTask('B').state, 'READY');
     assert.equal(store.getTask('C').state, 'READY');
@@ -1617,7 +1624,9 @@ test('default delivery roles are reuse-first but require fresh verification evid
     });
     const task = store.getTask('T-reuse');
     assert.match(definitions.developer.prepare({ task }).context.roleProtocol, /reuse\/fix\/extend/i);
-    assert.match(definitions.tester.prepare({ task }).context.roleProtocol, /freshly executed/i);
+    assert.throws(() => definitions.tester.prepare({ task }), /TEST_PLAN_MISSING/);
+    const approved = store.appendTaskHistory(task.id, task.version, {type:'ROLE_RESULT',role:'test_engineer',outcome:'PASS',result:{testPlan:{testCases:[{entry:'fixture',command:'node --test',covers:[],executionScope:[]}]}}});
+    assert.match(definitions.tester.prepare({ task: approved }).context.roleProtocol, /fresh execution evidence/i);
     assert.match(definitions.reviewer.prepare({ task }).context.roleProtocol, /fresh evidence/i);
     store.close();
   } finally {
@@ -2905,7 +2914,7 @@ test('issue intake deduplicates sources and tracks triage assignment through pla
 });
 
 
-test('delivery role blocks acceptance and reports a discovered cross-scope issue for TL triage', async () => {
+test('delivery role reports cross-scope issue without blocking source task', async () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
   try {
@@ -2914,6 +2923,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
+      artifactRoot: dir,
       reportIssue: issue => {
         reported.push(issue);
         return store.createIssue({ projectId: 'P-cross-scope', id: 'issue:P-cross-scope:ch21', ...issue });
@@ -2938,8 +2948,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
     assert.equal(reported.length, 1);
     assert.equal(reported[0].sourceTaskId, 'regression-m4');
     assert.equal(reported[0].reportedBy, 'tester');
-    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
-    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-cross-scope:ch21']);
+    assert.equal(followUp?.patch?.state, undefined);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2947,7 +2956,7 @@ test('delivery role blocks acceptance and reports a discovered cross-scope issue
 });
 
 
-test('previously reported blocking issue gates final PASS even when role result omits discoveredIssues', async () => {
+test('previously reported issue cannot veto source task PASS before TL triage', async () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
   try {
@@ -2966,14 +2975,14 @@ test('previously reported blocking issue gates final PASS even when role result 
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
+      artifactRoot: dir,
       reportIssue: issue => store.createIssue({ projectId: 'P-early-issue', ...issue }),
     });
     const followUp = await definitions.tester.afterPersist({
       task: { id: 'T1', projectId: 'P-early-issue', stage: 'tester', history: [] },
       result: { outcome: 'PASS', result: { criteria: [], interfaceVerifications: [] } },
     });
-    assert.equal(followUp.patch.state, 'WAITING_REPLAN');
-    assert.deepEqual(followUp.transitionHistory.issueIds, ['issue:P-early-issue:blocker']);
+    assert.equal(followUp?.patch?.state, undefined);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -3072,4 +3081,53 @@ test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('TL inserts triaged fix into live delivery DAG without touching active roles or plan version', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-insert' });
+    store.createTask({ id: 'done', projectId: 'P-insert', state: 'DONE' });
+    store.createTask({ id: 'active', projectId: 'P-insert', state: 'WORKING', dependsOn: ['done'] });
+    store.createTask({ id: 'next', projectId: 'P-insert', state: 'READY', dependsOn: ['active'] });
+    const issue = store.createIssue({ projectId: 'P-insert', title: 'Independent regression', description: 'Needs fix' });
+    const before = store.getTask('active');
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tester', task: { id: 'fix' } }), /REQUIRES_TECH_LEAD/);
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', dependsOn: ['next'] }, beforeTaskIds: ['next'] }), /cycle/);
+    assert.equal(store.getTask('fix'), null);
+    assert.deepEqual(store.getTask('next').dependsOn, ['active']);
+    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix' }, beforeTaskIds: ['active'] }), /idle READY/);
+    const projectVersion = store.getProject('P-insert').version;
+    store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', title: 'Fix regression', dependsOn: ['done'] }, beforeTaskIds: ['next'] });
+    assert.deepEqual(store.getTask('next').dependsOn, ['active', 'fix']);
+    assert.equal(store.getTask('active').version, before.version);
+    assert.equal(store.getProject('P-insert').version, projectVersion);
+    assert.equal(store.getIssue(issue.id).state, 'ASSIGNED');
+    assert.deepEqual(store.getIssue(issue.id).assignedTaskIds, ['fix']);
+    assert.deepEqual(store.getTask('fix').issueRefs, [issue.id]);
+  } finally {
+    store.close(); fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('TL one-off legacy issue recovery preserves issue and refuses genuine replans', () => {
+  const { dir, file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  try {
+    store.createProject({ id: 'P-recover' });
+    store.createTask({ id: 'legacy', projectId: 'P-recover', stage: 'tester', state: 'WAITING_REPLAN' });
+    const issue = store.createIssue({ projectId: 'P-recover', sourceTaskId: 'legacy', title: 'Unrelated defect', description: 'Reported from dev' });
+    const task = store.getTask('legacy');
+    store.appendTaskHistory(task.id, task.version, { type: 'DISCOVERED_BLOCKING_ISSUE', issueIds: [issue.id] });
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tester', reason: 'legacy bug' }), /REQUIRES_TECH_LEAD/);
+    const restored = store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'Legacy issue incorrectly blocked AC' });
+    assert.equal(restored.state, 'READY');
+    assert.equal(restored.stage, 'tester');
+    assert.equal(restored.history.at(-1).type, 'TL_LEGACY_ISSUE_BLOCK_RECOVERY');
+    assert.equal(store.getIssue(issue.id).state, 'OPEN');
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'again' }), /not idle/);
+    store.createTask({ id: 'real', projectId: 'P-recover', state: 'WAITING_REPLAN' });
+    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'real', actor: 'tech_lead', reason: 'bad' }), /evidence missing/);
+  } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

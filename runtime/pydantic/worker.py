@@ -134,7 +134,7 @@ def build_model(config: dict[str, Any]):
                 "summary": config.get("summary", "Pydantic runtime test completed."),
                 "keyPoints": ["pydantic-ai-agent-loop"],
                 "artifacts": [],
-                "result": {"backend": "test"},
+                "result": config.get("result", {"backend": "test"}),
             })])
 
         return FunctionModel(deterministic_model)

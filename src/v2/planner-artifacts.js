@@ -273,6 +273,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     assertStringArray(item.art.deliverables, `${path}.art.deliverables`);
     if (typeof item.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
   }
+  if (item.ux != null && (typeof item.ux !== 'object' || Array.isArray(item.ux) || typeof item.ux.required !== 'boolean' || Object.keys(item.ux).some(key => key !== 'required'))) fail(`${path}.ux`, 'must contain only boolean required');
   if (item.history != null && !Array.isArray(item.history)) fail(`${path}.history`, 'must be an array when present');
   const normalized = {
     id: item.id,
@@ -285,6 +286,7 @@ function normalizeTask(item, milestoneId, logicalById, taskIds) {
     testStrategy: item.testStrategy,
     verification: structuredClone(item.verification ?? []),
     art: item.art == null ? null : structuredClone(item.art),
+    ux: item.ux == null ? null : structuredClone(item.ux),
     history: structuredClone(item.history ?? []),
     ...(item.issueRefs?.length ? { issueRefs: [...item.issueRefs] } : {}),
   };

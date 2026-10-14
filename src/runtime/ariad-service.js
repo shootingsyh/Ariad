@@ -181,7 +181,7 @@ export class AriadService {
     return { ...this.status(name), migration };
   }
 
-  async ensureRunning(name) {
+  async ensureRunning(name, audit = {}) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
     requireRuntimeDependencies();
@@ -189,6 +189,7 @@ export class AriadService {
     const project = this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'START'),
+      { ...audit, action: 'START' },
     );
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
@@ -197,7 +198,7 @@ export class AriadService {
     return this.status(name);
   }
 
-  async ensurePaused(name) {
+  async ensurePaused(name, audit = {}) {
     const current = this.manager.status(name);
     if (current.desiredState === 'STOPPED') {
       throw new Error(`project ${current.id} is STOPPED; start or resume it before pausing`);
@@ -205,12 +206,13 @@ export class AriadService {
     this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'PAUSE'),
+      { ...audit, action: audit.action === 'SOFT_STOP' ? 'SOFT_STOP' : 'PAUSE' },
     );
     this.wake('paused');
     return this.status(name);
   }
 
-  async ensureResumed(name) {
+  async ensureResumed(name, audit = {}) {
     const current = this.manager.status(name);
     requireCompleteRoleModels(current.roleModels ?? {});
     requireRuntimeDependencies();
@@ -218,6 +220,7 @@ export class AriadService {
     this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'RESUME'),
+      { ...audit, action: 'RESUME' },
     );
     let recoveredTasks = [];
     if (current.executionState === 'FAILED') {
@@ -229,11 +232,12 @@ export class AriadService {
     return { ...this.status(name), recoveredTasks };
   }
 
-  async ensureStopped(name) {
+  async ensureStopped(name, audit = {}) {
     const current = this.manager.status(name);
     const project = this.manager.setDesiredState(
       name,
       PROJECT_CONTROL_MACHINE.resolve(current.desiredState, 'STOP'),
+      { ...audit, action: 'STOP' },
     );
     const runtime = this.runtimes.get(project.id);
     let cancelledTasks = [];

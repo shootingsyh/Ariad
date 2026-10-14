@@ -82,6 +82,7 @@ test('mock project retries business failure through developer and then succeeds'
       }
       return {
         kind: 'test',
+        result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {},
         model: context.role,
         outcome: 'PASS',
         summary: `Mock ${context.role} completed.`,
@@ -109,13 +110,15 @@ test('mock project retries business failure through developer and then succeeds'
       roleResults.map(entry => [entry.role, entry.outcome]),
       [
         ['developer', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['tester', 'NOT_PASS'],
         ['developer', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['tester', 'PASS'],
         ['reviewer', 'PASS'],
       ],
     );
-    assert.deepEqual(roleStarts, ['developer', 'tester', 'developer', 'tester', 'reviewer']);
+    assert.deepEqual(roleStarts, ['developer', 'test_engineer', 'tester', 'developer', 'test_engineer', 'tester', 'reviewer']);
 
     assert.ok(snapshots.some(s => s.stage === 'developer' && s.state === 'WORKING'));
     assert.ok(snapshots.some(s => s.stage === 'tester'));
@@ -145,6 +148,7 @@ test('mock project blocks after repeated runtime failures and resume requeues it
       }
       return {
         kind: 'test',
+        result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {},
         model: context.role,
         outcome: 'PASS',
         summary: `Recovered ${context.role} completed.`,
@@ -198,6 +202,7 @@ test('mock project blocks after repeated runtime failures and resume requeues it
         .map(entry => [entry.role, entry.outcome]),
       [
         ['developer', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['tester', 'PASS'],
         ['reviewer', 'PASS'],
       ],
@@ -226,6 +231,7 @@ test('pause lets in-flight role settle but prevents next role dispatch until res
       }
       return {
         kind: 'test',
+        result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {},
         model: context.role,
         outcome: 'PASS',
         summary: `Mock ${context.role} completed.`,

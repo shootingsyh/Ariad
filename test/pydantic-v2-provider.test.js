@@ -281,7 +281,7 @@ test('standalone project runtime drives default developer tester reviewer roles 
   });
   seed.close();
 
-  const provider = new PydanticV2Provider(new PydanticRuntimeClient());
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), { resolveModelConfig: (_model, context) => ({ kind: 'test', model: context.role, result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {} }) });
   const runtime = new StandaloneProjectRuntime({
     project,
     provider,
@@ -298,7 +298,7 @@ test('standalone project runtime drives default developer tester reviewer roles 
 
     assert.equal(task.state, 'DONE');
     const results = task.history.filter(entry => entry.type === 'ROLE_RESULT');
-    assert.deepEqual(results.map(entry => entry.role), ['developer', 'tester', 'reviewer']);
+    assert.deepEqual(results.map(entry => entry.role), ['developer', 'test_engineer', 'tester', 'reviewer']);
     assert.ok(results.every(entry => entry.outcome === 'PASS'));
     assert.ok(results.every(entry => entry.source === undefined));
   } finally {

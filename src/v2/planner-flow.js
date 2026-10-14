@@ -131,6 +131,22 @@ function migrationFinalizeFlowTasks(batchId) {
 }
 
 export function plannerFlowTasks(batchId, requests) {
+  // Explicit opt-in: preserve the existing planner/migration flows until their
+  // semantic artifact formats are migrated to the specialist architecture.
+  if (requests.length === 1 && requests[0]?.request?.purpose === 'PLANNING_ROUTE') {
+    const id = name => taskId(batchId, name);
+    return [
+      { id: id('route'), stage: 'tech_lead', input: {
+        planningBatchId: batchId, purpose: 'PLANNING_ROUTE',
+        requests: structuredClone(requests),
+      } },
+      { id: id('route-validate'), stage: 'plan_validator', dependsOn: [id('route')],
+        input: { planningBatchId: batchId, purpose: 'PLANNING_ROUTE_VALIDATE' } },
+      { id: id('route-critic'), stage: 'tech_lead_critic', dependsOn: [id('route-validate')],
+        input: { planningBatchId: batchId, purpose: 'PLANNING_ROUTE_CRITIC' } },
+    ];
+  }
+
   if (isVersionMigrationRequest(requests)) {
     return migrationFrontierFlowTasks(batchId, requests);
   }

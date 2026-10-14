@@ -30,6 +30,11 @@ export class AriadControlTools {
     };
   }
 
+  setUxReview(name, uxReview) {
+    if (!name) throw new Error('project name is required');
+    return this.manager.setUxReview(name, uxReview);
+  }
+
   setRoleModels(name, roleModels) {
     if (!name) throw new Error('project name is required');
     const normalized = normalizeRoleModels(roleModels ?? {});
@@ -54,25 +59,25 @@ export class AriadControlTools {
     return this.manager.adopt(name, sourcePath, { roleModels });
   }
 
-  start(name) {
-    return this.service.ensureRunning(name);
+  start(name, audit = {}) {
+    return this.service.ensureRunning(name, audit);
   }
 
-  pause(name) {
-    return this.service.ensurePaused(name);
+  pause(name, audit = {}) {
+    return this.service.ensurePaused(name, audit);
   }
 
-  softStop(name) {
-    return this.service.ensurePaused(name);
+  softStop(name, audit = {}) {
+    return this.service.ensurePaused(name, { ...audit, action: 'SOFT_STOP' });
   }
 
 
-  resume(name) {
-    return this.service.ensureResumed(name);
+  resume(name, audit = {}) {
+    return this.service.ensureResumed(name, audit);
   }
 
-  stop(name) {
-    return this.service.ensureStopped(name);
+  stop(name, audit = {}) {
+    return this.service.ensureStopped(name, audit);
   }
 
   openIssue(name, issue) {
@@ -89,14 +94,15 @@ export class AriadControlTools {
       case 'status': return this.status(input.name);
       case 'models': return this.models(input.name ?? null);
       case 'set_role_models': return this.setRoleModels(input.name, input.roleModels);
+      case 'set_ux_review': return this.setUxReview(input.name, input.uxReview);
       case 'create': return this.create(input);
       case 'takeover': return this.takeover(input);
       case 'adopt': return this.adopt(input);
-      case 'start': return this.start(input.name);
-      case 'pause': return this.pause(input.name);
-      case 'soft_stop': return this.softStop(input.name);
-      case 'resume': return this.resume(input.name);
-      case 'stop': return this.stop(input.name);
+      case 'start': return this.start(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
+      case 'pause': return this.pause(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
+      case 'soft_stop': return this.softStop(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
+      case 'resume': return this.resume(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
+      case 'stop': return this.stop(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'open_issue': return this.openIssue(input.name, input.issue ?? input);
       case 'list_issues': return this.listIssues(input.name, input.states ?? null);
       default: throw new Error(`unknown Ariad control action: ${action}`);

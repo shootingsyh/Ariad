@@ -219,12 +219,16 @@ function makeRealPlannerPiFactory(workspace) {
           }],
         };
       }
+    } else if (spec.role === 'test_engineer') {
+      outcome = 'PASS';
+      workCalls = [fauxToolCall('read', { path: 'feature.js' })];
+      result = { testPlan: { scope: ['feature.js'], excluded: [], testCases: [{ id: 'TC-1', entry: 'feature.js', command: 'node --check feature.js', covers: ['AC1'], executionScope: ['feature.js'] }], testRepairs: [] } };
     } else if (spec.role === 'tester') {
       outcome = 'PASS';
       workCalls = [fauxToolCall('read', { path: 'feature.js' })];
       result = {
         criteria: [{
-          criterionId: 'AC-1',
+          criterionId: 'AC1',
           status: 'SATISFIED',
           evidenceType: 'behavioral',
           evidence: ['feature.js defines projectRun'],
@@ -456,6 +460,7 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
       [
         ['developer', 'PASS'],
         ['developer', 'PASS'],
+        ['test_engineer', 'PASS'],
         ['tester', 'PASS'],
         ['reviewer', 'PASS'],
       ],

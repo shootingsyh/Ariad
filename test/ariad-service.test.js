@@ -39,8 +39,10 @@ test('AriadService owns reconcile and pause/resume without OpenClaw', async () =
   });
   seed.close();
 
-  const provider = new PydanticV2Provider(new PydanticRuntimeClient());
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), { resolveModelConfig: (_model, context) => ({ kind: 'test', model: context.role, result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {} }) });
+  const serviceErrors = [];
   const service = new AriadService({
+    logger: { error: message => serviceErrors.push(String(message)) },
     manager,
     provider,
     safetyIntervalMs: 60_000,
@@ -67,7 +69,7 @@ test('AriadService owns reconcile and pause/resume without OpenClaw', async () =
     }
 
     const status = service.status(project.id);
-    assert.equal(status.executionState, 'SUCCEEDED');
+    assert.equal(status.executionState, 'SUCCEEDED', JSON.stringify({ serviceErrors, status, task: service.runtimeFor(manager.status(project.id)).store.getTask('T-service')?.state }));
     assert.equal(status.runtime, 'standalone');
 
     taskStore = new SQLiteV2Store(project.stateDb);
@@ -76,7 +78,7 @@ test('AriadService owns reconcile and pause/resume without OpenClaw', async () =
     assert.equal(task.state, 'DONE');
     assert.deepEqual(
       task.history.filter(entry => entry.type === 'ROLE_RESULT').map(entry => entry.role),
-      ['developer', 'tester', 'reviewer'],
+      ['developer', 'test_engineer', 'tester', 'reviewer'],
     );
   } finally {
     await service.stop();

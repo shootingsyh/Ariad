@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
+import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
@@ -15,6 +16,8 @@ import {
   validateFrontierPass,
   hasBoundaryContracts,
   validateBoundaryContracts,
+  loadPlannerHierarchy,
+  loadBoundaryContracts,
   validateTaskOwnershipCompilation,
 } from './interface-contracts.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
@@ -247,6 +250,12 @@ const ARTIST_PROMPT = [
   'When revisiting after Tester/Reviewer/Debugger feedback, inspect latest history and modify only the affected assets. Developer and the normal regression flow will run afterward.',
 ].join(' ');
 
+const CODE_NAVIGATION_PROMPT = [
+  'CODE NAVIGATION: For GDScript, first use ariad_document_symbols to inspect a file structure and ariad_call_graph to inspect functions reachable from an entrypoint, before reading large implementation or test files.',
+  'Use ariad_definition and ariad_references for symbol resolution, and ariad_workspace_symbols for cross-file discovery. Read only the relevant function bodies and dependencies after navigating the structure.',
+  'The call graph is best-effort and not exhaustive for dynamic calls, signals or inherited behavior. Fall back to grep/read when a tool fails or cannot resolve a needed target; do not blindly trust static output.',
+].join('\n');
+
 const DEVELOPER_REUSE_PROMPT = [
   "You are Ariad's developer role.",
   'Inspect task history before changing code.',
@@ -254,14 +263,19 @@ const DEVELOPER_REUSE_PROMPT = [
   'Historical completion is context only. Produce the current implementation required by the acceptance criteria.',
 ].join(' ');
 
+const TEST_ENGINEER_PROMPT = [
+  "You are Ariad's Test Engineer. Own real integration, journey and E2E test discovery, selection, authoring and repair; never execute the actual integration tests.",
+  "Read task acceptance criteria, required interfaces, changed code and automated CI evidence. Inspect BOTH test names and the real execution call graph, phases, setup and side effects.",
+  "Find the minimal complete test selection for this task. If a broad test includes unrelated chapters or phases, author a scope-limited entry first; do not authorize its broad entry.",
+  "You may write, split or repair integration tests but not product implementation. Static syntax and load checks are allowed, full behavioral execution is not.",
+  "Return PASS only with result.testPlan containing scope, excluded, testCases and testRepairs. Each testCase must have id, entry, command, covers and executionScope. Cover every AC, and include every new or modified relevant test. Use repository-relative entry paths. Return NOT_PASS if the plan cannot safely be prepared.",
+].join('\n');
+
 const TESTER_REUSE_PROMPT = [
-  "You are Ariad's tester role.",
-  'When media assets or prior Artist work are involved, capture suitable evidence such as screenshots, rendered frames, clips, or audio metadata/checks. If the asset itself appears wrong rather than its integration, describe that diagnosis in the result, but do not route work to another role; Ariad owns repair routing.',
-  'Inspect task history and the existing test code before creating new tests.',
-  'Reuse valid existing tests. Fix, extend, add, or remove tests only when needed to make them accurately cover the current acceptance criteria.',
-  'All relevant verification must be freshly executed now and must produce fresh evidence; historical test passes are not evidence for this run.',
-  'Map each acceptance criterion id to actual verification, and do not treat the existence of a similarly named test as sufficient coverage.',
-  'For every required criterion return one criteria entry with status SATISFIED, FAILED, UNVERIFIED, or BLOCKED plus evidence and reason. Ariad computes the aggregate verdict; you cannot make PASS override an unsatisfied criterion.',
+  "You are Ariad's tester role. Verify the current task's acceptance criteria and required interface behavior using executable evidence.",
+  'Inspect the canonical task, its repair instructions, task history, automatedRegression, and existing tests before deciding what to execute.',
+  'For media/assets, capture appropriate visual/audio evidence and report asset defects without bypassing Ariad repair routing.',
+  'For each acceptance criterion return a criteria entry with SATISFIED, FAILED, UNVERIFIED, or BLOCKED, backed by evidence and reason; Ariad computes the aggregate verdict.',
 ].join(' ');
 
 const REVIEWER_FRESH_EVIDENCE_PROMPT = [
@@ -278,36 +292,31 @@ function deliveryRoleSuffix(role) {
       "YOUR ROLE: DEVELOPER",
       "Implement the assigned task and the interfaces listed in the canonical task artifact.",
       "Make the smallest correct implementation that satisfies the interface contracts and acceptance criteria. Run focused local/unit/component checks for the changed implementation and avoid unrelated refactors.",
-      "Follow Ariad's local test convention for code/data artifacts: the leaf CI test for path/to/foo.ext is path/to/__tests__/foo__test.gd; the only broader automatic CI level is the parent folder test parent/__tests__/<folder>__test.gd. Keep these CI tests cheap, deterministic, and local. Broader integration/journey/milestone/release tests stay outside that two-level naming path and are task-triggered.",
+      "CI tests live in __tests__ directories and must be cheap, deterministic, and safe to repeat. The automatic CI selection for a changed artifact covers its own directory and its immediate parent directory only, even when the changed artifact belongs to a high-level integration module. Mock-based integration tests may live in __tests__ and participate in CI. Real-system integration, journey, milestone, campaign, and E2E tests belong in __integration_tests__ and are Tester-owned.",
       "When you add or materially change a leaf feature and a cheap deterministic local check is appropriate, add/update its colocated leaf CI test. Do not create a broad CI test merely to silence a coverage gap.",
-      "Do not run broad milestone, campaign, repository-wide, or sibling-feature regression suites merely as a precaution. Ariad runs deterministic locality CI after Developer completion and Tester inspects that report. A new implementation or registry entry under an unchanged interface contract is local and does not justify rerunning sibling regressions. Only run wider dependency regression yourself when the semantic interface contract changed; state that contract-change reason explicitly.",
+      "Developer MUST NOT execute any test outside __tests__, including historical tests/ scripts and __integration_tests__. Run only relevant CI tests for current changes, not unrelated sibling CI. Ariad runs automatic current-directory plus parent-directory CI after Developer completion. If a contract change warrants real integration or wider regression, describe the required verification for Tester; never execute it as Developer.",
       "Interface ownership is already defined by the plan. Do not invent, remove, rename, or silently reassign interfaces.",
       "When a required interface realization is newly created or relocated, return result.interfaceRealizations with {interfaceId, anchors:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}. These are hints only; Ariad independently resolves and seals them.",
       "If an existing binding remains valid and unchanged, you do not need to restate it.",
       "If implementation requires a new interface, changes an existing interface's meaning, or reveals the task belongs to a different boundary, report the planning/interface mismatch instead of silently changing the contract.",
       "Before completion, ensure every required interface is implemented and any new or relocated realization is identified.",
-      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Use blocking=true when normal acceptance must wait for repair. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Scope decides who repairs the defect; it does not make the defect acceptable. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
+      "If you discover a real defect or missing work outside the current task ownership, do not silently fix it and do not dismiss it as out-of-scope. Call ariad_report_issue as soon as you have concrete evidence; it is non-terminal and starts Tech Lead triage immediately while you may continue useful bounded work. Also include the issue in result.discoveredIssues as a fallback/final record when practical. Task scope defines the goal, not a restriction on files or components you may change. Fix any code necessary for current acceptance; TL triages independent issues. For a defect owned by this same task, use the normal NOT_PASS/repair loop rather than creating unnecessary cross-scope work.",
     ].join('\n');
   }
+  if (role === 'test_engineer') return TEST_ENGINEER_PROMPT;
   if (role === 'tester') {
     return [
-      "YOUR ROLE: TESTER",
-      "Verify that implemented behavior satisfies the required interface contracts and task acceptance criteria.",
-      "Ariad has already performed mechanical Interface Seal checks such as binding existence and anchor resolvability. Do not redo those checks as your primary task; verify behavior.",
-      "For each required Executor, derive verification from its input, output, and sideEffects. For each required Provider, verify both that the provider produces the promised thing and that the produced thing behaves according to its own input/output/sideEffects contract.",
-      "Use realistic entry points and state transitions. Prefer executable evidence over inspection-only reasoning. Add or update test code when needed, and do not bypass required product flow merely to make a test pass.",
-      "Inspect automatedRegression first. Ariad only auto-runs the two locality CI levels: <dir>/__tests__/<artifact>__test.gd and <parent>/__tests__/<dir>__test.gd. It never scans siblings or climbs farther. A coverageGaps entry means no local CI test was found; do not compensate by automatically running a broad suite.",
-      "You decide whether acceptance/risk requires additional task-triggered integration, journey, milestone, or release tests. Invoke only the extra cases needed to close a concrete evidence gap. Every task-triggered test you run must map to a specific acceptance criterion, interface behavior, or observed risk; do not replay sibling, prior-stage, or historical suites merely because they exist or appeared in Developer history. If a missing local test is a durable structural gap, add a focused test when appropriate or return a precise gap so normal planning/development can add it; do not turn heavyweight tests into CI just to get a green report.",
-      "On a Tester repair attempt, inspect the canonical task artifact repair section before executing anything. If the latest repair event says rerunRequired=false or repairKind=RESULT_EVIDENCE_PACKAGING, reuse the immediately preceding fresh Tester execution evidence and DO NOT rerun tests. Repair only the structured result/evidence packaging requested by the seal and resubmit. Rerun only when the seal explicitly identifies stale, failed, contradictory, or behaviorally insufficient execution evidence.",
-      "For PASS, return result.interfaceVerifications for every required interface as [{interfaceId,evidence:[...],anchors?:[{kind:\"symbol\"|\"range\",file,symbol?,startLine?,endLine?}]}]. Evidence is required. When verification code has a stable source location, include anchors so Ariad can independently resolve and persist them.",
-      "PASS requires behavioral evidence for every required interface relevant to this task. If a sealed realization does not satisfy its contract, return NOT_PASS and identify the failed interface. If the contract is inconsistent or impossible, report that rather than weakening the test.",
-      "If testing reveals a defect outside the current task ownership, call ariad_report_issue immediately once evidence is concrete; the tool is non-terminal and starts Tech Lead triage/assignment without ending this Tester run. A reachable invalid/ambiguous product state remains a defect even if a legal workaround can eventually complete the flow. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as a fallback/final record when practical. Do not use the issue path for an ordinary failure clearly owned by this same task; return NOT_PASS for that.",
+      "YOUR ROLE: TESTER. Execute only the Test Engineer's approved testPlan from the most recent test_engineer PASS in task history.",
+      "Before running, check each planned entry exists and the executable scope matches the task. Never expand the test selection or run an ALL/full-campaign entry for a narrow task.",
+      "Run every selected case and every newly authored/repaired relevant test. Do not edit test or product code. If a plan is missing, stale, or incorrect, return NOT_PASS with result.testPlanInvalid=true and concrete feedback so Scheduler routes to Test Engineer.",
+      "Use fresh execution evidence for each acceptance criterion and required interface. Reuse fresh task-specific automated CI results when applicable; historical integration results alone are insufficient.",
+      "Return criterion-level statuses and interfaceVerifications, and report independent defects through ariad_report_issue. A product failure is NOT_PASS and follows Developer repair; never silently broaden scope.",
     ].join('\n');
   }
   if (role === 'reviewer') {
     return [
       "YOUR ROLE: REVIEWER",
-      "Available tools: read, grep, find, ls, bash, ariad_code_search, ariad_interface_search, ariad_memory_search, ariad_session_history, ariad_report_issue, ariad_role_result. Do not try other tools.",
+      CODE_NAVIGATION_PROMPT,
       "Review the completed task as an evidence chain: task ownership -> required interface contract -> implementation realization -> Tester verification -> acceptance criteria.",
       "If and only if the review will PASS, finalize source control before ariad_role_result: use bash only for git status/diff/add/commit/push, stage only the reviewed product code/data/tests/assets for this delivery, commit them with a concise task-specific message, and push the current branch. Never stage runtime/generated state such as .ariad/state.db, .ariad/pi, .ariad/artifacts/task-context, or .godot. Do not use bash to run tests, edit files, or perform unrelated shell work. If source-control finalization fails, do not claim a clean PASS; report the failure explicitly.",
       "Do not redo repository-wide discovery or repeat Tester work unless evidence is contradictory or insufficient.",
@@ -316,7 +325,7 @@ function deliveryRoleSuffix(role) {
       "Reject missing links, prose-only claims where executable evidence should exist, silent semantic interface changes, and integration code owned at the wrong Feature or Milestone level.",
       "For PASS, return result.interfaceReviews for every required interface as [{interfaceId,status:\"APPROVED\",reason}]. Ariad independently checks the realization and Tester verification chain before accepting the review.",
       "PASS only when contract, implementation, evidence, and acceptance criteria agree. On NOT_PASS identify the exact broken interface/evidence link.",
-      "When review discovers an out-of-scope defect, call ariad_report_issue immediately once evidence is concrete; it is non-terminal and begins Tech Lead triage while review may continue. Do not approve merely because the current task does not own the repair or because a workaround exists. Use blocking=true when normal acceptance must wait for repair, and include it in result.discoveredIssues as fallback/final record when practical. Ordinary defects owned by the reviewed task should remain NOT_PASS feedback to that task rather than unnecessary cross-scope issue work.",
+      "When review discovers an out-of-scope defect, call ariad_report_issue immediately once evidence is concrete; it is non-terminal and begins Tech Lead triage while review may continue. Judge this task against its own acceptance criteria; TL determines whether an independent issue blocks other deliverables. and include it in result.discoveredIssues as fallback/final record when practical. Ordinary defects owned by the reviewed task should remain NOT_PASS feedback to that task rather than unnecessary cross-scope issue work.",
     ].join('\n');
   }
   return null;
@@ -361,7 +370,7 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
         'Reject duplicates/non-defects by leaving delivery unchanged and documenting the disposition in planning artifacts/history.',
         'For a valid issue, assign repair to the correct existing owning Feature/interface when possible; revise boundaries only when ownership is genuinely missing or wrong.',
         'Create or update the smallest bounded delivery repair task. Preserve issueRefs:[issueId] on every delivery task created specifically to resolve that issue so Ariad can track assignment.',
-        'If the issue blocks a source task, add the repair task as a dependency of that source task rather than broadening the source task scope.',
+        'The reporting task is NOT automatically blocked. Judge whether a later READY task or integration gate must depend on the fix; if the source task is WORKING or already completed, do not mutate it. Do not request a pause: PM alone decides stopping policy.',
         JSON.stringify({ issueRequests }, null, 2),
       ].join('\n\n') : null,
       frontierArtifactInstructions(artifactRoot, nodeType),
@@ -407,7 +416,7 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       'Compile the already-defined canonical featureTasks, milestone taskLinks, and milestone integrationTasks into the legacy milestone/tasks compatibility artifacts and add only precise dependency edges required for execution ordering.',
       'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass.',
       'Milestone taskLinks may only add dependencies and verification. Milestone integrationTasks are already defined and must remain milestone-owned.',
-      'Tester owns milestone/cross-feature integration, UI-journey, contract, and E2E test implementation/execution; Developer owns feature implementation plus local/unit/component correctness.',
+      'Developer owns implementation, system wiring and cheap deterministic __tests__ including mock-based integration CI. Tester owns real-system integration, UI journeys, E2E and regression-only verification in __integration_tests__. Automatic CI selects only current-directory and direct-parent __tests__; no sibling or recursive ancestor sweep.',
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
@@ -488,8 +497,12 @@ export function createDefaultV2Roles({
   codeProviderId = 'ariad-code',
   workspace,
   sourceControl = null,
+  uxReviewEnabled = false,
   enqueuePlanning = null,
   reportIssue = null,
+  insertTriagedFixTask = null,
+  recoverLegacyIssueBlockedTask = null,
+  requestPlanning = null,
   artifactRoot = null,
   executionCapabilities = [],
   executionProvenance = {},
@@ -529,28 +542,26 @@ export function createDefaultV2Roles({
         });
       }
     }
-    const blocking = typeof store.listIssues === 'function'
-      ? store.listIssues(task.projectId).filter(issue =>
-          issue.sourceTaskId === task.id
-          && issue.blocking === true
-          && !['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)
-        )
-      : [];
-    if (blocking.length === 0) return null;
-    return {
-      patch: { state: 'WAITING_REPLAN', execution: null },
-      transitionHistory: {
-        type: 'DISCOVERED_BLOCKING_ISSUE',
-        role: task.stage,
-        issueIds: blocking.map(issue => issue.id),
-        at: new Date().toISOString(),
-      },
-    };
+    // Reporting an issue never changes the source task's acceptance outcome.
+    // Only TL triage may establish cross-task or milestone dependencies.
+    return null;
+  };
+
+  const specialistTransition = (task, result, current) => {
+    if (result.outcome !== 'PASS') return { state: 'NEEDS_HUMAN', transitionHistory: {
+      type: 'PLANNING_SPECIALIST_BLOCKED', specialist: current,
+      reason: result.summary ?? null, at: new Date().toISOString(),
+    } };
+    const stages = task.input?.planningRoute?.stages ?? {};
+    const order = ['feature', 'milestone', 'interface'];
+    const roleNames = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
+    const next = order.slice(order.indexOf(current) + 1).find(name => stages[name] === 'RUN');
+    return next ? { stage: roleNames[next], state: 'READY' } : { state: 'DONE' };
   };
 
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
-    const sharedDeliveryContext = ['developer', 'tester', 'reviewer'].includes(task.stage);
+    const sharedDeliveryContext = ['developer', 'test_engineer', 'tester', 'reviewer'].includes(task.stage);
     const roleBoundaryContext = buildRoleBoundaryContext({
       artifactRoot,
       task,
@@ -577,6 +588,9 @@ export function createDefaultV2Roles({
         ...executionMetadata,
       },
       workspace,
+      ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
+      ...(task.stage === 'tech_lead' && recoverLegacyIssueBlockedTask ? { recoverLegacyIssueBlockedTask } : {}),
+      ...(task.stage === 'tech_lead' && requestPlanning ? { requestPlanning } : {}),
       ...(sharedDeliveryContext && reportIssue ? {
         reportIssue: issue => reportIssue(issue),
       } : {}),
@@ -696,9 +710,10 @@ export function createDefaultV2Roles({
     developer: {
       prepare: ({ task }) => prepareLlm(task, [
         DEVELOPER_REUSE_PROMPT,
+        CODE_NAVIGATION_PROMPT,
         deliveryRoleSuffix('developer'),
       ].join('\n\n')),
-      transition: () => ({ stage: 'tester', state: 'READY' }),
+      transition: () => ({ stage: 'test_engineer', state: 'READY' }),
       async afterPersist({ task, result }) {
         const issueFollowUp = processDiscoveredIssues(task, result);
         if (issueFollowUp) return issueFollowUp;
@@ -710,17 +725,44 @@ export function createDefaultV2Roles({
       },
     },
 
+    test_engineer: {
+      prepare: ({ task }) => prepareLlm(task, [CODE_NAVIGATION_PROMPT, deliveryRoleSuffix('test_engineer')].join('\n\n')),
+      transition: ({ task, result }) => {
+        if (result.outcome !== 'PASS') return failureCount(task) >= 3
+          ? { stage: 'project_debugger', state: 'READY' }
+          : { stage: 'developer', state: 'READY' };
+        const plan = result.result?.testPlan;
+        const criteria = acceptanceCriterionIds(task);
+        const cases = plan?.testCases;
+        const valid = Array.isArray(cases) && cases.length > 0
+          && cases.every(c => c && typeof c.entry === 'string' && c.entry.length > 0
+            && typeof c.command === 'string' && c.command.length > 0
+            && Array.isArray(c.covers) && Array.isArray(c.executionScope))
+          && criteria.every(id => cases.some(c => c.covers.includes(id)));
+        if (!valid) return { stage: 'project_debugger', state: 'READY' };
+        return { stage: 'tester', state: 'READY' };
+      },
+      async afterPersist({ task, result }) {
+        return processDiscoveredIssues(task, result);
+      },
+    },
+
     tester: {
-      prepare: ({ task }) => prepareLlm(task, [
+      prepare: ({ task }) => {
+        const approved = [...(task.history ?? [])].reverse().find(h => h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS');
+        if (!approved?.result?.testPlan?.testCases?.length) throw new Error('TEST_PLAN_MISSING: tester cannot start without Test Engineer plan');
+        return prepareLlm(task, [
         TESTER_REUSE_PROMPT,
-        "Ariad has already attempted deterministic two-level locality CI after Developer completion. Inspect automatedRegression first, including changedArtifacts, selection, test results, and coverageGaps. Reuse fresh PASS results. Decide yourself whether the task still needs specific task-triggered integration/journey cases for acceptance or risk; do not broaden automatically, scan sibling tests, or climb the test tree merely for freshness.",
         deliveryRoleSuffix('tester'),
       ].join('\n\n'), {
         evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
-      }),
+        approvedTestPlan: approved.result.testPlan,
+      });
+      },
       transition: ({ task, result }) => {
         if (result.outcome === 'PASS') return { stage: 'reviewer', state: 'READY' };
         if (result.outcome === 'NOT_PASS') {
+          if (result.result?.testPlanInvalid === true) return { stage: 'test_engineer', state: 'READY' };
           return failureCount(task) >= 3
             ? { stage: 'project_debugger', state: 'READY' }
             : { stage: 'developer', state: 'READY' };
@@ -731,6 +773,39 @@ export function createDefaultV2Roles({
         const issueFollowUp = processDiscoveredIssues(task, result);
         if (issueFollowUp) return issueFollowUp;
         return sealAfterPersist('tester', task, result);
+      },
+    },
+
+    // Dormant unless a project opts into UX review AND a task explicitly requires it.
+    ux_reviewer: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the independent UX reviewer. Evaluate only the task UX acceptance criteria against real rendered UI evidence (screenshots/video), interaction flows, accessibility and visual consistency.',
+        'Do not infer visual PASS from source code alone. Return NOT_PASS with specific missing evidence or defects when UX cannot be verified.',
+        'Do not modify implementation or project plans. Return PASS or NOT_PASS through the structured role-result tool.',
+        deliveryRoleSuffix('ux_reviewer'),
+      ].join('\n\n'), {
+        evidenceArtifactRoot: artifactRoot ? resolve(artifactRoot, 'tester') : null,
+      }),
+      transition: ({ task, result }) => {
+        if (result.outcome === 'PASS') return { state: 'DONE' };
+        return failureCount(task) >= 3
+          ? { stage: 'project_debugger', state: 'READY' }
+          : { stage: 'developer', state: 'READY' };
+      },
+      async afterPersist({ task, result }) {
+        const issueFollowUp = processDiscoveredIssues(task, result);
+        if (issueFollowUp) return issueFollowUp;
+        if (!sourceControl || task.state !== 'DONE' || result.outcome !== 'PASS') return null;
+        store.checkpoint?.();
+        const finalized = await sourceControl.finalize({
+          taskId: task.id, strategyEpoch: strategyEpoch(task),
+          devCycle: Math.max(1, failureCount(task) + 1),
+        });
+        if (finalized.ok) return null;
+        return { patch: { stage: 'ux_reviewer', state: 'READY' }, transitionHistory: {
+          type: 'SYSTEM_INTERRUPTION', role: 'source_control',
+          failure: finalized.failure ?? 'SOURCE_CONTROL_FAILED', at: new Date().toISOString(),
+        } };
       },
     },
 
@@ -748,6 +823,7 @@ export function createDefaultV2Roles({
             : { stage: 'developer', state: 'READY' };
         }
         if (result.outcome !== 'PASS') return { stage: 'project_debugger', state: 'READY' };
+        if (uxReviewEnabled && task.ux?.required === true) return { stage: 'ux_reviewer', state: 'READY' };
         return { state: 'DONE' };
       },
       async afterPersist({ task, result }) {
@@ -787,6 +863,7 @@ export function createDefaultV2Roles({
     project_debugger: {
       sessionPolicy: 'persistent',
       prepare: ({ task }) => {
+        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') return prepareLlm(task, ['Diagnose this node planning failure without changing artifacts.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Failure:', JSON.stringify(task.input.previousGateFailure), 'Distinguish artifact, requirement, and model failures. If a bounded repair is viable, return RETRY_WITH_GUIDANCE and a concrete result.guidance string. Otherwise submit a structured diagnosis; never override validator or critic.'].join('\n'));
         if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
           const critics = flowTasks(store, task)
             .filter(item => item.input?.purpose === 'PLANNER_FRONTIER_CRITIC')
@@ -1008,14 +1085,65 @@ export function createDefaultV2Roles({
       },
     },
 
+    feature_planner: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Feature Planner. Work only on product feature semantics, feature hierarchy, and acceptance intent.',
+        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
+        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'feature'),
+    },
+    milestone_planner: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Milestone Planner. Work only on delivery semantics, milestone hierarchy, scenarios, and task intent/dependencies.',
+        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
+        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'milestone'),
+    },
+    interface_architect: {
+      prepare: ({ task }) => prepareLlm(task, [
+        'You are the Interface Architect. Translate existing Feature and Milestone semantics into strict interface contracts and exact task interface bindings.',
+        'Process child Feature nodes before parents, then resolve Milestone interface dependencies. Do not alter product or delivery semantics.',
+        'If upstream semantics are insufficient, report NOT_PASS with a concrete upstream revision request. Never invent product behavior.',
+        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
+        'Existing interface artifact layout:', String(artifactRoot ?? ''),
+        'Submit outcome PASS or NOT_PASS through ariad_role_result with evidence and changed artifact paths.',
+      ].join('\n')),
+      transition: ({ task, result }) => specialistTransition(task, result, 'interface'),
+    },
+
     tech_lead: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
+          return prepareLlm(task, [
+            'You are the node-level Tech Lead. Work ONLY on the specified planning node.',
+            'Phase:', task.input.phase, 'Node:', task.input.nodeId,
+            'Planning context:', JSON.stringify(task.input.planningContext),
+            'Previous validation failure:', JSON.stringify(task.input.previousGateFailure ?? null),
+            'Do not change ancestors or sibling nodes. Apply direct-child-only changes and preserve existing unrelated semantics.',
+            'Return PLANNED through ariad_role_result only after saving verifiable artifacts.',
+          ].join('\n'), { sessionKey: `workflow:${task.id}:planner` });
+        }
+        if (task.input?.purpose === 'PLANNING_ROUTE') {
+          return prepareLlm(task, [
+            'You are the Overall Tech Lead. Triage the request and choose a controlled planning route.',
+            'Do not edit Feature, Milestone, Interface or delivery artifacts yourself.',
+            'Use ariad_role_result with outcome PLANNING_ROUTE and a strict result containing requestType, reason, scope, stages and constraints.',
+            'Stage order is feature -> milestone -> interface. RUN only affected stages, SKIP unchanged stages.',
+            'Planning requests:', JSON.stringify(task.input.requests ?? []),
+          ].join('\n'));
+        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           const prompt = [
             'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
             'Read and investigate the repository as needed. Do not modify any files, planning artifacts, task graph, or implementation.',
-            'Do not initiate Delivery, Replan, or task creation. Return findings and concrete recommendations only.',
+            'Do not initiate Delivery, Replan, or task creation. For an explicitly operator-requested one-off recovery of a legacy issue-induced WAITING_REPLAN task, you MAY use ariad_recover_legacy_issue_task after verifying its provenance. Do not recover genuine Debugger/Replan tasks. Otherwise return findings only.',
             'Request:', task.input.instruction,
             'Context:', JSON.stringify(task.input.context ?? {}),
             'Return outcome PLANNED with your findings through the structured role-result tool.',
@@ -1032,6 +1160,14 @@ export function createDefaultV2Roles({
         return prepareLlm(task, prompt);
       },
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE') {
+          if (result.outcome !== 'PLANNING_ROUTE') return { state: 'NEEDS_HUMAN' };
+          const route = result.result;
+          const next = ['feature', 'milestone', 'interface'].find(name => route.stages[name] === 'RUN');
+          const roles = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
+          return next ? { stage: roles[next], state: 'READY', input: { ...task.input, planningRoute: route } }
+            : { state: 'DONE', input: { ...task.input, planningRoute: route } };
+        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           return {
             state: 'DONE',
@@ -1141,8 +1277,22 @@ export function createDefaultV2Roles({
     },
 
     tech_lead_critic: {
-      prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
+      prepare: ({ project, task }) => prepareLlm(task,
+        task.input?.purpose === 'NODE_PLANNING_WORKFLOW'
+          ? ['Review the node planning artifacts without editing them.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Scope:', JSON.stringify(task.input.planningContext), 'Reject missing evidence, invalid direct-child changes, or broken cross-node contracts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.'].join('\n')
+          : task.input?.purpose === 'PLANNING_ROUTE_CRITIC'
+          ? ['Review the completed controlled planning route and current artifacts.',
+             'Verify no unrequested semantic changes and that interface bindings are precise.',
+             'Do not modify artifacts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.',
+             'Route result:', JSON.stringify(flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE')?.input?.planningRoute ?? {})].join('\n')
+          : criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_CRITIC') {
+          return ['CLEAN', 'MINOR_ONLY'].includes(result.outcome)
+            ? { state: 'DONE' }
+            : { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'PLANNING_ROUTE_CRITIC_FAILED', at: new Date().toISOString() } };
+        }
         if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
           const batchId = task.input?.planningBatchId;
           const round = task.input?.round ?? 1;
@@ -1189,6 +1339,55 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
+          if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
+            try {
+              if (!artifactRoot) throw new Error('WORKFLOW_ARTIFACT_ROOT_MISSING');
+              const isGlobal = task.taskKind === 'GLOBAL_REVIEW';
+              const phase = task.input.phase;
+              if (!['feature', 'milestone', 'interface'].includes(phase)) throw new Error('WORKFLOW_PHASE_UNSUPPORTED');
+              const declaredType = task.input.nodes?.find(node => node.id === task.input.nodeId)?.nodeType;
+              const matchingTypes = (phase === 'interface' ? ['feature', 'milestone'] : [phase])
+                .filter(type => loadPlannerHierarchy(artifactRoot, type).byId.has(task.input.nodeId));
+              const nodeType = declaredType ?? (phase !== 'interface' ? phase : matchingTypes.length === 1 ? matchingTypes[0] : null);
+              if (!nodeType || (phase === 'interface' && !matchingTypes.includes(nodeType))) throw new Error('WORKFLOW_NODE_TYPE_AMBIGUOUS_OR_MISSING');
+              const hierarchy = loadPlannerHierarchy(artifactRoot, nodeType);
+              const target = hierarchy.byId.get(task.input.nodeId);
+              if (!target) throw new Error(`WORKFLOW_NODE_MISSING: ${task.input.nodeId}`);
+              const expected = task.input.nodes?.find(node => node.id === task.input.nodeId);
+              if (!expected || (target.parentId ?? null) !== (expected.parentId ?? null)) {
+                throw new Error(`WORKFLOW_NODE_SCOPE_MISMATCH: ${task.input.nodeId}`);
+              }
+              const contracts = loadBoundaryContracts(artifactRoot, nodeType);
+              if (!contracts.has(task.input.nodeId)) throw new Error(`WORKFLOW_CONTRACT_MISSING: ${task.input.nodeId}`);
+              const validation = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: !isGlobal, ...(!isGlobal ? { targetNodeId: task.input.nodeId } : {}) });
+              if (isGlobal && phase === 'interface') {
+                for (const type of ['feature', 'milestone']) {
+                  const tree = loadPlannerHierarchy(artifactRoot, type);
+                  if (tree.items.length) validateBoundaryContracts(artifactRoot, type, { allowFrontier: false });
+                }
+              }
+              if (!validation.ok || validation.count === 0 || (isGlobal && !validation.complete)) {
+                throw new Error('WORKFLOW_BOUNDARY_INCOMPLETE');
+              }
+              return { outcome: 'PASS', result: { nodeId: task.input.nodeId, validated: true, global: isGlobal } };
+            } catch (error) {
+              return { outcome: 'NOT_PASS', result: { nodeId: task.input.nodeId, error: error.message } };
+            }
+          }
+          if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
+            const routeTask = flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE');
+            const route = routeTask?.input?.planningRoute;
+            if (!route) return { outcome: 'NOT_PASS', result: { error: 'MISSING_PLANNING_ROUTE' } };
+            try {
+              if (route.stages.interface === 'RUN') {
+                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
+                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
+              }
+              return { outcome: 'PASS', result: { valid: true, route } };
+            } catch (error) {
+              return { outcome: 'NOT_PASS', result: { valid: false, error: error.message } };
+            }
+          }
           if (task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE') {
             const frontier = latestFrontierCompletion(store, task);
             const nodeType = task.input?.frontierPhase ?? frontier?.nodeType ?? 'feature';
@@ -1299,6 +1498,11 @@ export function createDefaultV2Roles({
         },
       }),
       transition: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
+          return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
+            transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
+              reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
+        }
         if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
           const phase = task.input?.frontierPhase ?? 'feature';
           const complete = result.result?.complete === true;
@@ -1540,6 +1744,32 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          // A migrated unified tree must not pass through the legacy plan writer.
+          // Verify the compiled view without mutating tasks, history, or delivery state.
+          if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
+            const project = store.getProject(task.projectId);
+            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+            if (project?.unifiedTaskCompilerVersion === 1 && compatibility.ok) {
+              // The migrated tree is already compiled and accepted. Re-accepting
+              // it must not rewrite existing delivery state or enable scheduling.
+              const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
+              return {state:'DONE',transitionHistory:{
+                type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
+                summary:'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
+                taskCount:loaded.tasks.length,at:new Date().toISOString(),
+              }};
+            }
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                summary: compatibility.ok
+                  ? 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.'
+                  : 'Unified Task Tree compiler/store mismatch; delivery remains unchanged.',
+                compatibility, at: new Date().toISOString(),
+              },
+            };
+          }
           const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan

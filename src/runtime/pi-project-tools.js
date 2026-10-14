@@ -1,4 +1,7 @@
 import { Type } from 'typebox';
+import { resolve, relative, isAbsolute } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { sessionHistory } from './session-history.js';
@@ -13,13 +16,54 @@ function textResult(value) {
 export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_code_search',
   'ariad_interface_search',
+  'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search',
   'ariad_memory_write',
   'ariad_session_history',
   'ariad_report_issue',
+  'ariad_insert_fix_task',
+  'ariad_recover_legacy_issue_task',
+  'ariad_plan_features',
+  'ariad_plan_milestones',
+  'ariad_build_interfaces',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, reportIssue = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
+  const resolveFile = file => {
+    const path = resolve(workspace, file);
+    if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
+    return path;
+  };
+  let lsp = null;
+  const languageServer = () => {
+    if (!lsp) lsp = new GodotLspProvider({ projectPath: workspace, port: 7200 + [...workspace].reduce((n, c) => (n + c.charCodeAt(0)) % 1000, 0) });
+    return lsp;
+  };
+  const addTool = (name, description, parameters, run) => pi.registerTool({
+    name, label: name, description, parameters,
+    async execute(_id, args) { return textResult(await run(args)); },
+  });
+  addTool('ariad_document_symbols', 'List GDScript functions, classes and variables with locations without reading the entire file.', Type.Object({file: Type.String()}), async ({file}) => ({symbols: await languageServer().documentSymbols(resolveFile(file))}));
+  addTool('ariad_definition', 'Resolve a GDScript symbol definition at zero-based line and character.', Type.Object({file:Type.String(),line:Type.Integer({minimum:0}),character:Type.Optional(Type.Integer({minimum:0}))}), async ({file,line,character}) => ({definitions: await languageServer().definition(resolveFile(file),line,character??0)}));
+  addTool('ariad_references', 'Find references to a GDScript symbol at zero-based line and character.', Type.Object({file:Type.String(),line:Type.Integer({minimum:0}),character:Type.Optional(Type.Integer({minimum:0}))}), async ({file,line,character}) => ({references: await languageServer().references(resolveFile(file),line,character??0)}));
+  addTool('ariad_workspace_symbols', 'Search GDScript symbols across the workspace.', Type.Object({query:Type.String()}), async ({query}) => ({symbols: await languageServer().workspaceSymbols(query)}));
+  addTool('ariad_call_graph', 'Best-effort static direct/recursive GDScript call graph. Dynamic calls and signals may be unresolved; do not treat this as exhaustive. Depth defaults to 1.', Type.Object({file:Type.String(),symbol:Type.String(),depth:Type.Optional(Type.Integer({minimum:1,maximum:4}))}), async ({file,symbol,depth=1}) => {
+    const source=readFileSync(resolveFile(file),'utf8').split(/\r?\n/);
+    const funcs=new Map();let current=null;
+    for(let i=0;i<source.length;i++){
+      const match=source[i].match(/^(?:static\s+)?func\s+([\w]+)\s*\(/);
+      if(match){current={name:match[1],line:i+1,body:[]};funcs.set(match[1],current);}
+      else if(current && source[i].match(/^(?:func|class|signal|enum|const|var|@)/))current=null;
+      else if(current)current.body.push(source[i].replace(/#.*$/,''));
+    }
+    const visit=(name,remaining,seen)=>{
+      const fn=funcs.get(name);if(!fn)return {symbol:name,resolved:false};
+      const calls=[...new Set([...fn.body.join('\n').matchAll(/(?<![\w])([a-zA-Z_]\w*)\s*\(/g)].map(m=>m[1]).filter(n=>!['if','while','for','match','return','await','print','assert'].includes(n)))];
+      return {symbol:name,line:fn.line,calls:calls.map(n=>({symbol:n,local:funcs.has(n),...(remaining>1 && funcs.has(n) && !seen.has(n)?{graph:visit(n,remaining-1,new Set([...seen,n]))}:{})})),limitations:['regex-based best-effort; dynamic calls, inherited functions, signals and cross-file targets are not resolved']};
+    };
+    return visit(symbol,depth,new Set([symbol]));
+  });
+
   pi.registerTool({
     name: 'ariad_code_search',
     label: 'Ariad code search',
@@ -89,17 +133,76 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, t
     },
   });
 
+  for (const [name, phase, downstream] of [
+    ['ariad_plan_features', 'feature', ['milestone', 'interface']],
+    ['ariad_plan_milestones', 'milestone', ['interface']],
+    ['ariad_build_interfaces', 'interface', []],
+  ]) {
+    addTool(name, `Tech Lead only. Request deterministic ${phase} node planning; downstream dependency validation: ${downstream.join(', ') || 'none'}. This only queues work, never declares completion.`, Type.Object({
+      reason: Type.String({ minLength: 1 }),
+      scopeNodeId: Type.String({ minLength: 1 }),
+      nodes: Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), parentId: Type.Union([Type.String(), Type.Null()]) }), { minItems: 1 }),
+    }, { additionalProperties: false }), async params => {
+      if (taskContext?.role !== 'tech_lead') throw new Error('PLANNING_REQUIRES_TECH_LEAD');
+      if (typeof requestPlanning !== 'function') throw new Error('PLANNING_SCHEDULER_NOT_CONNECTED');
+      return requestPlanning({ phase, downstream, ...params, requestedByTaskId: taskContext.taskId });
+    });
+  }
+
+  pi.registerTool({
+    name: 'ariad_recover_legacy_issue_task',
+    label: 'Ariad recover legacy issue-blocked task',
+    description: 'Tech Lead only, explicit operator-requested one-time repair. Restore an idle delivery task to READY only if WAITING_REPLAN was caused by legacy DISCOVERED_BLOCKING_ISSUE and no subsequent Debugger/Replan evidence exists. Preserve Issue and audit trail.',
+    parameters: Type.Object({
+      taskId: Type.String({ minLength: 1 }),
+      reason: Type.String({ minLength: 1 }),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      if (taskContext?.role !== 'tech_lead' || typeof recoverLegacyIssueBlockedTask !== 'function') {
+        throw new Error('TASK_RECOVERY_REQUIRES_TECH_LEAD');
+      }
+      return textResult({ task: recoverLegacyIssueBlockedTask(params) });
+    },
+  });
+
+  pi.registerTool({
+    name: 'ariad_insert_fix_task',
+    label: 'Ariad insert triaged fix task',
+    description: 'Tech Lead only: insert a new independent repair task into the active delivery DAG, adding prerequisite edges only to idle READY tasks. Does not pause active work or replan.',
+    parameters: Type.Object({
+      issueId: Type.String({ minLength: 1 }),
+      taskId: Type.String({ minLength: 1 }),
+      title: Type.String({ minLength: 1 }),
+      intent: Type.String({ minLength: 1 }),
+      acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }),
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      beforeTaskIds: Type.Optional(Type.Array(Type.String())),
+      milestoneId: Type.Optional(Type.String()),
+      ownerMilestoneId: Type.Optional(Type.String()),
+      ownerFeatureId: Type.Optional(Type.String()),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      if (taskContext?.role !== 'tech_lead' || typeof insertTriagedFixTask !== 'function') {
+        throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');
+      }
+      const { issueId, taskId, beforeTaskIds = [], ...spec } = params;
+      return textResult({ task: insertTriagedFixTask({ issueId, beforeTaskIds, task: {
+        id: taskId, ...spec, dependsOn: spec.dependsOn ?? [],
+        issueRefs: [issueId],
+      } }) });
+    },
+  });
+
   pi.registerTool({
     name: 'ariad_report_issue',
     label: 'Ariad report issue',
-    description: 'Report a newly discovered product/project defect immediately without ending the current role. Ariad deduplicates it and starts Tech Lead triage/assignment while this role may continue. Use blocking=true only when normal acceptance must not pass until the issue is repaired or explicitly dispositioned.',
+    description: 'Report a newly discovered product/project defect immediately without ending the current role. Ariad deduplicates it and starts Tech Lead triage/assignment while this role may continue. Report evidence and suspected impact; only Tech Lead triage decides blocking scope.',
     parameters: Type.Object({
       title: Type.String({ minLength: 1 }),
       description: Type.String({ minLength: 1 }),
       severity: Type.Optional(Type.Union([
         Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('critical'),
       ])),
-      blocking: Type.Optional(Type.Boolean()),
       affectedComponent: Type.Optional(Type.String()),
       affectedInterface: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.Array(Type.Any())),
@@ -122,7 +225,7 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, t
         description: params.description,
         evidence: params.evidence ?? [],
         severity: params.severity ?? 'medium',
-        blocking: params.blocking === true,
+        blocking: false,
         affectedComponent: params.affectedComponent ?? null,
         affectedInterface: params.affectedInterface ?? null,
         fingerprint: params.dedupeKey ?? null,
@@ -132,9 +235,7 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, t
         accepted: true,
         nonTerminal: true,
         issue,
-        guidance: params.blocking === true
-          ? 'The issue is being triaged now. Continue only useful bounded work/evidence collection; do not claim final PASS while this blocking issue remains unresolved.'
-          : 'The issue is being triaged now. Continue the assigned role normally.',
+        guidance: 'The issue is queued for Tech Lead triage. Evaluate the current task independently against its acceptance criteria.',
       });
     },
   });

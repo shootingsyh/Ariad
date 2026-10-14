@@ -74,6 +74,7 @@ export const TECH_LEAD_PLAN_SCHEMA = Object.freeze({
               placeholderAllowed: { type: 'boolean' },
             },
           },
+          ux: { type: ['object', 'null'], additionalProperties: false, required: ['required'], properties: { required: { type: 'boolean' } } },
           history: HISTORY_SCHEMA,
         },
       },
@@ -282,6 +283,7 @@ export function validateTechLeadPlan(plan) {
       'testStrategy',
       'verification',
       'art',
+      'ux',
       'history',
     ]);
     for (const key of Object.keys(task)) if (!allowed.has(key)) fail(`${path}.${key}`, 'unexpected property');
@@ -324,6 +326,8 @@ export function validateTechLeadPlan(plan) {
       if (typeof task.art.placeholderAllowed !== 'boolean') fail(`${path}.art.placeholderAllowed`, 'must be boolean');
     }
 
+    if (task.ux != null && (typeof task.ux !== 'object' || Array.isArray(task.ux) || typeof task.ux.required !== 'boolean' || Object.keys(task.ux).some(key => key !== 'required'))) fail(`${path}.ux`, 'must contain only boolean required');
+
     const normalizedTask = {
       id: task.id,
       scope: 'delivery',
@@ -338,6 +342,7 @@ export function validateTechLeadPlan(plan) {
       testStrategy: task.testStrategy,
       verification: structuredClone(task.verification ?? []),
       art: task.art == null ? null : structuredClone(task.art),
+      ux: task.ux == null ? null : structuredClone(task.ux),
       history: normalizeHistory(task.history, `${path}.history`),
     };
     byId.set(task.id, normalizedTask);
@@ -429,6 +434,7 @@ export function validateTechLeadPlan(plan) {
         testStrategy: task.testStrategy,
         verification: structuredClone(task.verification ?? []),
         art: task.art == null ? null : structuredClone(task.art),
+      ux: task.ux == null ? null : structuredClone(task.ux),
         history: structuredClone(task.history ?? []),
       })),
       ...(milestoneState.milestones.length > 0

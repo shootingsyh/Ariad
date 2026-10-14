@@ -120,12 +120,15 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
   }
   if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
-    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'create', 'takeover', 'adopt', 'issue-open'].includes(action)) await ensureAriadDaemon(root);
-    const actualAction = action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
+    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'create', 'takeover', 'adopt', 'issue-open'].includes(action)) await ensureAriadDaemon(root);
+    const actualAction = action === 'set-ux-review' ? 'set_ux_review' : action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
     return daemonRequest(root, {
       action: actualAction,
       name,
+      auditSource: 'cli',
+      requestId: `${process.pid}-${Date.now()}`,
       ...(roleModels != null ? { roleModels } : {}),
+      ...(action === 'set-ux-review' ? { uxReview: { enabled: goal === 'true' } } : {}),
       ...(goal != null ? { goal } : {}),
       ...(sourcePath != null ? { sourcePath } : {}),
       ...(issue != null ? { issue } : {}),

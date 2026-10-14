@@ -445,24 +445,25 @@ function freezeAndValidateExports(artifactRoot, nodeType, contracts) {
   if (changed) writeFileSync(frozenExportsPath, JSON.stringify(registry, null, 2) + '\n');
 }
 
-export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier = true } = {}) {
+export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier = true, targetNodeId = null } = {}) {
   const tree = loadPlannerHierarchy(artifactRoot, nodeType);
   const contracts = loadBoundaryContracts(artifactRoot, nodeType);
 
   if (tree.items.length === 0) return { ok: true, count: 0, complete: false };
-  if (contracts.size !== tree.items.length) {
+  if (targetNodeId == null && contracts.size !== tree.items.length) {
     fail(`${nodeType}: every planned node must have exactly one boundary contract`);
   }
+  if (targetNodeId != null && !tree.byId.has(targetNodeId)) fail(`${nodeType}: unknown target ${targetNodeId}`);
 
   // Validate already-exposed parent-facing surfaces before checking current
   // parent imports so a contract mutation fails at the true source.
-  freezeAndValidateExports(artifactRoot, nodeType, contracts);
+  freezeAndValidateExports(artifactRoot, nodeType, targetNodeId == null ? contracts : new Map([[targetNodeId, contracts.get(targetNodeId)]].filter(([, value]) => value)));
 
   const featureContracts = nodeType === 'milestone'
     ? loadBoundaryContracts(artifactRoot, 'feature')
     : null;
 
-  for (const item of tree.items) {
+  for (const item of targetNodeId == null ? tree.items : [tree.byId.get(targetNodeId)]) {
     const contract = contracts.get(item.id);
     if (!contract) fail(`${nodeType}:${item.id}: missing boundary contract`);
     const children = tree.childrenById.get(item.id) ?? [];
@@ -521,8 +522,8 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
     if (!tree.byId.has(nodeId)) fail(`${nodeType}: orphan boundary contract ${nodeId}`);
   }
 
-  const frontier = nextBoundaryFrontier(artifactRoot, nodeType);
-  return { ok: true, count: contracts.size, complete: frontier == null };
+  const frontier = targetNodeId == null ? nextBoundaryFrontier(artifactRoot, nodeType) : null;
+  return { ok: true, count: targetNodeId == null ? contracts.size : 1, complete: targetNodeId == null && frontier == null };
 }
 
 export function nextBoundaryFrontier(artifactRoot, nodeType) {

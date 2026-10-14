@@ -71,3 +71,15 @@ test('quota classifier excludes generic transient rate limits',()=>{
  assert.equal(isCodexQuotaExhaustion('Codex error: The usage limit has been reached'),true);
  assert.equal(isCodexQuotaExhaustion('insufficient_quota'),true);
 });
+
+test('live ChatGPT Plus quota message continues in the same session using Muse',async()=>{
+ const message='You have hit your ChatGPT usage limit (plus plan). Try again in ~272 min.';
+ assert.equal(isCodexQuotaExhaustion(message),true);
+ const r=await execute({primaryError:message});
+ assert.equal(r.state.state,'COMPLETED');
+ assert.equal(r.switched,1);
+ assert.equal(r.disposed,1);
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
+ const next=await execute({primaryError:null});
+ assert.deepEqual(next.calls.map(x=>x.model),[codex]);
+});

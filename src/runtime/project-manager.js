@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync, cpSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync, cpSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { normalizeRoleModels, requireCompleteRoleModels } from './role-models.js';
@@ -275,6 +275,7 @@ export class AriadProjectManager {
       adopted: manifest.adopted ?? p.adopted ?? false,
       frontdeskBinding,
       roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
+      uxReview: manifest.uxReview?.enabled === true ? { enabled: true } : { enabled: false },
       executionState: manifest.executionState ?? 'IDLE',
       projectVersion: Number.isInteger(manifest.projectVersion) ? manifest.projectVersion : 0,
       activeVersion: Number.isInteger(manifest.activeVersion)
@@ -301,8 +302,30 @@ export class AriadProjectManager {
     });
   }
 
-  setDesiredState(name, desiredState) {
+  setUxReview(name, { enabled }) {
+    if (typeof enabled !== 'boolean') throw new Error('uxReview.enabled must be boolean');
+    const project = this.status(name);
+    if (project.desiredState !== 'STOPPED') throw new Error('UX_REVIEW_CONFIGURATION_REQUIRES_STOPPED_PROJECT');
+    return this.writeManifest(name, { uxReview: { enabled } });
+  }
+
+  setDesiredState(name, desiredState, audit = {}) {
     if (!['RUNNING', 'PAUSED', 'STOPPED'].includes(desiredState)) throw new Error(`invalid desired state: ${desiredState}`);
+    const current = this.status(name);
+    const event = {
+      at: this.now().toISOString(),
+      projectId: current.id,
+      action: audit.action ?? 'SET_DESIRED_STATE',
+      source: audit.source ?? 'internal',
+      requestId: audit.requestId ?? null,
+      from: current.desiredState,
+      to: desiredState,
+      changed: current.desiredState !== desiredState,
+      daemonPid: process.pid,
+    };
+    const path = join(current.workspace, '.ariad', 'control-actions.jsonl');
+    // Write ahead: never change lifecycle state without a durable audit event.
+    appendFileSync(path, JSON.stringify(event) + '\n', { encoding: 'utf8', mode: 0o600 });
     return this.writeManifest(name, { desiredState });
   }
 

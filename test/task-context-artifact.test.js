@@ -42,8 +42,8 @@ test('task context artifact deduplicates contracts, strips source snippets, and 
   assert.deepEqual(artifact.contracts.referencedFeatureInterfaces.map(x => x.id), ['F2']);
   assert.equal('binding' in artifact.contracts.owningFeatures[0].interfaces[0], false);
   assert.equal(artifact.developer.interfaceRealizations.length, 1);
-  assert.equal(artifact.developer.interfaceRealizations[0].anchors[0].resolved.fileHash, 'abc');
-  assert.equal('snippet' in artifact.developer.interfaceRealizations[0].anchors[0].resolved, false);
+  assert.deepEqual(artifact.developer.interfaceRealizations[0].anchors[0], { file: 'src/a.gd', startLine: 1 });
+  assert.equal(JSON.stringify(artifact.developer).includes('fileHash'), false);
   assert.equal(artifact.tester.interfaceVerifications.length, 1);
   assert.equal(artifact.reviewer, null);
   assert.equal(JSON.stringify(artifact).includes('secret source line'), false);

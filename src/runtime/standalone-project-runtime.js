@@ -86,12 +86,13 @@ export class StandaloneProjectRuntime {
       codeProviderId: 'ariad-code',
       workspace: project.workspace,
       sourceControl,
+      uxReviewEnabled: project.uxReview?.enabled === true,
       artifactRoot: this.artifactRoot,
       executionCapabilities,
       executionProvenance,
       codeIntelligence,
       resolveRoleExecutionMetadata: role => ({
-        modelRef: this.resolveRoleModel(role) ?? null,
+        modelRef: this.resolveRoleModel(['feature_planner', 'milestone_planner', 'interface_architect'].includes(role) ? 'tech_lead' : role === 'ux_reviewer' ? 'reviewer' : role === 'test_engineer' ? 'tester' : role) ?? null,
       }),
       enqueuePlanning: ({ request }) => {
         this.store.enqueuePlanningRequest({
@@ -100,7 +101,14 @@ export class StandaloneProjectRuntime {
           request,
         });
       },
+      requestPlanning: ({ phase, reason, scopeNodeId = null, nodes = null, requestedByTaskId = null }) =>
+        this.store.createNodePlanningWorkflow({
+          id: `${project.id}:node-plan:${Date.now()}:${++this.requestSequence}`,
+          projectId: project.id, phase, reason, scopeNodeId, nodes, requestedByTaskId,
+        }),
       reportIssue: issue => this.openIssue(issue),
+      recoverLegacyIssueBlockedTask: args => this.store.recoverLegacyIssueBlockedTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
+      insertTriagedFixTask: args => this.store.insertTriagedFixTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
     });
     for (const [name, definition] of Object.entries(roleDefinitions)) {
       roleRegistry.register(name, definition);

@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, TASK_KINDS } from './control-task-policy.js';
 
@@ -194,6 +195,92 @@ export class SQLiteV2Store {
     return this.#insertTask(task);
   }
 
+  // Explicit one-off TL recovery of legacy issue-induced WAITING_REPLAN.
+  recoverLegacyIssueBlockedTask({ projectId, taskId, actor, reason }) {
+    if (actor !== 'tech_lead') throw new Error('TASK_RECOVERY_REQUIRES_TECH_LEAD');
+    if (!String(reason ?? '').trim()) throw new Error('task recovery requires a reason');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.getTask(taskId);
+      if (!task || task.projectId !== projectId || task.scope !== 'delivery') throw new Error('unknown project delivery task');
+      if (task.state !== 'WAITING_REPLAN' || task.execution) throw new Error('task is not idle WAITING_REPLAN');
+      const history = task.history ?? [];
+      const marker = [...history].reverse().find(entry => entry?.type === 'DISCOVERED_BLOCKING_ISSUE');
+      if (!marker || !Array.isArray(marker.issueIds) || !marker.issueIds.length) throw new Error('legacy blocking issue evidence missing');
+      const markerIndex = history.lastIndexOf(marker);
+      if (history.slice(markerIndex + 1).some(entry =>
+        /REPLAN|DEBUGGER|HUMAN_DECISION/.test(String(entry?.type ?? ''))
+      )) throw new Error('subsequent replan or debugger activity requires normal recovery');
+      for (const issueId of marker.issueIds) {
+        const issue = this.getIssue(issueId);
+        if (!issue || issue.projectId !== projectId || issue.sourceTaskId !== taskId) throw new Error('blocking issue provenance mismatch');
+      }
+      const recovered = this.appendTaskHistory(taskId, task.version, {
+        type: 'TL_LEGACY_ISSUE_BLOCK_RECOVERY', role: 'tech_lead',
+        issueIds: marker.issueIds, reason: reason.trim(), at: new Date().toISOString(),
+      }, { state: 'READY', execution: null });
+      this.db.exec('COMMIT');
+      return recovered;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  // TL-only dynamic graph maintenance. Never rewrite running or completed tasks.
+  insertTriagedFixTask({ projectId, issueId, actor, task, beforeTaskIds = [] }) {
+    if (actor !== 'tech_lead') throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');
+    if (!this.getProject(projectId)) throw new Error('unknown project');
+    const issue = this.getIssue(issueId);
+    if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
+    if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
+    if (!task?.id || task.scope === 'control') throw new Error('delivery fix task id required');
+    if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.listTasks(projectId, { scope: 'delivery' });
+      if (this.getTask(task.id)) throw new Error('fix task id already exists');
+      const byId = new Map(current.map(item => [item.id, item]));
+      for (const id of beforeTaskIds) {
+        const target = byId.get(id);
+        if (!target || target.state !== 'READY' || target.execution) throw new Error(`insertion target must be idle READY: ${id}`);
+      }
+      const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
+      const fix = normalizeTask({ ...task, projectId, scope: 'delivery', issueRefs: refs,
+        input: { ...(task.input ?? {}), issueRefs: refs },
+        history: [...(task.history ?? []), { type: 'TL_INSERT_FIX_TASK', issueId, at: new Date().toISOString() }] });
+      if (fix.state !== 'READY' || fix.stage !== 'developer' || fix.execution) throw new Error('fix task must start READY/developer');
+      const proposed = current.map(item => beforeTaskIds.includes(item.id)
+        ? { ...item, dependsOn: [...new Set([...(item.dependsOn ?? []), fix.id])] }
+        : item).concat(fix);
+      // Validate dependency existence and acyclicity before any writes.
+      const edges = new Map(proposed.map(item => [item.id, item.dependsOn ?? []]));
+      const visited = new Set(), visiting = new Set();
+      const visit = id => {
+        if (!edges.has(id)) throw new Error(`unknown dependency: ${id}`);
+        if (visiting.has(id)) throw new Error('fix insertion creates dependency cycle');
+        if (visited.has(id)) return;
+        visiting.add(id);
+        for (const dep of edges.get(id)) visit(dep);
+        visiting.delete(id); visited.add(id);
+      };
+      for (const id of edges.keys()) visit(id);
+      const created = this.#insertTask(fix);
+      for (const id of beforeTaskIds) {
+        const target = byId.get(id);
+        this.updateTask(id, target.version, {
+          dependsOn: edges.get(id),
+          history: [...(target.history ?? []), { type: 'TL_INSERT_DEPENDENCY', issueId, fixTaskId: fix.id, at: new Date().toISOString() }],
+        });
+      }
+      const assignedTaskIds = [...new Set([...(issue.assignedTaskIds ?? []), fix.id])];
+      this.updateIssue(issueId, { state: 'ASSIGNED', assignedTaskIds,
+        triage: { ...(issue.triage ?? {}), disposition: 'ASSIGNED', decidedBy: 'tech_lead', insertedBefore: beforeTaskIds } });
+      this.db.exec('COMMIT');
+      return created;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   createAdhocAnalysis({ projectId, id, requestedBy, instruction, context = null }) {
     if (!this.getProject(projectId)) throw new Error('unknown project');
     if (!id || !/^[a-zA-Z0-9_.:-]+$/.test(id)) throw new Error('invalid adhoc id');
@@ -301,6 +388,11 @@ export class SQLiteV2Store {
 
   applyDeliveryPlan(projectId, plan) {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
+    // A legacy plan must never silently obsolete promoted aggregate tasks or
+    // restore legacy integration IDs after a unified-tree migration.
+    if (this.listTasks(projectId, { scope: 'delivery' }).some(task => task.unifiedTaskSchemaVersion === 1)) {
+      throw new Error('UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER');
+    }
     const deliverySpecs = plan?.tasks;
     if (!Array.isArray(deliverySpecs) || deliverySpecs.length === 0) {
       throw new Error('delivery plan requires tasks');
@@ -368,6 +460,7 @@ export class SQLiteV2Store {
           ownerFeatureId: spec.ownerFeatureId ?? null,
           ownerMilestoneId: spec.ownerMilestoneId ?? null,
           art: spec.art == null ? null : structuredClone(spec.art),
+          ux: spec.ux == null ? null : structuredClone(spec.ux),
           revisionMode: spec.revisionMode ?? 'implementation',
           milestoneId: spec.milestoneId ?? null,
           input: {
@@ -382,6 +475,7 @@ export class SQLiteV2Store {
             ownerFeatureId: spec.ownerFeatureId ?? null,
             ownerMilestoneId: spec.ownerMilestoneId ?? null,
             art: spec.art == null ? null : structuredClone(spec.art),
+          ux: spec.ux == null ? null : structuredClone(spec.ux),
             revisionMode: spec.revisionMode ?? 'implementation',
             milestoneId: spec.milestoneId ?? null,
             logicalRefs: [...(spec.logicalRefs ?? [])],
@@ -503,6 +597,48 @@ export class SQLiteV2Store {
     this.db.prepare('UPDATE v2_issues SET state = ?, data_json = ?, updated_at = ? WHERE id = ?')
       .run(state, encode(data), now, id);
     return this.getIssue(id);
+  }
+
+  createNodePlanningWorkflow({ id, projectId, phase, reason, scopeNodeId = null, nodes = null, requestedByTaskId = null }) {
+    if (!id || !projectId || !['feature', 'milestone', 'interface'].includes(phase) || !String(reason ?? '').trim()) {
+      throw new Error('INVALID_NODE_PLANNING_WORKFLOW');
+    }
+    if (nodes !== null) nodePlanningSchedule({ phase, nodes, rootId: scopeNodeId });
+    if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
+    return this.createTask({
+      id, projectId, scope: 'control', flowId: `workflow:${projectId}:${id}`,
+      stage: 'tech_lead', taskKind: 'WORKFLOW', executorType: 'node-planning',
+      input: { phase, reason, scopeNodeId, nodes, requestedByTaskId },
+      workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null },
+    });
+  }
+
+  advanceNodePlanningWorkflow({ parentTaskId, expectedVersion, childTask, workflowState }) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const parent = this.getTask(parentTaskId);
+      if (!parent || parent.taskKind !== 'WORKFLOW' || parent.executorType !== 'node-planning') throw new Error('INVALID_WORKFLOW_PARENT');
+      if (['DONE', 'SKIPPED', 'SYSTEM_BLOCKED'].includes(parent.state)) throw new Error('WORKFLOW_NOT_ACTIVE');
+      if (parent.version !== expectedVersion) throw new Error('WORKFLOW_VERSION_CONFLICT');
+      if (!workflowState || !Number.isInteger(workflowState.cursor)) throw new Error('INVALID_WORKFLOW_CHECKPOINT');
+      let child = null;
+      if (childTask) {
+        if (childTask.parentTaskId !== parent.id || childTask.projectId !== parent.projectId || childTask.flowId !== parent.flowId || childTask.scope !== 'control' || !['NODE_PLANNING', 'GLOBAL_REVIEW'].includes(childTask.taskKind)) throw new Error('INVALID_WORKFLOW_CHILD');
+        child = this.#insertTask(childTask);
+      }
+      const updated = this.updateTask(parent.id, parent.version, { workflowState });
+      this.db.exec('COMMIT');
+      return { parent: updated, child };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  // Workflow state and child tasks live in v2_tasks; no parallel job queue.
+  hasActiveNodePlanningJobs(projectId) {
+    return this.listTasks(projectId, { scope: 'control' }).some(task =>
+      task.taskKind === 'WORKFLOW' && !['DONE', 'SKIPPED'].includes(task.state));
   }
 
   enqueuePlanningRequest({ id, projectId, request, context = null }) {

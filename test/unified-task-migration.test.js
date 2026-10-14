@@ -1,0 +1,69 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {validateUnifiedTaskTree} from '../src/v2/unified-task-tree.js';
+test('aggregate depends on children and cycles fail closed',()=>{
+ const p={tasks:[{id:'parent',parentId:null,dependsOn:['child'],executionMode:'aggregate'},{id:'child',parentId:'parent',dependsOn:[],executionMode:'implementation'}],issues:[]};
+ assert.equal(validateUnifiedTaskTree(p).ok,true);
+ p.tasks[1].dependsOn=['parent'];assert.throws(()=>validateUnifiedTaskTree(p),/cycle/);
+});
+import {applyUnifiedTaskMigrationToCopy} from '../src/v2/unified-task-migration.js';
+test('migration write path is locked unless isolated copy explicitly confirmed',()=>{
+ assert.throws(()=>applyUnifiedTaskMigrationToCopy({}),/isolated database copy/);
+});
+
+test('aggregate task remains executable and is blocked only by child prerequisites', async () => {
+ const {buildExecutionGraph} = await import('../src/v2/execution-graph.js');
+ const tasks=[
+  {id:'child',scope:'delivery',state:'READY',stage:'developer',dependsOn:[],executionMode:'implementation'},
+  {id:'parent',scope:'delivery',state:'READY',stage:'developer',dependsOn:['child'],executionMode:'aggregate'}
+ ];
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[0]),true);
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[1]),false);
+ tasks[0].state='DONE';
+ assert.equal(buildExecutionGraph(tasks).isRunnable(tasks[1]),true);
+ assert.equal(tasks[1].stage,'developer');
+});
+
+test('validator reports legacy completed aggregate with unfinished prerequisites',async()=>{
+ const {validateMigratedAggregateStates}=await import('../src/v2/unified-task-migration.js');
+ const result=validateMigratedAggregateStates([
+  {id:'parent',state:'DONE',executionMode:'aggregate',dependsOn:['child']},
+  {id:'child',state:'READY',executionMode:'implementation',dependsOn:[]}
+ ]);
+ assert.equal(result.ok,false);
+ assert.equal(result.issues[0].code,'DONE_AGGREGATE_UNFINISHED_PREREQUISITE');
+});
+
+test('runtime validator detects developer policy and interface drift',async()=>{
+ const {validateMigratedTaskRuntime}=await import('../src/v2/unified-task-migration.js');
+ const tasks=[{id:'a',scope:'delivery',stage:'developer',state:'READY',executionMode:'aggregate',dependsOn:[],interfaceIds:['x'],input:{interfaceIds:[]}}];
+ const result=validateMigratedTaskRuntime(tasks);
+ assert.equal(result.ok,false);
+ assert.deepEqual(result.issues.map(i=>i.code).sort(),['DEVELOPER_POLICY_FAILURE','INTERFACE_BINDING_MISMATCH']);
+});
+
+test('preflight does not invent scheduler or interface migration blockers', async()=>{
+ const {preflightUnifiedTaskMigration}=await import('../src/v2/unified-task-migration.js');
+ // Real artifact roots are intentionally not required in this unit test:
+ // assert the old unconditional blockers are absent from the implementation.
+ const {readFileSync}=await import('node:fs');
+ const source=readFileSync(new URL('../src/v2/unified-task-migration.js',import.meta.url),'utf8');
+ const block=source.split('const blockers = [')[1].split('];')[0];
+ assert.doesNotMatch(block,/SCHEDULER_AGGREGATE_GATE_NOT_WIRED|LIVE_INTERFACE_BINDINGS_NOT_MIGRATED/);
+ assert.equal(typeof preflightUnifiedTaskMigration,'function');
+});
+
+test('historical aggregate audit preserves reviewer acceptance and unfinished regressions',async()=>{
+ const {auditAggregateHistoryConflicts}=await import('../src/v2/unified-task-migration.js');
+ const tasks=[
+  {id:'A',executionMode:'aggregate',state:'DONE',dependsOn:['B'],history:[{type:'ROLE_RESULT',role:'reviewer',outcome:'PASS'}]},
+  {id:'B',state:'READY',history:[{type:'TAKEOVER_NOTE',summary:'VALID_NONBLOCKING_INTEGRATION_REGRESSION'}]},
+ ];
+ const issues=auditAggregateHistoryConflicts(tasks);
+ assert.equal(issues.length,1);
+ assert.equal(issues[0].reviewerPass,true);
+ assert.equal(issues[0].declaredNonblocking,true);
+ assert.equal(issues[0].disposition,'REVIEW_REQUIRED');
+ assert.equal(tasks[0].state,'DONE');
+ assert.equal(tasks[1].state,'READY');
+});
