@@ -99,3 +99,12 @@ test('global review failure returns to TL with bounded revalidation and debugger
   assert.equal(guided.input.debuggerRecoveryCount, 1);
   assert.equal(workflowChildTransition({ ...task, ...exhausted, input: { ...exhausted.input, debuggerRecoveryCount: 1 } }, { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'skip' } }).state, 'NEEDS_HUMAN');
 });
+
+test('global debugger guidance returns to TL and then validator', async () => {
+  const { workflowChildTransition } = await import('../src/v2/node-planning-workflow-executor.js');
+  const task = { taskKind: 'GLOBAL_REVIEW', stage: 'project_debugger', input: { stages: ['plan_validator', 'tech_lead_critic'], workflowRetries: 2, debuggerRecoveryCount: 0 } };
+  const recovered = workflowChildTransition(task, { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'repair global contracts' } });
+  assert.equal(recovered.stage, 'tech_lead');
+  const planned = workflowChildTransition({ ...task, stage: recovered.stage, input: recovered.input }, { outcome: 'PLANNED' });
+  assert.equal(planned.stage, 'plan_validator');
+});

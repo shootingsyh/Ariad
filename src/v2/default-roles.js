@@ -1342,9 +1342,14 @@ export function createDefaultV2Roles({
           if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
             try {
               if (!artifactRoot) throw new Error('WORKFLOW_ARTIFACT_ROOT_MISSING');
-              const nodeType = task.input.phase === 'interface' ? 'milestone' : task.input.phase;
-              if (!['feature', 'milestone'].includes(nodeType)) throw new Error('WORKFLOW_PHASE_UNSUPPORTED');
               const isGlobal = task.taskKind === 'GLOBAL_REVIEW';
+              const phase = task.input.phase;
+              if (!['feature', 'milestone', 'interface'].includes(phase)) throw new Error('WORKFLOW_PHASE_UNSUPPORTED');
+              const declaredType = task.input.nodes?.find(node => node.id === task.input.nodeId)?.nodeType;
+              const matchingTypes = (phase === 'interface' ? ['feature', 'milestone'] : [phase])
+                .filter(type => loadPlannerHierarchy(artifactRoot, type).byId.has(task.input.nodeId));
+              const nodeType = declaredType ?? (phase !== 'interface' ? phase : matchingTypes.length === 1 ? matchingTypes[0] : null);
+              if (!nodeType || (phase === 'interface' && !matchingTypes.includes(nodeType))) throw new Error('WORKFLOW_NODE_TYPE_AMBIGUOUS_OR_MISSING');
               const hierarchy = loadPlannerHierarchy(artifactRoot, nodeType);
               const target = hierarchy.byId.get(task.input.nodeId);
               if (!target) throw new Error(`WORKFLOW_NODE_MISSING: ${task.input.nodeId}`);
@@ -1354,7 +1359,13 @@ export function createDefaultV2Roles({
               }
               const contracts = loadBoundaryContracts(artifactRoot, nodeType);
               if (!contracts.has(task.input.nodeId)) throw new Error(`WORKFLOW_CONTRACT_MISSING: ${task.input.nodeId}`);
-              const validation = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: !isGlobal });
+              const validation = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: !isGlobal, ...(!isGlobal ? { targetNodeId: task.input.nodeId } : {}) });
+              if (isGlobal && phase === 'interface') {
+                for (const type of ['feature', 'milestone']) {
+                  const tree = loadPlannerHierarchy(artifactRoot, type);
+                  if (tree.items.length) validateBoundaryContracts(artifactRoot, type, { allowFrontier: false });
+                }
+              }
               if (!validation.ok || validation.count === 0 || (isGlobal && !validation.complete)) {
                 throw new Error('WORKFLOW_BOUNDARY_INCOMPLETE');
               }

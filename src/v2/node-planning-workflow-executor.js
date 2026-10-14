@@ -46,7 +46,7 @@ export function workflowChildTransition(task, result) {
   if (task.stage === 'project_debugger') {
     const guidance = result.result?.guidance;
     if (result.outcome === 'RETRY_WITH_GUIDANCE' && typeof guidance === 'string' && guidance.trim() && (task.input?.debuggerRecoveryCount ?? 0) < 1) {
-      return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: 0, debuggerRecoveryCount: 1, previousGateFailure: { ...task.input.previousGateFailure, debuggerGuidance: guidance.trim() } }, transitionHistory: { type: 'WORKFLOW_DEBUGGER_RECOVERY', at: new Date().toISOString() } };
+      return { state: 'READY', stage: 'tech_lead', input: { ...task.input, workflowRetries: task.taskKind === 'GLOBAL_REVIEW' ? 1 : 0, debuggerRecoveryCount: 1, previousGateFailure: { ...task.input.previousGateFailure, debuggerGuidance: guidance.trim() } }, transitionHistory: { type: 'WORKFLOW_DEBUGGER_RECOVERY', at: new Date().toISOString() } };
     }
     return { state: 'NEEDS_HUMAN', transitionHistory: { type: 'WORKFLOW_DEBUGGER_DIAGNOSIS', outcome: result.outcome, guidance: guidance ?? result.summary ?? null, at: new Date().toISOString() } };
   }

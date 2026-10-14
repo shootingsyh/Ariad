@@ -42,3 +42,35 @@ test('workflow validator rejects missing target, scope drift, missing contract a
     store.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('node gate accepts a validated leaf while sibling contracts remain pending', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-partial-validator-'));
+  const store = new SQLiteV2Store(path.join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'P' });
+    const artifactRoot = path.join(dir, 'artifacts');
+    const layout = ensureInterfaceArtifactLayout(artifactRoot);
+    const root = node('root', null), first = node('first', 'root'), second = node('second', 'root');
+    for (const n of [root, first, second]) write(path.join(artifactRoot, 'planner', 'logical', n.id + '.json'), n);
+    write(path.join(layout.featureDir, 'first.json'), contract('first'));
+    const definitions = createDefaultV2Roles({ store, workspace: dir, artifactRoot, providerId: 'fake', codeProviderId: 'ariad-code' });
+    const run = taskKind => definitions.plan_validator.prepare({ task: { id: 'gate', projectId: 'P', taskKind, stage: 'plan_validator', input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: 'feature', nodeId: 'first', nodes: [root, first, second] } } }).execute();
+    assert.equal((await run('NODE_PLANNING')).outcome, 'PASS');
+    assert.equal((await run('GLOBAL_REVIEW')).outcome, 'NOT_PASS');
+  } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('interface workflow validates feature node without treating it as milestone', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-interface-feature-'));
+  const store = new SQLiteV2Store(path.join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'P' });
+    const artifactRoot = path.join(dir, 'artifacts');
+    const layout = ensureInterfaceArtifactLayout(artifactRoot);
+    write(path.join(artifactRoot, 'planner', 'logical', 'root.json'), node('root', null));
+    write(path.join(layout.featureDir, 'root.json'), contract('root'));
+    const definitions = createDefaultV2Roles({ store, workspace: dir, artifactRoot, providerId: 'fake', codeProviderId: 'ariad-code' });
+    const task = { id: 'gate', projectId: 'P', taskKind: 'NODE_PLANNING', stage: 'plan_validator', input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: 'interface', nodeId: 'root', nodes: [node('root', null)] } };
+    assert.equal((await definitions.plan_validator.prepare({ task }).execute()).outcome, 'PASS');
+  } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
