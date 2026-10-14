@@ -2,9 +2,9 @@ import { executorStep, validateExecutorOperations } from './executor-dsl.js';
 
 // Pure driver. Operation implementations return SIGNAL or PENDING; persistence,
 // side effects, and wake-up delivery remain the host runtime's responsibility.
-// A bounded step budget prevents synchronous signal loops from starving the host.
+// Default to one transition per call so the host can durably checkpoint before\n// invoking the next operation. Explicit batching is for pure/idempotent operations.
 export async function advanceExecutor({
-  machine, operations, checkpoint, context, maxSteps = 32,
+  machine, operations, checkpoint, context, maxSteps = 1,
 }) {
   validateExecutorOperations(machine, operations);
   if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new Error('invalid step budget');
