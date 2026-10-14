@@ -12,7 +12,7 @@ test('planning executor yields while child runs and resumes from checkpoint', as
       ? ({ status: 'SIGNAL', signal: 'CHILD_COMPLETE' })
       : ({ status: 'PENDING' }),
   };
-  const waiting = await advanceExecutor({ machine: planningTraversalMachine, operations });
+  const waiting = await advanceExecutor({ machine: planningTraversalMachine, operations, maxSteps: 3 });
   assert.equal(waiting.status, 'PENDING');
   assert.equal(waiting.state, 'WAIT_CHILD');
   childDone = true;
@@ -24,6 +24,7 @@ test('planning executor yields while child runs and resumes from checkpoint', as
 test('planning traversal completes without invoking a model', async () => {
   const result = await advanceExecutor({
     machine: planningTraversalMachine,
+    maxSteps: 2,
     operations: {
       selectNextNode: () => ({ status: 'SIGNAL', signal: 'EXHAUSTED' }),
       createChild: () => { throw new Error('should not spawn'); },
@@ -38,6 +39,7 @@ test('child failure maps to terminal failed state', async () => {
   const result = await advanceExecutor({
     machine: planningTraversalMachine,
     checkpoint: { state: 'WAIT_CHILD' },
+    maxSteps: 2,
     operations: {
       selectNextNode() {},
       createChild() {},
@@ -60,4 +62,19 @@ test('bounded automatic transitions yield without an infinite loop', async () =>
   });
   assert.equal(result.status, 'YIELDED');
   assert.equal(result.transitions.length, 6);
+});
+
+test('default driver advances only one transition before host checkpoint', async () => {
+  let calls = 0;
+  const result = await advanceExecutor({
+    machine: planningTraversalMachine,
+    operations: {
+      selectNextNode: () => { calls++; return { status: 'SIGNAL', signal: 'NODE_FOUND' }; },
+      createChild: () => { throw new Error('must persist TRAVERSE -> SPAWN first'); },
+      observeChild: () => ({ status: 'PENDING' }),
+    },
+  });
+  assert.equal(result.status, 'YIELDED');
+  assert.equal(result.state, 'SPAWN');
+  assert.equal(calls, 1);
 });
