@@ -28,6 +28,13 @@ test('legacy task envelope preserves durable state without schema migration', ()
 });
 
 test('legacy planning and diagnostic tasks remain supported', () => {
-  assert.equal(executorFamily({ scope: 'control', stage: 'pm' }), 'planning');
+  assert.equal(executorFamily({ scope: 'control', stage: 'pm' }), 'sub-plan');
   assert.equal(executorFamily({ scope: 'control', stage: 'project_debugger' }), 'sub-plan');
+});
+
+test('planning queue is exclusive to orchestration, not Pi role sessions', () => {
+  assert.equal(taskQueue({ scope: 'control', taskKind: 'WORKFLOW' }), 'planning');
+  assert.equal(taskQueue({ scope: 'control', taskKind: 'PLANNING' }), 'sub-plan');
+  assert.equal(taskQueue({ scope: 'control', taskKind: 'REVIEW_GATE' }), 'sub-plan');
+  assert.equal(taskQueue({ scope: 'control', taskKind: 'GLOBAL_REVIEW' }), 'sub-plan');
 });
