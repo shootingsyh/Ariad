@@ -47,6 +47,9 @@ export function subPlanResultTransition(task, result) {
       }
     } else if (task.stage === 'plan_validator' && !stages.includes('tech_lead_critic')) {
       signal = 'SKIP_CRITIC';
+    } else if (task.stage === 'tech_lead' && task.taskKind === 'GLOBAL_REVIEW') {
+      // Global review begins at validator; TL is only a repair stage.
+      signal = 'PASS';
     } else {
       signal = 'PASS';
     }
