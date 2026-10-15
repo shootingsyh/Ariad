@@ -37,5 +37,7 @@ test('side-effectful debugger cases stay on existing atomic routing path', () =>
   assert.equal(routed.state, 'DONE');
   assert.equal(routed.blockedRoute.taskId, 'T');
   assert.equal(routed.blockedRoute.patch.stage, 'artist');
-  assert.equal(milestoneResultTransition(task(), { outcome: 'TASK_TOO_LARGE' }), null);
+  const replan = milestoneResultTransition(task(), { outcome: 'TASK_TOO_LARGE' });
+  assert.equal(replan.state, 'WAITING_REPLAN');
+  assert.equal(replan.planningRequest.request.purpose, 'REPLAN_TASK');
 });
