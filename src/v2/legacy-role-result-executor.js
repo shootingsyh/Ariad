@@ -1,5 +1,6 @@
 import { subPlanResultTransition } from './sub-plan-result-executor.js';
 import { adhocResultTransition } from './adhoc-result-executor.js';
+import { milestoneResultTransition } from './milestone-result-executor.js';
 import { isPlannerTask } from './planner-flow.js';
 import { persistRoleExecutorTransition } from './role-executor-persistence.js';
 import { isAdhocAnalysis } from './control-task-policy.js';
@@ -30,7 +31,7 @@ export class LegacyRoleResultExecutor {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? await role.transition({ task, result });
+      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester'].includes(task.stage) ? milestoneResultTransition(task, result) : null) ?? await role.transition({ task, result });
       await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
     }
   }
