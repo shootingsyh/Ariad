@@ -1,6 +1,6 @@
 import { subPlanResultTransition } from './sub-plan-result-executor.js';
 import { isPlannerTask } from './planner-flow.js';
-import { applyTaskEvent } from './state-machine.js';
+import { persistRoleExecutorTransition } from './role-executor-persistence.js';
 import { isAdhocAnalysis } from './control-task-policy.js';
 
 // Compatibility executor: preserve legacy role results, history, and v2 state
@@ -30,45 +30,7 @@ export class LegacyRoleResultExecutor {
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
       const next = subPlanResultTransition(task, result) ?? await role.transition({ task, result });
-      if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-      const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
-      const transitionEvent = ({
-        READY: 'NEXT_ROLE',
-        DONE: 'FINISH',
-        WAITING_REPLAN: 'WAIT_REPLAN',
-        NEEDS_HUMAN: 'NEED_HUMAN',
-        SKIPPED: 'SKIP',
-      })[requestedState];
-      if (!transitionEvent) {
-        throw new Error(`role ${task.stage} requested unsupported task state: ${requestedState}`);
-      }
-      let updated = this.store.updateTask(task.id, task.version, applyTaskEvent(
-        task,
-        transitionEvent,
-        {
-          ...patch,
-          execution: null,
-        },
-      ));
-      if (transitionHistory) {
-        updated = this.store.appendTaskHistory(task.id, updated.version, transitionHistory);
-      }
-      for (const skipId of skipTaskIds) {
-        const skipped = this.store.getTask(skipId);
-        if (skipped && skipped.state === 'READY') {
-          this.store.updateTask(skipId, skipped.version, { state: 'SKIPPED', execution: null });
-        }
-      }
-      if (typeof role.afterPersist === 'function') {
-        const followUp = await role.afterPersist({ task: updated, result });
-        if (followUp) {
-          const { patch: followUpPatch = {}, transitionHistory: followUpHistory = null } = followUp;
-          updated = this.store.updateTask(updated.id, updated.version, followUpPatch);
-          if (followUpHistory) {
-            updated = this.store.appendTaskHistory(updated.id, updated.version, followUpHistory);
-          }
-        }
-      }
+      await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
     }
   }
 
