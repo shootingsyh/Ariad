@@ -1,5 +1,6 @@
 import { nodePlanningContext, nodePlanningSchedule } from './node-planning-algorithm.js';
 import { planningTraversalMachine as machine } from './planning-traversal-machine.js';
+import { resolveExecutorSignal } from './executor-dsl.js';
 import { readWorkflowExecutorCheckpoint, persistWorkflowExecutorSignal, persistWorkflowSpawn } from './workflow-executor-checkpoint.js';
 
 // Opt-in durable executor. Legacy workflows continue through their existing
@@ -49,9 +50,11 @@ export function advanceDurablePlanningWorkflow(store, parent) {
       if (!state.activeChildTaskId || !active) throw new Error('WORKFLOW_CHILD_MISSING');
       if (childFailed) {
         // Preserve existing externally visible NEEDS_HUMAN state.
-        const failed = persistWorkflowExecutorSignal({ store, taskId: parent.id, machine, signal: 'CHILD_FAILED' });
-        store.updateTask(failed.id, failed.version, {
-          state: 'NEEDS_HUMAN', workflowState: { ...failed.workflowState, blockedChildTaskId: active.id },
+        const nextState = resolveExecutorSignal(machine, checkpoint.state, 'CHILD_FAILED');
+        store.updateTask(parent.id, parent.version, {
+          state: 'NEEDS_HUMAN',
+          workflowState: { ...state, blockedChildTaskId: active.id,
+            executor: { machineId: machine.id, machineVersion: machine.version, state: nextState } },
         });
         return true;
       }
@@ -60,9 +63,10 @@ export function advanceDurablePlanningWorkflow(store, parent) {
         ? state.completedNodes : [...(state.completedNodes ?? []), active.id];
       // Atomic cursor release and state advance in a single task version update.
       const updated = store.getTask(parent.id);
+      const nextState = resolveExecutorSignal(machine, checkpoint.state, 'CHILD_COMPLETE');
       const next = { ...(updated.workflowState ?? {}), completedNodes,
         activeChildTaskId: null,
-        executor: { machineId: machine.id, machineVersion: machine.version, state: 'TRAVERSE' } };
+        executor: { machineId: machine.id, machineVersion: machine.version, state: nextState } };
       store.updateTask(updated.id, updated.version, { workflowState: next });
       return true;
     }
