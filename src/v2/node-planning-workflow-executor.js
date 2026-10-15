@@ -1,4 +1,5 @@
 import { nodePlanningContext, nodePlanningSchedule } from './node-planning-algorithm.js';
+import { advanceDurablePlanningWorkflow } from './durable-planning-workflow-executor.js';
 
 const finished = task => task && task.state === 'DONE';
 
@@ -6,6 +7,12 @@ const finished = task => task && task.state === 'DONE';
 export function advanceNodePlanningWorkflows(store, projectId) {
   const parents = store.listTasks(projectId, { scope: 'control' }).filter(task => task.taskKind === 'WORKFLOW' && task.executorType === 'node-planning' && task.state === 'READY');
   for (const parent of parents) {
+    // Explicit per-task opt-in preserves existing workflow behavior for legacy
+    // tasks and allows old tests to characterize both implementations.
+    if (parent.workflowState?.executor?.machineId === 'planning-tree-traversal') {
+      advanceDurablePlanningWorkflow(store, parent);
+      continue;
+    }
     const state = parent.workflowState ?? { cursor: 0, completedNodes: [], activeChildTaskId: null };
     const nodes = parent.input?.nodes;
     const rootId = parent.input?.scopeNodeId ?? parent.input?.rootId;
