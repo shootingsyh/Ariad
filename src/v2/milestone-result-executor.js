@@ -45,7 +45,7 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
   switch (task.stage) {
     case 'developer':
       signal = outcome === 'PASS' ? 'PASS'
-        : consecutiveRoleFailures(task, 'developer') >= 3 ? 'ESCALATE' : 'RETRY';
+        : outcome === 'NOT_PASS' && consecutiveRoleFailures(task, 'developer') < 3 ? 'RETRY' : 'ESCALATE';
       break;
     case 'test_engineer':
       signal = outcome === 'PASS'
