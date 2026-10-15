@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LegacyRoleResultExecutor } from '../src/v2/legacy-role-result-executor.js';
 
-async function advance({ outcome = 'PASS', ux = false, role = 'reviewer', afterPersist } = {}) {
+async function advance({ outcome = 'PASS', ux = false, configuredUx = false, role = 'reviewer', afterPersist } = {}) {
   let task = {
     id: 'M', projectId: 'P', version: 1, scope: 'delivery',
     taskKind: 'MILESTONE_TASK', stage: role, state: 'RESULT_READY',
@@ -23,6 +23,7 @@ async function advance({ outcome = 'PASS', ux = false, role = 'reviewer', afterP
     },
   };
   const roles = { get: () => ({
+    uxReviewEnabled: configuredUx,
     transition: () => { throw new Error('legacy transition must not run'); },
     ...(afterPersist ? { afterPersist } : {}),
   }) };
@@ -56,4 +57,10 @@ test('reviewer NOT_PASS returns to developer', async () => {
   const task = await advance({ outcome: 'NOT_PASS' });
   assert.equal(task.state, 'READY');
   assert.equal(task.stage, 'developer');
+});
+
+test('reviewer honors UX policy from role factory without scheduler override', async () => {
+  const task = await advance({ configuredUx: true });
+  assert.equal(task.stage, 'ux_reviewer');
+  assert.equal(task.state, 'READY');
 });
