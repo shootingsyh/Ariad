@@ -4,17 +4,27 @@ import { applyTaskEvent } from './state-machine.js';
 // Role session cleanup and optional follow-up hooks remain outside the DSL.
 export async function persistRoleExecutorTransition({ store, roles, task, result, next }) {
   if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-  const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
+  const { skipTaskIds = [], transitionHistory = null, blockedRoute = null, state: requestedState, ...patch } = next;
   const event = ({
     READY: 'NEXT_ROLE', DONE: 'FINISH', WAITING_REPLAN: 'WAIT_REPLAN',
     NEEDS_HUMAN: 'NEED_HUMAN', SKIPPED: 'SKIP',
   })[requestedState];
   if (!event) throw new Error(`unsupported executor task state: ${requestedState}`);
-  let updated = store.updateTask(task.id, task.version, applyTaskEvent(task, event, {
-    ...patch, execution: null,
-  }));
-  if (transitionHistory) {
-    updated = store.appendTaskHistory(task.id, updated.version, transitionHistory);
+  const taskPatch = applyTaskEvent(task, event, { ...patch, execution: null });
+  let updated;
+  if (blockedRoute) {
+    if (typeof store.applyExecutorBlockedRoute !== 'function') {
+      throw new Error('ATOMIC_DEBUGGER_ROUTE_UNAVAILABLE');
+    }
+    updated = store.applyExecutorBlockedRoute({
+      taskId: task.id, expectedVersion: task.version, patch: taskPatch,
+      transitionHistory, blockedRoute,
+    }).task;
+  } else {
+    updated = store.updateTask(task.id, task.version, taskPatch);
+    if (transitionHistory) {
+      updated = store.appendTaskHistory(task.id, updated.version, transitionHistory);
+    }
   }
   for (const id of skipTaskIds) {
     const skipped = store.getTask(id);
