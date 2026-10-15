@@ -7,8 +7,9 @@ export const milestoneMachine = defineExecutorMachine({
   states: {
     DEVELOP: { operation: 'runDeveloper', transitions: { PASS: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     TEST_ENGINEER: { operation: 'runTestEngineer', transitions: { PASS: 'TEST', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
-    TEST: { operation: 'runTester', transitions: { PASS: 'REVIEW', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
-    REVIEW: { operation: 'runReviewer', transitions: { PASS: 'COMPLETE', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
+    TEST: { operation: 'runTester', transitions: { PASS: 'REVIEW', REPLAN_TESTS: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
+    REVIEW: { operation: 'runReviewer', transitions: { PASS: 'COMPLETE', UX_REVIEW: 'UX_REVIEW', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
+    UX_REVIEW: { operation: 'runUxReviewer', transitions: { PASS: 'COMPLETE', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     DEBUG: { operation: 'runDebugger', transitions: { REPAIRED: 'DEVELOP', NEEDS_HUMAN: 'FAILED' } },
     COMPLETE: {}, FAILED: {},
   },
