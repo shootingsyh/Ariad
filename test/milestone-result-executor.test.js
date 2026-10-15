@@ -33,3 +33,9 @@ test('reviewer can request optional UX review', () => {
   assert.equal(milestoneResultTransition(task('reviewer', { ux: { required: true } }),
     { outcome: 'PASS' }, { uxReviewEnabled: true }).stage, 'ux_reviewer');
 });
+
+test('developer unknown or system outcome escalates immediately', () => {
+  for (const outcome of ['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH', 'UNKNOWN']) {
+    assert.equal(milestoneResultTransition(task('developer'), { outcome }).stage, 'project_debugger');
+  }
+});
