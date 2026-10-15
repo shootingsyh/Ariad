@@ -28,12 +28,12 @@ function systemFailureCount(task) {
 }
 
 export class V2Scheduler {
-  constructor({ store, roles, providers, resources }) {
+  constructor({ store, roles, providers, resources, uxReviewEnabled = false }) {
     this.store = store;
     this.roles = roles;
     this.providers = providers;
     this.resources = resources;
-    this.resultExecutor = new LegacyRoleResultExecutor({ store, roles });
+    this.resultExecutor = new LegacyRoleResultExecutor({ store, roles, uxReviewEnabled });
   }
 
   #settlePlanningBatches(projectId) {
