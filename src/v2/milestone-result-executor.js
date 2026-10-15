@@ -75,7 +75,7 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
       else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = 'NEEDS_HUMAN';
-      else return null;
+      else signal = 'ROUTE_PM';
       const transition = executorTransitionFromResult(task, signal);
       const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
       return {
@@ -90,7 +90,7 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
           at: new Date().toISOString(),
         } : {
           type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
-          diagnosis: outcome, guidance: result.result?.guidance ?? null,
+          diagnosis: outcome ?? 'UNKNOWN', guidance: result.result?.guidance ?? null,
           ...(route === 'pm' ? { summary: result.summary ?? result.result?.reason ?? null } : {}),
           at: new Date().toISOString(),
         },
