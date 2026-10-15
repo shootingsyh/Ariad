@@ -83,3 +83,21 @@ test('duplicate replan request rolls back debugger and blocked task', async () =
   assert.equal(store.getTask('debug').state, 'RESULT_READY');
   assert.equal(store.getTask('blocked').state, 'SYSTEM_BLOCKED');
 });
+
+test('control diagnostic debugger routes blocked delivery task atomically', async () => {
+  const store = fixture();
+  store.createTask({
+    id: 'diagnostic', projectId: 'P', scope: 'control', taskKind: 'DIAGNOSTIC',
+    stage: 'project_debugger', state: 'RESULT_READY',
+    input: { blockedTaskId: 'blocked' },
+    history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' }],
+  });
+  const task = store.getTask('diagnostic');
+  const result = task.history.at(-1);
+  const next = milestoneResultTransition(task, result);
+  assert.equal(next.blockedRoute.taskId, 'blocked');
+  await persistRoleExecutorTransition({ store, roles: { get: () => ({}) }, task, result, next });
+  assert.equal(store.getTask('diagnostic').state, 'DONE');
+  assert.equal(store.getTask('blocked').stage, 'developer');
+  assert.equal(store.getTask('blocked').state, 'READY');
+});
