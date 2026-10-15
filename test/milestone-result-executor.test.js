@@ -5,7 +5,9 @@ import { milestoneResultTransition } from '../src/v2/milestone-result-executor.j
 const task = (stage, extra = {}) => ({ scope: 'delivery', stage, history: [], ...extra });
 test('developer passes to test engineer; failure cannot pass', () => {
   assert.equal(milestoneResultTransition(task('developer'), { outcome: 'PASS' }).stage, 'test_engineer');
-  assert.equal(milestoneResultTransition(task('developer'), { outcome: 'NOT_PASS' }).stage, 'project_debugger');
+  assert.equal(milestoneResultTransition(task('developer'), { outcome: 'NOT_PASS' }).stage, 'developer');
+  const history = Array.from({ length: 3 }, () => ({ type: 'ROLE_RESULT', role: 'developer', outcome: 'NOT_PASS' }));
+  assert.equal(milestoneResultTransition(task('developer', { history }), { outcome: 'NOT_PASS' }).stage, 'project_debugger');
 });
 test('test engineer requires a nonempty executable plan', () => {
   assert.equal(milestoneResultTransition(task('test_engineer'), { outcome: 'PASS' }).stage, 'project_debugger');
