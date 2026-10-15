@@ -24,7 +24,7 @@ export async function persistRoleExecutorTransition({ store, roles, task, result
     if (typeof store.applyExecutorPlanningRequest !== 'function') throw new Error('ATOMIC_REPLAN_UNAVAILABLE');
     updated = store.applyExecutorPlanningRequest({
       taskId: task.id, expectedVersion: task.version, patch: taskPatch,
-      transitionHistory, planningRequest,
+      transitionHistory, planningRequest, skipTaskIds,
     });
   } else {
     updated = store.updateTask(task.id, task.version, taskPatch);
@@ -32,7 +32,7 @@ export async function persistRoleExecutorTransition({ store, roles, task, result
       updated = store.appendTaskHistory(task.id, updated.version, transitionHistory);
     }
   }
-  for (const id of skipTaskIds) {
+  for (const id of (planningRequest ? [] : skipTaskIds)) {
     const skipped = store.getTask(id);
     if (skipped?.state === 'READY') {
       store.updateTask(id, skipped.version, { state: 'SKIPPED', execution: null });
