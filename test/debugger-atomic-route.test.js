@@ -101,3 +101,18 @@ test('control diagnostic debugger routes blocked delivery task atomically', asyn
   assert.equal(store.getTask('blocked').stage, 'developer');
   assert.equal(store.getTask('blocked').state, 'READY');
 });
+
+test('recovered blocked task cannot be overwritten by stale debugger', async () => {
+  const store = fixture();
+  const task = store.getTask('debug');
+  const result = task.history.at(-1);
+  const next = milestoneResultTransition(task, result);
+  const blocked = store.getTask('blocked');
+  store.updateTask('blocked', blocked.version, { state: 'READY', stage: 'developer' });
+  await assert.rejects(
+    persistRoleExecutorTransition({ store, roles: { get: () => ({}) }, task, result, next }),
+    /not system blocked/,
+  );
+  assert.equal(store.getTask('debug').state, 'RESULT_READY');
+  assert.equal(store.getTask('blocked').stage, 'developer');
+});
