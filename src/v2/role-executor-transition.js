@@ -6,7 +6,7 @@ import { roleExecutorBinding } from './role-executor-binding.js';
 // Unsupported control roles remain explicitly outside these three machines.
 const STATE_TO_STAGE = Object.freeze({
   DEVELOP: 'developer', TEST_ENGINEER: 'test_engineer', TEST: 'tester',
-  REVIEW: 'reviewer', DEBUG: 'project_debugger',
+  REVIEW: 'reviewer', UX_REVIEW: 'ux_reviewer', DEBUG: 'project_debugger',
   PLAN: 'tech_lead', VALIDATE: 'plan_validator',
   CRITIQUE: 'tech_lead_critic', ANALYZE: 'tech_lead',
 });
