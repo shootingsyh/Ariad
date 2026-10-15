@@ -376,7 +376,7 @@ export class SQLiteV2Store {
     return this.getTask(id);
   }
 
-  applyExecutorBlockedRoute({ taskId, expectedVersion, patch, transitionHistory, blockedRoute }) {
+  applyExecutorBlockedRoute({ taskId, expectedVersion, patch, transitionHistory, blockedRoute, planningRequest = null }) {
     if (!blockedRoute?.taskId || blockedRoute.taskId === taskId) throw new Error('invalid blocked task route');
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -389,8 +389,26 @@ export class SQLiteV2Store {
       const updatedBlocked = this.appendTaskHistory(blocked.id, blocked.version, blockedRoute.history, blockedRoute.patch);
       let updated = this.updateTask(taskId, expectedVersion, patch);
       if (transitionHistory) updated = this.appendTaskHistory(taskId, updated.version, transitionHistory);
+      if (planningRequest) this.enqueuePlanningRequest({ ...planningRequest, projectId: current.projectId });
       this.db.exec('COMMIT');
       return { task: updated, blockedTask: updatedBlocked };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  applyExecutorPlanningRequest({ taskId, expectedVersion, patch, transitionHistory, planningRequest }) {
+    if (!planningRequest?.id) throw new Error('missing executor planning request');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.getTask(taskId);
+      if (!current || current.version !== expectedVersion) throw new Error(`task version conflict: ${taskId}`);
+      let updated = this.updateTask(taskId, expectedVersion, patch);
+      if (transitionHistory) updated = this.appendTaskHistory(taskId, updated.version, transitionHistory);
+      this.enqueuePlanningRequest({ ...planningRequest, projectId: current.projectId });
+      this.db.exec('COMMIT');
+      return updated;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
