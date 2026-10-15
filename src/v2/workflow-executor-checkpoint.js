@@ -7,7 +7,12 @@ import { resolveExecutorSignal } from './executor-dsl.js';
 export function readWorkflowExecutorCheckpoint(task, machine) {
   if (task.taskKind !== 'WORKFLOW') throw new Error('WORKFLOW_CHECKPOINT_REQUIRES_WORKFLOW');
   const saved = task.workflowState?.executor;
-  if (!saved) return { machineId: machine.id, machineVersion: machine.version, state: machine.initial };
+  if (!saved) {
+    // Existing workflow tasks may have already spawned a child before the
+    // executor migration. Resume waiting instead of spawning it twice.
+    const state = task.workflowState?.activeChildTaskId ? 'WAIT_CHILD' : machine.initial;
+    return { machineId: machine.id, machineVersion: machine.version, state };
+  }
   if (saved.machineId !== machine.id || saved.machineVersion !== machine.version) {
     throw new Error('EXECUTOR_CHECKPOINT_VERSION_MISMATCH');
   }
