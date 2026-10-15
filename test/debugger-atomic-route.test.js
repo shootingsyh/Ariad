@@ -116,3 +116,32 @@ test('recovered blocked task cannot be overwritten by stale debugger', async () 
   assert.equal(store.getTask('debug').state, 'RESULT_READY');
   assert.equal(store.getTask('blocked').stage, 'developer');
 });
+
+test('frontier guided retry persists request and skips finalize together', async () => {
+  const store = fixture();
+  store.createTask({ id: 'planner:B:frontier-finalize', projectId: 'P', scope: 'control',
+    stage: 'pm', state: 'READY' });
+  store.createTask({ id: 'frontier', projectId: 'P', scope: 'control',
+    taskKind: 'DIAGNOSTIC', stage: 'project_debugger', state: 'RESULT_READY',
+    input: { purpose: 'PLANNER_FRONTIER_DEBUG', planningBatchId: 'B', frontierPhase: 'feature' } });
+  const task = store.getTask('frontier');
+  const result = { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'split the feature' } };
+  const next = milestoneResultTransition(task, result);
+  await persistRoleExecutorTransition({ store, roles: { get: () => ({}) }, task, result, next });
+  assert.equal(store.getTask('frontier').state, 'DONE');
+  assert.equal(store.getTask('planner:B:frontier-finalize').state, 'SKIPPED');
+  const requests = store.listPlanningRequests('P', { state: 'PENDING' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].request.purpose, 'VERSION_MIGRATION');
+  assert.equal(requests[0].request.debuggerGuidance, 'split the feature');
+});
+
+test('frontier critic override completes without enqueuing planning', async () => {
+  const store = fixture();
+  const task = { ...store.getTask('debug'), taskKind: 'DIAGNOSTIC', scope: 'control',
+    input: { purpose: 'PLANNER_FRONTIER_DEBUG' } };
+  const next = milestoneResultTransition(task, { outcome: 'OVERRIDE_CRITIC' });
+  assert.equal(next.state, 'DONE');
+  assert.equal(next.transitionHistory.type, 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN');
+  assert.equal(next.planningRequest, undefined);
+});
