@@ -4,21 +4,7 @@ import { advanceDurablePlanningWorkflow } from './durable-planning-workflow-exec
 export function advanceNodePlanningWorkflows(store, projectId) {
   const parents = store.listTasks(projectId, { scope: 'control' }).filter(task =>
     task.taskKind === 'WORKFLOW' && task.executorType === 'node-planning' && task.state === 'READY');
-  for (const parent of parents) {
-    // Drain cheap, durably persisted transitions in the same tick, preserving
-    // the original public contract: one tick can spawn the next child.
-    // Never spin while a child is still running.
-    for (let step = 0; step < 5; step += 1) {
-      const current = store.getTask(parent.id);
-      if (current.state !== 'READY') break;
-      const before = current.version;
-      const progressed = advanceDurablePlanningWorkflow(store, current);
-      if (!progressed) break;
-      const after = store.getTask(parent.id);
-      if (after.version === before || after.state !== 'READY') break;
-      if (after.workflowState?.executor?.state === 'WAIT_CHILD') break;
-    }
-  }
+  for (const parent of parents) advanceDurablePlanningWorkflow(store, parent);
 }
 
 export function workflowChildTransition(task, result) {
