@@ -16,6 +16,18 @@ function failureCount(task) {
   return count;
 }
 
+function consecutiveRoleFailures(task, role) {
+  let count = 0;
+  for (let i = (task.history ?? []).length - 1; i >= 0; i--) {
+    const entry = task.history[i];
+    if (entry?.type !== 'ROLE_RESULT') continue;
+    if (entry.role === role && entry.outcome !== 'PASS') count++;
+    else if (entry.role === role && entry.outcome === 'PASS') break;
+    else if (entry.role === 'project_debugger') break;
+  }
+  return count;
+}
+
 function validTestPlan(task, result) {
   const cases = result.result?.testPlan?.testCases;
   const criteria = acceptanceCriterionIds(task);
@@ -32,7 +44,8 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
   let signal;
   switch (task.stage) {
     case 'developer':
-      signal = outcome === 'PASS' ? 'PASS' : 'ESCALATE';
+      signal = outcome === 'PASS' ? 'PASS'
+        : consecutiveRoleFailures(task, 'developer') >= 3 ? 'ESCALATE' : 'RETRY';
       break;
     case 'test_engineer':
       signal = outcome === 'PASS'
