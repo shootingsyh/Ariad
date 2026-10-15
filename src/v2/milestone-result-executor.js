@@ -70,7 +70,7 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       // A separate diagnostic task may need to mutate its blocked task.
       // Replanning also enqueues work. Preserve those side effects until
       // they are migrated into an atomic executor operation.
-      if (task.input?.blockedTaskId || outcome === 'TASK_TOO_LARGE') return null;
+      if (outcome === 'TASK_TOO_LARGE') return null;
       if (outcome === 'WRONG_IMPLEMENTATION_APPROACH') signal = 'REPAIRED';
       else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
@@ -78,10 +78,20 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       else signal = 'ROUTE_PM';
       const transition = executorTransitionFromResult(task, signal);
       const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
+      const blockedTaskId = task.input?.blockedTaskId ?? null;
+      const blockedRoute = blockedTaskId && route ? {
+        taskId: blockedTaskId,
+        patch: { stage: route, state: 'READY', execution: null },
+        history: {
+          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
+          diagnosis: outcome ?? 'UNKNOWN', guidance: result.result?.guidance ?? null,
+          source: 'system_block_diagnosis', at: new Date().toISOString(),
+        },
+      } : null;
       return {
-        ...transition.patch,
+        ...(blockedRoute ? { state: 'DONE', blockedRoute } : transition.patch),
         transitionHistory: signal === 'NEEDS_HUMAN' ? {
-          type: 'SYSTEM_DIAGNOSIS', role: 'project_debugger', blockedTaskId: null,
+          type: 'SYSTEM_DIAGNOSIS', role: 'project_debugger', blockedTaskId,
           diagnosis: outcome, summary: result.summary ?? result.result?.reason ?? 'Execution failure requires operator action.',
           evidence: result.result?.evidence ?? [],
           affectedComponent: result.result?.affectedComponent ?? null,
