@@ -4,7 +4,7 @@ import { applyTaskEvent } from './state-machine.js';
 // Role session cleanup and optional follow-up hooks remain outside the DSL.
 export async function persistRoleExecutorTransition({ store, roles, task, result, next }) {
   if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
-  const { skipTaskIds = [], transitionHistory = null, blockedRoute = null, state: requestedState, ...patch } = next;
+  const { skipTaskIds = [], transitionHistory = null, blockedRoute = null, planningRequest = null, state: requestedState, ...patch } = next;
   const event = ({
     READY: 'NEXT_ROLE', DONE: 'FINISH', WAITING_REPLAN: 'WAIT_REPLAN',
     NEEDS_HUMAN: 'NEED_HUMAN', SKIPPED: 'SKIP',
@@ -18,8 +18,14 @@ export async function persistRoleExecutorTransition({ store, roles, task, result
     }
     updated = store.applyExecutorBlockedRoute({
       taskId: task.id, expectedVersion: task.version, patch: taskPatch,
-      transitionHistory, blockedRoute,
+      transitionHistory, blockedRoute, planningRequest,
     }).task;
+  } else if (planningRequest) {
+    if (typeof store.applyExecutorPlanningRequest !== 'function') throw new Error('ATOMIC_REPLAN_UNAVAILABLE');
+    updated = store.applyExecutorPlanningRequest({
+      taskId: task.id, expectedVersion: task.version, patch: taskPatch,
+      transitionHistory, planningRequest,
+    });
   } else {
     updated = store.updateTask(task.id, task.version, taskPatch);
     if (transitionHistory) {
