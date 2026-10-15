@@ -55,3 +55,31 @@ test('debugger cannot update another project through blocked route', () => {
   }), /cross-project/);
   assert.equal(store.getTask('foreign').state, 'SYSTEM_BLOCKED');
 });
+
+test('debugger replan enqueues request and changes blocked task in one transaction', async () => {
+  const store = fixture();
+  const task = store.getTask('debug');
+  const result = { outcome: 'TASK_TOO_LARGE', result: { reason: 'oversized' } };
+  const next = milestoneResultTransition(task, result);
+  await persistRoleExecutorTransition({ store, roles: { get: () => ({}) }, task, result, next });
+  assert.equal(store.getTask('debug').state, 'DONE');
+  assert.equal(store.getTask('blocked').state, 'WAITING_REPLAN');
+  assert.equal(store.getTask('blocked').stage, 'developer');
+  const requests = store.listPlanningRequests('P', { state: 'PENDING' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].request.purpose, 'REPLAN_TASK');
+  assert.equal(requests[0].request.taskId, 'blocked');
+});
+
+test('duplicate replan request rolls back debugger and blocked task', async () => {
+  const store = fixture();
+  const task = store.getTask('debug');
+  const result = { outcome: 'TASK_TOO_LARGE' };
+  const next = milestoneResultTransition(task, result);
+  store.enqueuePlanningRequest({ ...next.planningRequest, projectId: 'P' });
+  await assert.rejects(
+    persistRoleExecutorTransition({ store, roles: { get: () => ({}) }, task, result, next }),
+  );
+  assert.equal(store.getTask('debug').state, 'RESULT_READY');
+  assert.equal(store.getTask('blocked').state, 'SYSTEM_BLOCKED');
+});
