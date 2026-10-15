@@ -400,7 +400,7 @@ export class SQLiteV2Store {
     }
   }
 
-  applyExecutorPlanningRequest({ taskId, expectedVersion, patch, transitionHistory, planningRequest }) {
+  applyExecutorPlanningRequest({ taskId, expectedVersion, patch, transitionHistory, planningRequest, skipTaskIds = [] }) {
     if (!planningRequest?.id) throw new Error('missing executor planning request');
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -409,6 +409,11 @@ export class SQLiteV2Store {
       let updated = this.updateTask(taskId, expectedVersion, patch);
       if (transitionHistory) updated = this.appendTaskHistory(taskId, updated.version, transitionHistory);
       this.enqueuePlanningRequest({ ...planningRequest, projectId: current.projectId });
+      for (const id of skipTaskIds) {
+        const skipped = this.getTask(id);
+        if (skipped && skipped.projectId !== current.projectId) throw new Error('cross-project skipped task');
+        if (skipped?.state === 'READY') this.updateTask(id, skipped.version, { state: 'SKIPPED', execution: null });
+      }
       this.db.exec('COMMIT');
       return updated;
     } catch (error) {
