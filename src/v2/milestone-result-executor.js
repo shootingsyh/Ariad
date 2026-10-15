@@ -66,6 +66,36 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       signal = outcome === 'PASS' ? 'PASS'
         : outcome === 'NOT_PASS' && failureCount(task) < 3 ? 'RETRY' : 'ESCALATE';
       break;
+    case 'project_debugger': {
+      // A separate diagnostic task may need to mutate its blocked task.
+      // Replanning also enqueues work. Preserve those side effects until
+      // they are migrated into an atomic executor operation.
+      if (task.input?.blockedTaskId || outcome === 'TASK_TOO_LARGE') return null;
+      if (outcome === 'WRONG_IMPLEMENTATION_APPROACH') signal = 'REPAIRED';
+      else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
+      else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
+      else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = 'NEEDS_HUMAN';
+      else return null;
+      const transition = executorTransitionFromResult(task, signal);
+      const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
+      return {
+        ...transition.patch,
+        transitionHistory: signal === 'NEEDS_HUMAN' ? {
+          type: 'SYSTEM_DIAGNOSIS', role: 'project_debugger', blockedTaskId: null,
+          diagnosis: outcome, summary: result.summary ?? result.result?.reason ?? 'Execution failure requires operator action.',
+          evidence: result.result?.evidence ?? [],
+          affectedComponent: result.result?.affectedComponent ?? null,
+          guidance: result.result?.guidance ?? null,
+          questions: ['Review the diagnosis, repair the runtime/model policy as appropriate, then explicitly resume the project.'],
+          at: new Date().toISOString(),
+        } : {
+          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
+          diagnosis: outcome, guidance: result.result?.guidance ?? null,
+          ...(route === 'pm' ? { summary: result.summary ?? result.result?.reason ?? null } : {}),
+          at: new Date().toISOString(),
+        },
+      };
+    }
     default:
       // Debugger's product/requirement decisions require the existing explicit
       // PM/TL routing; do not invent a generic automatic repair verdict.
