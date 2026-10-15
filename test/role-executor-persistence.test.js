@@ -14,7 +14,7 @@ function fixture() {
     getTask: id => id === 'child' ? task : null,
     updateTask(id, version, patch) {
       assert.equal(id, task.id);
-      assert.equal(version, task.version);
+      if (version !== task.version) throw new Error('version conflict');
       task = { ...task, ...patch, version: version + 1 };
       return task;
     },
