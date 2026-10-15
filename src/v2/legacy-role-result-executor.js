@@ -18,9 +18,10 @@ function latestResult(task) {
 
 
 export class LegacyRoleResultExecutor {
-  constructor({ store, roles }) {
+  constructor({ store, roles, uxReviewEnabled = false }) {
     this.store = store;
     this.roles = roles;
+    this.uxReviewEnabled = uxReviewEnabled;
   }
 
   async advanceResults(projectId, { migrating = false, adhocOnly = false } = {}) {
@@ -31,7 +32,7 @@ export class LegacyRoleResultExecutor {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester'].includes(task.stage) ? milestoneResultTransition(task, result) : null) ?? await role.transition({ task, result });
+      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer'].includes(task.stage) ? milestoneResultTransition(task, result, { uxReviewEnabled: this.uxReviewEnabled }) : null) ?? await role.transition({ task, result });
       await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
     }
   }
