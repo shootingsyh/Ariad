@@ -6,7 +6,7 @@ import { milestoneMachine, subPlanMachine, adhocMachine } from './role-executor-
 // owning executor, and only then produces a transition signal.
 const MILESTONE_STAGES = Object.freeze({
   developer: 'DEVELOP', test_engineer: 'TEST_ENGINEER',
-  tester: 'TEST', reviewer: 'REVIEW', ux_reviewer: 'UX_REVIEW', project_debugger: 'DEBUG',
+  tester: 'TEST', reviewer: 'REVIEW', ux_reviewer: 'UX_REVIEW', artist: 'ARTIST', pm: 'PM', project_debugger: 'DEBUG',
 });
 const SUB_PLAN_STAGES = Object.freeze({
   tech_lead: 'PLAN', plan_validator: 'VALIDATE',
