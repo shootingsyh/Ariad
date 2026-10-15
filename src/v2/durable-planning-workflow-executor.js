@@ -3,8 +3,7 @@ import { planningTraversalMachine as machine } from './planning-traversal-machin
 import { resolveExecutorSignal } from './executor-dsl.js';
 import { readWorkflowExecutorCheckpoint, persistWorkflowExecutorSignal, persistWorkflowSpawn } from './workflow-executor-checkpoint.js';
 
-// Opt-in durable executor. Legacy workflows continue through their existing
-// entrypoint until parity tests pass. One state transition per invocation.
+// Default planning executor behind the existing public entrypoint.\n// One durable state transition per invocation.
 export function advanceDurablePlanningWorkflow(store, parent) {
   if (parent.taskKind !== 'WORKFLOW' || parent.executorType !== 'node-planning' || parent.state !== 'READY') return false;
   const state = parent.workflowState ?? { cursor: 0, completedNodes: [], activeChildTaskId: null };
