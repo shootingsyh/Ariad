@@ -810,6 +810,7 @@ export function createDefaultV2Roles({
     },
 
     reviewer: {
+      uxReviewEnabled,
       prepare: ({ task }) => prepareLlm(task, [
         REVIEWER_FRESH_EVIDENCE_PROMPT,
         deliveryRoleSuffix('reviewer'),
