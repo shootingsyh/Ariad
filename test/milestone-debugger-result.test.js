@@ -33,6 +33,9 @@ test('debugger routing targets have valid executor bindings', async () => {
   assert.equal(roleExecutorBinding({ scope: 'delivery', stage: 'pm' }).state, 'PM');
 });
 test('side-effectful debugger cases stay on existing atomic routing path', () => {
-  assert.equal(milestoneResultTransition(task({ blockedTaskId: 'T' }), { outcome: 'ASSET_ISSUE' }), null);
+  const routed = milestoneResultTransition(task({ blockedTaskId: 'T' }), { outcome: 'ASSET_ISSUE' });
+  assert.equal(routed.state, 'DONE');
+  assert.equal(routed.blockedRoute.taskId, 'T');
+  assert.equal(routed.blockedRoute.patch.stage, 'artist');
   assert.equal(milestoneResultTransition(task(), { outcome: 'TASK_TOO_LARGE' }), null);
 });
