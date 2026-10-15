@@ -1,4 +1,4 @@
-import { workflowChildTransition } from './node-planning-workflow-executor.js';
+import { subPlanResultTransition } from './sub-plan-result-executor.js';
 import { isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { isAdhocAnalysis } from './control-task-policy.js';
@@ -29,7 +29,7 @@ export class LegacyRoleResultExecutor {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = workflowChildTransition(task, result) ?? await role.transition({ task, result });
+      const next = subPlanResultTransition(task, result) ?? await role.transition({ task, result });
       if (!next || !next.state) throw new Error(`role ${task.stage} returned invalid transition`);
       const { skipTaskIds = [], transitionHistory = null, state: requestedState, ...patch } = next;
       const transitionEvent = ({
