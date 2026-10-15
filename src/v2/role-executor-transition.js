@@ -7,6 +7,7 @@ import { roleExecutorBinding } from './role-executor-binding.js';
 const STATE_TO_STAGE = Object.freeze({
   DEVELOP: 'developer', TEST_ENGINEER: 'test_engineer', TEST: 'tester',
   REVIEW: 'reviewer', UX_REVIEW: 'ux_reviewer', DEBUG: 'project_debugger',
+  ARTIST: 'artist', PM: 'pm',
   PLAN: 'tech_lead', VALIDATE: 'plan_validator',
   CRITIQUE: 'tech_lead_critic', ANALYZE: 'tech_lead',
 });
@@ -17,7 +18,7 @@ export function executorTransitionFromResult(task, signal) {
   const nextState = resolveExecutorSignal(binding.machine, binding.state, signal);
   const terminal = !binding.machine.states[nextState].operation;
   const state = terminal
-    ? (nextState === 'FAILED' ? 'NEEDS_HUMAN' : 'DONE')
+    ? (nextState === 'FAILED' ? 'NEEDS_HUMAN' : nextState === 'REPLAN_PENDING' ? 'WAITING_REPLAN' : 'DONE')
     : 'READY';
   return Object.freeze({
     machineId: binding.machine.id,
