@@ -70,7 +70,28 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       // A separate diagnostic task may need to mutate its blocked task.
       // Replanning also enqueues work. Preserve those side effects until
       // they are migrated into an atomic executor operation.
-      if (outcome === 'TASK_TOO_LARGE') return null;
+      if (outcome === 'TASK_TOO_LARGE') {
+        const blockedTaskId = task.input?.blockedTaskId ?? null;
+        const targetTaskId = blockedTaskId ?? task.id;
+        const history = {
+          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'tech_lead',
+          diagnosis: outcome, guidance: result.result?.guidance ?? null,
+          ...(blockedTaskId ? { source: 'system_block_diagnosis' } : {}),
+          at: new Date().toISOString(),
+        };
+        return {
+          ...(blockedTaskId ? { state: 'DONE', blockedRoute: {
+            taskId: blockedTaskId,
+            patch: { stage: 'developer', state: 'WAITING_REPLAN', execution: null },
+            history,
+          } } : { state: 'WAITING_REPLAN', stage: 'developer' }),
+          planningRequest: {
+            id: 'debugger-replan:' + task.id + ':' + task.version,
+            request: { purpose: 'REPLAN_TASK', taskId: targetTaskId, diagnosis: result.result ?? result },
+          },
+          transitionHistory: blockedTaskId ? null : history,
+        };
+      }
       if (outcome === 'WRONG_IMPLEMENTATION_APPROACH') signal = 'REPAIRED';
       else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
