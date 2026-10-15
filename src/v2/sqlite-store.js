@@ -376,6 +376,27 @@ export class SQLiteV2Store {
     return this.getTask(id);
   }
 
+  applyExecutorBlockedRoute({ taskId, expectedVersion, patch, transitionHistory, blockedRoute }) {
+    if (!blockedRoute?.taskId || blockedRoute.taskId === taskId) throw new Error('invalid blocked task route');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const blocked = this.getTask(blockedRoute.taskId);
+      if (!blocked) throw new Error(`unknown blocked task: ${blockedRoute.taskId}`);
+      const current = this.getTask(taskId);
+      if (!current || current.version !== expectedVersion) throw new Error(`task version conflict: ${taskId}`);
+      if (blocked.projectId !== current.projectId) throw new Error('cross-project debugger route');
+      if (current.input?.blockedTaskId !== blocked.id) throw new Error('debugger blocked task mismatch');
+      const updatedBlocked = this.appendTaskHistory(blocked.id, blocked.version, blockedRoute.history, blockedRoute.patch);
+      let updated = this.updateTask(taskId, expectedVersion, patch);
+      if (transitionHistory) updated = this.appendTaskHistory(taskId, updated.version, transitionHistory);
+      this.db.exec('COMMIT');
+      return { task: updated, blockedTask: updatedBlocked };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   appendTaskHistory(id, expectedVersion, entry, patch = {}) {
     const current = this.getTask(id);
     if (!current) throw new Error(`unknown task: ${id}`);
