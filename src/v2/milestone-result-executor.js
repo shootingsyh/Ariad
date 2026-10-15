@@ -39,7 +39,11 @@ function validTestPlan(task, result) {
 }
 
 export function milestoneResultTransition(task, result, { uxReviewEnabled = false } = {}) {
-  if (effectiveTaskKind(task) !== TASK_KINDS.MILESTONE_TASK) return null;
+  const kind = effectiveTaskKind(task);
+  const diagnostic = kind === TASK_KINDS.DIAGNOSTIC && task.stage === 'project_debugger';
+  if (kind !== TASK_KINDS.MILESTONE_TASK && !diagnostic) return null;
+  // Planner-frontier diagnostics have a distinct control protocol.
+  if (diagnostic && task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') return null;
   const outcome = result?.outcome;
   let signal;
   switch (task.stage) {
@@ -97,7 +101,8 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
       else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = 'NEEDS_HUMAN';
       else signal = 'ROUTE_PM';
-      const transition = executorTransitionFromResult(task, signal);
+      const transition = executorTransitionFromResult(diagnostic
+        ? { ...task, taskKind: TASK_KINDS.MILESTONE_TASK, scope: 'delivery' } : task, signal);
       const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
       const blockedTaskId = task.input?.blockedTaskId ?? null;
       const blockedRoute = blockedTaskId && route ? {
