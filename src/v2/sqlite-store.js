@@ -386,6 +386,8 @@ export class SQLiteV2Store {
       if (!current || current.version !== expectedVersion) throw new Error(`task version conflict: ${taskId}`);
       if (blocked.projectId !== current.projectId) throw new Error('cross-project debugger route');
       if (current.input?.blockedTaskId !== blocked.id) throw new Error('debugger blocked task mismatch');
+      if (current.stage !== 'project_debugger' || current.state !== 'RESULT_READY') throw new Error('debugger not ready to route');
+      if (blocked.state !== 'SYSTEM_BLOCKED') throw new Error('blocked task is not system blocked');
       const updatedBlocked = this.appendTaskHistory(blocked.id, blocked.version, blockedRoute.history, blockedRoute.patch);
       let updated = this.updateTask(taskId, expectedVersion, patch);
       if (transitionHistory) updated = this.appendTaskHistory(taskId, updated.version, transitionHistory);
