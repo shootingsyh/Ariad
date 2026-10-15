@@ -18,7 +18,7 @@ export const subPlanMachine = defineExecutorMachine({
   id: 'sub-plan-executor', version: 1, initial: 'PLAN',
   states: {
     PLAN: { operation: 'runTechLead', transitions: { PASS: 'VALIDATE', RETRY: 'PLAN', ESCALATE: 'DEBUG' } },
-    VALIDATE: { operation: 'runPlanValidator', transitions: { PASS: 'CRITIQUE', RETRY: 'PLAN', ESCALATE: 'DEBUG' } },
+    VALIDATE: { operation: 'runPlanValidator', transitions: { PASS: 'CRITIQUE', SKIP_CRITIC: 'COMPLETE', RETRY: 'PLAN', ESCALATE: 'DEBUG' } },
     CRITIQUE: { operation: 'runCritic', transitions: { PASS: 'COMPLETE', RETRY: 'PLAN', ESCALATE: 'DEBUG' } },
     DEBUG: { operation: 'runDebugger', transitions: { REPAIRED: 'PLAN', NEEDS_HUMAN: 'FAILED' } },
     COMPLETE: {}, FAILED: {},
