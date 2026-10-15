@@ -1,51 +1,10 @@
-import { nodePlanningContext, nodePlanningSchedule } from './node-planning-algorithm.js';
 import { advanceDurablePlanningWorkflow } from './durable-planning-workflow-executor.js';
 
-const finished = task => task && task.state === 'DONE';
-
-// All state is durable in v2_tasks. Each tick is safe to repeat after a crash.
+// Stable legacy entrypoint; all planning workflows use the new executor.
 export function advanceNodePlanningWorkflows(store, projectId) {
-  const parents = store.listTasks(projectId, { scope: 'control' }).filter(task => task.taskKind === 'WORKFLOW' && task.executorType === 'node-planning' && task.state === 'READY');
-  for (const parent of parents) {
-    // Explicit per-task opt-in preserves existing workflow behavior for legacy
-    // tasks and allows old tests to characterize both implementations.
-    if (parent.workflowState?.executor?.machineId === 'planning-tree-traversal') {
-      advanceDurablePlanningWorkflow(store, parent);
-      continue;
-    }
-    const state = parent.workflowState ?? { cursor: 0, completedNodes: [], activeChildTaskId: null };
-    const nodes = parent.input?.nodes;
-    const rootId = parent.input?.scopeNodeId ?? parent.input?.rootId;
-    // Never guess a plan: the TL must provide a validated tree before execution.
-    if (!Array.isArray(nodes) || !rootId) continue;
-    const steps = nodePlanningSchedule({ phase: parent.input.phase, nodes, rootId, operation: parent.input.operation ?? 'REPLAN' });
-    const units = [];
-    for (const step of steps) {
-      if (step.kind === 'planner') units.push({ kind: 'NODE_PLANNING', nodeId: step.nodeId, stages: ['tech_lead', 'plan_validator', ...(steps.some(x => x.kind === 'parent_critic' && x.nodeId === step.nodeId) ? ['tech_lead_critic'] : [])] });
-    }
-    units.push({ kind: 'GLOBAL_REVIEW', nodeId: rootId, stages: ['plan_validator', 'tech_lead_critic'] });
-    const active = state.activeChildTaskId && store.getTask(state.activeChildTaskId);
-    if (state.activeChildTaskId && active?.state === 'NEEDS_HUMAN') {
-      store.updateTask(parent.id, parent.version, { state: 'NEEDS_HUMAN', workflowState: { ...state, blockedChildTaskId: active.id } });
-      continue;
-    }
-    if (state.activeChildTaskId && !finished(active)) continue;
-    const completed = active && !state.completedNodes.includes(active.id) ? [...state.completedNodes, active.id] : state.completedNodes;
-    const index = state.cursor;
-    if (index >= units.length) {
-      store.updateTask(parent.id, parent.version, { state: 'DONE', workflowState: { ...state, activeChildTaskId: null, completedNodes: completed } });
-      continue;
-    }
-    const unit = units[index];
-    const childId = `${parent.id}:${index}`;
-    const child = {
-      id: childId, projectId, scope: 'control', flowId: parent.flowId,
-      parentTaskId: parent.id, taskKind: unit.kind, stage: unit.stages[0],
-      input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: parent.input.phase, nodeId: unit.nodeId, stages: unit.stages, reason: parent.input.reason, nodes, rootId, planningContext: nodePlanningContext({ phase: parent.input.phase, operation: parent.input.operation ?? 'REPLAN', nodes, nodeId: unit.nodeId }) },
-    };
-    store.advanceNodePlanningWorkflow({ parentTaskId: parent.id, expectedVersion: parent.version,
-      childTask: child, workflowState: { cursor: index + 1, activeChildTaskId: childId, completedNodes: completed } });
-  }
+  const parents = store.listTasks(projectId, { scope: 'control' }).filter(task =>
+    task.taskKind === 'WORKFLOW' && task.executorType === 'node-planning' && task.state === 'READY');
+  for (const parent of parents) advanceDurablePlanningWorkflow(store, parent);
 }
 
 export function workflowChildTransition(task, result) {
