@@ -145,3 +145,19 @@ test('frontier critic override completes without enqueuing planning', async () =
   assert.equal(next.transitionHistory.type, 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN');
   assert.equal(next.planningRequest, undefined);
 });
+
+test('scheduler result adapter routes diagnostic without invoking legacy transition', async () => {
+  const { LegacyRoleResultExecutor } = await import('../src/v2/legacy-role-result-executor.js');
+  const store = fixture();
+  store.createTask({
+    id: 'diagnostic-adapter', projectId: 'P', scope: 'control', taskKind: 'DIAGNOSTIC',
+    stage: 'project_debugger', state: 'RESULT_READY', input: { blockedTaskId: 'blocked' },
+    history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'ASSET_ISSUE' }],
+  });
+  const roles = { get: () => ({
+    transition: () => { throw new Error('legacy diagnostic transition called'); },
+  }) };
+  await new LegacyRoleResultExecutor({ store, roles }).advanceResults('P');
+  assert.equal(store.getTask('diagnostic-adapter').state, 'DONE');
+  assert.equal(store.getTask('blocked').stage, 'artist');
+});
