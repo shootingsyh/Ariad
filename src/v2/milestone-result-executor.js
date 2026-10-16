@@ -81,6 +81,12 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
         },
       };
     }
+    return { state: 'NEEDS_HUMAN', transitionHistory: {
+      type: 'PLANNER_FRONTIER_DEBUGGER_UNHANDLED_OUTCOME',
+      role: 'project_debugger', diagnosis: result?.outcome ?? null,
+      summary: result?.summary ?? result?.result?.reason ?? null,
+      at: new Date().toISOString(),
+    } };
   }
   const outcome = result?.outcome;
   let signal;
