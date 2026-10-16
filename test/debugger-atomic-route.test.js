@@ -149,6 +149,8 @@ test('frontier critic override completes without enqueuing planning', async () =
 test('scheduler result adapter routes diagnostic without invoking legacy transition', async () => {
   const { LegacyRoleResultExecutor } = await import('../src/v2/legacy-role-result-executor.js');
   const store = fixture();
+  const unrelated = store.getTask('debug');
+  store.updateTask('debug', unrelated.version, { state: 'DONE' });
   store.createTask({
     id: 'diagnostic-adapter', projectId: 'P', scope: 'control', taskKind: 'DIAGNOSTIC',
     stage: 'project_debugger', state: 'RESULT_READY', input: { blockedTaskId: 'blocked' },
