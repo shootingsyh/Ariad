@@ -32,7 +32,7 @@ export class LegacyRoleResultExecutor {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer', 'project_debugger'].includes(task.stage) ? milestoneResultTransition(task, result, { uxReviewEnabled: this.uxReviewEnabled || this.roles.get('reviewer')?.uxReviewEnabled === true }) : null) ?? await role.transition({ task, result });
+      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer', 'project_debugger'].includes(task.stage) ? milestoneResultTransition(task, result, { uxReviewEnabled: this.uxReviewEnabled || (this.roles.roles?.get('reviewer')?.uxReviewEnabled === true || (!this.roles.roles && role.uxReviewEnabled === true)) }) : null) ?? await role.transition({ task, result });
       await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
     }
   }

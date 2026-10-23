@@ -87,7 +87,7 @@ test('duplicate replan request rolls back debugger and blocked task', async () =
 test('control diagnostic debugger routes blocked delivery task atomically', async () => {
   const store = fixture();
   store.createTask({
-    id: 'diagnostic', projectId: 'P', scope: 'control', taskKind: 'DIAGNOSTIC',
+    id: 'diagnostic', projectId: 'P', scope: 'control', flowId: 'diagnostic:P', taskKind: 'DIAGNOSTIC',
     stage: 'project_debugger', state: 'RESULT_READY',
     input: { blockedTaskId: 'blocked' },
     history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' }],
@@ -119,9 +119,9 @@ test('recovered blocked task cannot be overwritten by stale debugger', async () 
 
 test('frontier guided retry persists request and skips finalize together', async () => {
   const store = fixture();
-  store.createTask({ id: 'planner:B:frontier-finalize', projectId: 'P', scope: 'control',
+  store.createTask({ id: 'planner:B:frontier-finalize', projectId: 'P', scope: 'control', flowId: 'planner:B',
     stage: 'pm', state: 'READY' });
-  store.createTask({ id: 'frontier', projectId: 'P', scope: 'control',
+  store.createTask({ id: 'frontier', projectId: 'P', scope: 'control', flowId: 'planner:B',
     taskKind: 'DIAGNOSTIC', stage: 'project_debugger', state: 'RESULT_READY',
     input: { purpose: 'PLANNER_FRONTIER_DEBUG', planningBatchId: 'B', frontierPhase: 'feature' } });
   const task = store.getTask('frontier');
@@ -152,7 +152,7 @@ test('scheduler result adapter routes diagnostic without invoking legacy transit
   const unrelated = store.getTask('debug');
   store.updateTask('debug', unrelated.version, { state: 'DONE' });
   store.createTask({
-    id: 'diagnostic-adapter', projectId: 'P', scope: 'control', taskKind: 'DIAGNOSTIC',
+    id: 'diagnostic-adapter', projectId: 'P', scope: 'control', flowId: 'diagnostic:P', taskKind: 'DIAGNOSTIC',
     stage: 'project_debugger', state: 'RESULT_READY', input: { blockedTaskId: 'blocked' },
     history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'ASSET_ISSUE' }],
   });

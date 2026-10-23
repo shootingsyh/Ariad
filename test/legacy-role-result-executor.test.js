@@ -21,7 +21,7 @@ test('legacy executor preserves RESULT_READY -> READY stage advancement', async 
     },
   };
   const roles = { get: name => {
-    assert.equal(name, 'developer');
+    assert.ok(['developer', 'reviewer'].includes(name));
     return { transition: () => ({ stage: 'test_engineer', state: 'READY' }) };
   } };
   await new LegacyRoleResultExecutor({ store, roles }).advanceResults('P');

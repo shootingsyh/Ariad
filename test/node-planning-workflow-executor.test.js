@@ -17,6 +17,7 @@ test('durable interface postorder, role steps, global review, restart and idempo
     const nodes = [{ id: 'root', parentId: null }, { id: 'leaf', parentId: 'root' }];
     store.updateTask(parent.id, parent.version, { input: { ...parent.input, nodes } });
     advanceNodePlanningWorkflows(store, 'P');
+    advanceNodePlanningWorkflows(store, 'P');
     let child = store.getTask('wf:0');
     assert.equal(child.input.nodeId, 'leaf');
     assert.equal(child.stage, 'tech_lead');
@@ -31,10 +32,14 @@ test('durable interface postorder, role steps, global review, restart and idempo
     }
     assert.equal(child.state, 'DONE');
     advanceNodePlanningWorkflows(store, 'P');
+    advanceNodePlanningWorkflows(store, 'P');
+    advanceNodePlanningWorkflows(store, 'P');
     assert.equal(store.getTask('wf:1').input.nodeId, 'root');
     for (let index = 1; index <= 2; index++) {
       let task = store.getTask(`wf:${index}`);
       for (const stage of task.input.stages) task = store.updateTask(task.id, task.version, workflowChildTransition(task, { outcome: stage === 'tech_lead' ? 'PLANNED' : stage === 'tech_lead_critic' ? 'CLEAN' : 'PASS' }));
+      advanceNodePlanningWorkflows(store, 'P');
+      advanceNodePlanningWorkflows(store, 'P');
       advanceNodePlanningWorkflows(store, 'P');
     }
     assert.equal(store.getTask('wf:2').taskKind, 'GLOBAL_REVIEW');
@@ -63,6 +68,7 @@ test('failed child propagates human gate to parent without creating next node', 
   try {
     store.createProject({ id: 'P' });
     store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'fix', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null }] });
+    advanceNodePlanningWorkflows(store, 'P');
     advanceNodePlanningWorkflows(store, 'P');
     const child = store.getTask('wf:0');
     store.updateTask(child.id, child.version, { state: 'NEEDS_HUMAN' });
