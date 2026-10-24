@@ -50,3 +50,42 @@ test('rejects unknown signals, stale checkpoint version and premature spawn', ()
   const other = { ...machine, version: 2 };
   assert.throws(() => readWorkflowExecutorCheckpoint(store.getTask(), other), /VERSION_MISMATCH/);
 });
+
+
+test('SQLite checkpoint survives store reopen and prevents duplicate child spawn', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { SQLiteV2Store } = await import('../src/v2/sqlite-store.js');
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-dsl-restart-'));
+  const db = join(dir, 'state.db');
+  let store = new SQLiteV2Store(db);
+  try {
+    store.createProject({ id: 'P', spec: 'restart test' });
+    store.createTask({ id: 'parent', projectId: 'P', taskKind: 'WORKFLOW',
+      executorType: 'node-planning', scope: 'control', flowId: 'workflow:restart',
+      stage: 'tech_lead', state: 'READY', dependsOn: [],
+      workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null } });
+    persistWorkflowExecutorSignal({ store, taskId: 'parent', machine, signal: 'NODE_FOUND' });
+    store.close();
+    store = new SQLiteV2Store(db);
+    assert.equal(readWorkflowExecutorCheckpoint(store.getTask('parent'), machine).state, 'SPAWN');
+    const childTask = { id: 'child', projectId: 'P', scope: 'control',
+      flowId: 'workflow:restart', parentTaskId: 'parent', taskKind: 'NODE_PLANNING',
+      stage: 'tech_lead', state: 'READY', dependsOn: [] };
+    persistWorkflowSpawn({ store, taskId: 'parent', machine, childTask,
+      workflowState: { cursor: 1, activeChildTaskId: 'child' } });
+    store.close();
+    store = new SQLiteV2Store(db);
+    const parent = store.getTask('parent');
+    assert.equal(readWorkflowExecutorCheckpoint(parent, machine).state, 'WAIT_CHILD');
+    assert.equal(parent.workflowState.cursor, 1);
+    assert.equal(store.getTask('child').id, 'child');
+    assert.throws(() => persistWorkflowSpawn({ store, taskId: 'parent', machine, childTask,
+      workflowState: { cursor: 2, activeChildTaskId: 'child' } }), /WORKFLOW_NOT_IN_SPAWN/);
+    assert.equal(store.listTasks('P').filter(t => t.id === 'child').length, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
