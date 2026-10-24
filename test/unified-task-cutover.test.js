@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,linkSync} from 'node:fs';
+import {mkdtempSync,rmSync,linkSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {SQLiteV2Store} from '../src/v2/sqlite-store.js';
@@ -14,7 +14,7 @@ test('cutover refuses live SQLite hardlinks before inspecting artifacts',()=>{
  finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
 
-test('cutover records only evidence-backed historical exceptions on isolated copy',async()=>{
+test('cutover records only evidence-backed historical exceptions on isolated copy', { skip: !existsSync('/tmp/ariad-verify-unified-37DRE1/state.db') || !existsSync('/home/shootingsyh/srpg-project/game/.ariad/state.db') ? 'requires explicit archived SRPG cutover fixture' : false }, async()=>{
  const {copyFileSync}=await import('node:fs');
  const source='/tmp/ariad-verify-unified-37DRE1/state.db';
  const live='/home/shootingsyh/srpg-project/game/.ariad/state.db';

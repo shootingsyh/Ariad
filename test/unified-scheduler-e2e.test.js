@@ -20,9 +20,9 @@ test('unified scheduler gates aggregate children and completes dev-test-review w
   store.createTask(mk('A','aggregate',['leaf']));
   store.createTask(mk('leaf','implementation',[],'A'));
   const roles=new RoleRegistry();
-  for(const role of ['developer','test_engineer','reviewer'])roles.register(role,{
+  for(const role of ['developer','test_engineer','tester','reviewer'])roles.register(role,{
    prepare:()=>({provider:'fake',resources:['gpu']}),
-   transition:()=>role==='developer'?{stage:'test_engineer',state:'READY'}:role==='test_engineer'?{stage:'reviewer',state:'READY'}:{stage:'reviewer',state:'DONE'},
+   transition:()=>{throw new Error('legacy role transition invoked');},
   });
   let counter=0;
   const statuses=new Map();const starts=[];
@@ -33,21 +33,21 @@ test('unified scheduler gates aggregate children and completes dev-test-review w
   const supervisor=new V2Supervisor({store,providers,resources});
   assert.throws(()=>store.applyDeliveryPlan('p',{version:3,tasks:[{id:'old'}]}),/UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER/);
   for(const id of ['leaf','A']) {
-   for(const role of ['developer','test_engineer','reviewer']) {
+   for(const role of ['developer','test_engineer','tester','reviewer']) {
     if(store.getTask(id).state!=='WORKING') await scheduler.tick('p');
     const task=store.getTask(id);
     assert.equal(task.stage,role);
     assert.equal(task.state,'WORKING');
     if(id==='leaf')assert.equal(store.getTask('A').state,'READY');
-    statuses.set(task.execution.externalId,{state:'COMPLETED',outcome:'PASS'});
+    statuses.set(task.execution.externalId,{state:'COMPLETED',outcome:'PASS',result:role==='test_engineer'?{testPlan:{testCases:[{entry:'src/index.js',command:'node --check src/index.js',covers:[],executionScope:['src/index.js']}]}}:{}});
     await supervisor.audit('p');
     assert.equal(store.getTask(id).state,'RESULT_READY');
    }
    await scheduler.tick('p');
    assert.equal(store.getTask(id).state,'DONE');
   }
-  assert.deepEqual(starts.map(x=>`${x.id}:${x.role}`),['leaf:developer','leaf:test_engineer','leaf:reviewer','A:developer','A:test_engineer','A:reviewer']);
-  assert.equal(store.getTask('A').history.filter(h=>h.type==='ROLE_RESULT').length,3);
+  assert.deepEqual(starts.map(x=>`${x.id}:${x.role}`),['leaf:developer','leaf:test_engineer','leaf:tester','leaf:reviewer','A:developer','A:test_engineer','A:tester','A:reviewer']);
+  assert.equal(store.getTask('A').history.filter(h=>h.type==='ROLE_RESULT').length,4);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
 
