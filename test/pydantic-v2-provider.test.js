@@ -68,6 +68,13 @@ test('V2 scheduler and supervisor can use pydantic-v2 with provider-terminal com
   const runtime = new PydanticRuntimeClient();
   const provider = new PydanticV2Provider(runtime, {
     resolveModelRef: () => 'test/runtime',
+    resolveModelConfig: (_model, context) => ({
+      kind: 'test', model: context.role,
+      result: context.role === 'test_engineer'
+        ? { testPlan: { testCases: [{ entry: 'input.txt', command: 'cat input.txt',
+          covers: [], executionScope: ['input.txt'] }] } }
+        : {},
+    }),
   });
 
   try {
@@ -75,18 +82,18 @@ test('V2 scheduler and supervisor can use pydantic-v2 with provider-terminal com
     store.createTask({ id: 'T2', projectId: 'P2', stage: 'developer' });
 
     const roles = new RoleRegistry();
-    roles.register('developer', {
-      prepare: () => ({
-        provider: 'pydantic-v2',
-        workspace,
-        prompt: 'Inspect the workspace and complete the task.',
-        completionProtocol: 'provider_terminal',
-        context: { roleModelRef: 'test/runtime' },
-      }),
-      transition: ({ result }) => result.outcome === 'PASS'
-        ? { stage: 'developer', state: 'DONE' }
-        : { stage: 'developer', state: 'READY' },
-    });
+    for (const stage of ['developer', 'test_engineer', 'tester', 'reviewer']) {
+      roles.register(stage, {
+        prepare: () => ({
+          provider: 'pydantic-v2',
+          workspace,
+          prompt: 'Inspect the workspace and complete the task.',
+          completionProtocol: 'provider_terminal',
+          context: { roleModelRef: 'test/runtime' },
+        }),
+        transition: () => { throw new Error('legacy role transition must not run'); },
+      });
+    }
 
     const providers = new ProviderRegistry();
     providers.register(provider);
@@ -109,9 +116,24 @@ test('V2 scheduler and supervisor can use pydantic-v2 with provider-terminal com
     }
     assert.equal(task.state, 'RESULT_READY');
 
+    const stages = ['test_engineer', 'tester', 'reviewer'];
+    for (const stage of stages) {
+      await scheduler.tick('P2');
+      task = store.getTask('T2');
+      assert.equal(task.stage, stage);
+      assert.equal(task.state, 'WORKING');
+      for (let i = 0; i < 200 && task.state === 'WORKING'; i += 1) {
+        await supervisor.audit('P2');
+        task = store.getTask('T2');
+        if (task.state === 'WORKING') await sleep(10);
+      }
+      assert.equal(task.state, 'RESULT_READY');
+    }
     await scheduler.tick('P2');
     task = store.getTask('T2');
     assert.equal(task.state, 'DONE');
+    assert.deepEqual(task.history.filter(entry => entry.type === 'ROLE_RESULT').map(entry => entry.role),
+      ['developer', 'test_engineer', 'tester', 'reviewer']);
     const result = task.history.find(entry => entry.type === 'ROLE_RESULT');
     assert.equal(result?.outcome, 'PASS');
     assert.equal(result?.source, undefined);
