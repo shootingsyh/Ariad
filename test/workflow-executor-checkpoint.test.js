@@ -89,3 +89,37 @@ test('SQLite checkpoint survives store reopen and prevents duplicate child spawn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('SQLite rejects failed child spawn atomically and resumes from SPAWN', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { SQLiteV2Store } = await import('../src/v2/sqlite-store.js');
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-dsl-atomic-'));
+  const db = join(dir, 'state.db');
+  let store = new SQLiteV2Store(db);
+  try {
+    store.createProject({ id: 'P' });
+    store.createTask({ id: 'parent', projectId: 'P', scope: 'control',
+      flowId: 'workflow:atomic', taskKind: 'WORKFLOW', executorType: 'node-planning',
+      stage: 'tech_lead', state: 'READY', workflowState: { cursor: 0,
+        completedNodes: [], activeChildTaskId: null } });
+    persistWorkflowExecutorSignal({ store, taskId: 'parent', machine, signal: 'NODE_FOUND' });
+    const valid = { id: 'child', projectId: 'P', scope: 'control',
+      flowId: 'workflow:atomic', parentTaskId: 'parent', taskKind: 'NODE_PLANNING',
+      stage: 'tech_lead', state: 'READY' };
+    assert.throws(() => persistWorkflowSpawn({ store, taskId: 'parent', machine,
+      childTask: { ...valid, flowId: 'invalid-flow' },
+      workflowState: { cursor: 1, activeChildTaskId: 'child' } }));
+    store.close();
+    store = new SQLiteV2Store(db);
+    assert.equal(store.getTask('child'), null);
+    assert.equal(store.getTask('parent').workflowState.cursor, 0);
+    assert.equal(readWorkflowExecutorCheckpoint(store.getTask('parent'), machine).state, 'SPAWN');
+    persistWorkflowSpawn({ store, taskId: 'parent', machine, childTask: valid,
+      workflowState: { cursor: 1, activeChildTaskId: 'child' } });
+    assert.equal(store.getTask('parent').workflowState.cursor, 1);
+    assert.equal(store.getTask('child').id, 'child');
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
