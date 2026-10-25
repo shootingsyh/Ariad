@@ -32,3 +32,15 @@ test('workflow child creation and checkpoint advance commit together, rejecting 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('interface workflow requires explicit node types', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-wf-types-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'P' });
+    assert.throws(() => store.createNodePlanningWorkflow({ id: 'invalid', projectId: 'P', phase: 'interface', reason: 'plan', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null }] }), /WORKFLOW_NODE_TYPE_REQUIRED/);
+    assert.equal(store.getTask('invalid'), null);
+    const task = store.createNodePlanningWorkflow({ id: 'valid', projectId: 'P', phase: 'interface', reason: 'plan', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null, nodeType: 'feature' }] });
+    assert.equal(task.input.nodes[0].nodeType, 'feature');
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});

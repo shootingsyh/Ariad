@@ -1128,6 +1128,7 @@ export function createDefaultV2Roles({
             'Planning context:', JSON.stringify(task.input.planningContext),
             'Previous validation failure:', JSON.stringify(task.input.previousGateFailure ?? null),
             'Do not change ancestors or sibling nodes. Apply direct-child-only changes and preserve existing unrelated semantics.',
+            'Before PLANNED, materialize the current node in the feature/milestone logical tree with the exact id, parentId and planningContext.current.nodeType. Ensure its boundary contract has the same nodeType; do not guess.',
             'Return PLANNED through ariad_role_result only after saving verifiable artifacts.',
           ].join('\n'), { sessionKey: `workflow:${task.id}:planner` });
         }

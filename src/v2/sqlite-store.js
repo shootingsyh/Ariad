@@ -649,7 +649,13 @@ export class SQLiteV2Store {
     if (!id || !projectId || !['feature', 'milestone', 'interface'].includes(phase) || !String(reason ?? '').trim()) {
       throw new Error('INVALID_NODE_PLANNING_WORKFLOW');
     }
-    if (nodes !== null) nodePlanningSchedule({ phase, nodes, rootId: scopeNodeId });
+    if (nodes !== null) {
+      nodePlanningSchedule({ phase, nodes, rootId: scopeNodeId });
+      for (const node of nodes) {
+        if (phase === 'interface' && !['feature', 'milestone'].includes(node.nodeType)) throw new Error('WORKFLOW_NODE_TYPE_REQUIRED');
+        if (phase !== 'interface' && node.nodeType != null && node.nodeType !== phase) throw new Error('WORKFLOW_NODE_TYPE_MISMATCH');
+      }
+    }
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     return this.createTask({
       id, projectId, scope: 'control', flowId: `workflow:${projectId}:${id}`,

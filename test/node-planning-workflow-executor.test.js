@@ -14,7 +14,7 @@ test('durable interface postorder, role steps, global review, restart and idempo
     store = new SQLiteV2Store(db);
     store.createProject({ id: 'P' });
     const parent = store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'fix interfaces', scopeNodeId: 'root' });
-    const nodes = [{ id: 'root', parentId: null }, { id: 'leaf', parentId: 'root' }];
+    const nodes = [{ id: 'root', parentId: null, nodeType: 'feature' }, { id: 'leaf', parentId: 'root', nodeType: 'feature' }];
     store.updateTask(parent.id, parent.version, { input: { ...parent.input, nodes } });
     advanceNodePlanningWorkflows(store, 'P');
     advanceNodePlanningWorkflows(store, 'P');
@@ -67,7 +67,7 @@ test('failed child propagates human gate to parent without creating next node', 
   const store = new SQLiteV2Store(join(dir, 'state.db'));
   try {
     store.createProject({ id: 'P' });
-    store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'fix', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null }] });
+    store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'fix', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null, nodeType: 'feature' }] });
     advanceNodePlanningWorkflows(store, 'P');
     advanceNodePlanningWorkflows(store, 'P');
     const child = store.getTask('wf:0');
