@@ -1,3 +1,4 @@
+import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
 import { advanceNodePlanningWorkflows } from './node-planning-workflow-executor.js';
 import { LegacyRoleResultExecutor } from './legacy-role-result-executor.js';
 import { graphKey } from './sqlite-store.js';
@@ -220,7 +221,7 @@ export class V2Scheduler {
         started.push(task.id);
       } catch (error) {
         const current = this.store.getTask(task.id);
-        const blocked = systemFailureCount(current) >= 2;
+        const blocked = isNonretryableProviderFailure(error?.message) || systemFailureCount(current) >= 2;
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,

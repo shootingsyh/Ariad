@@ -1,5 +1,6 @@
 import { isAdhocAnalysis } from './control-task-policy.js';
 import { applyTaskEvent } from './state-machine.js';
+import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
 
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
   if (!attemptId) return null;
@@ -234,7 +235,7 @@ export class V2Supervisor {
       const incident = await this.#incident(task, failure);
       incidents.push(incident);
       const consumeAttempt = status?.consumeAttempt !== false;
-      const blocked = consumeAttempt && systemFailureCount(current) >= 2;
+      const blocked = isNonretryableProviderFailure(failure) || (consumeAttempt && systemFailureCount(current) >= 2);
       this.store.appendTaskHistory(task.id, current.version, {
         type: 'SYSTEM_INTERRUPTION',
         role: task.stage,
