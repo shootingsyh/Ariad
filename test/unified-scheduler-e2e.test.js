@@ -66,3 +66,53 @@ test('unified scheduler never dispatches delivery while locked',async()=>{
   assert.equal(store.getTask('A').state,'READY');
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('task tracker direct task tree runs dependency-first through milestone executor without compiling a delivery plan',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'ariad-task-tracker-tree-'));
+ const store=new SQLiteV2Store(join(dir,'state.db'));
+ try{
+  store.createProject({id:'tracker',spec:'Task Tracker',deliveryEnabled:true});
+  const tasks=[
+   {id:'core',dependsOn:[],parentId:'tracker-root'},
+   {id:'view',dependsOn:[],parentId:'tracker-root'},
+   {id:'integration',dependsOn:['core','view'],parentId:'tracker-root'},
+   {id:'tracker-root',dependsOn:['integration'],parentId:null},
+  ];
+  for(const t of tasks)store.createTask({...t,projectId:'tracker',scope:'delivery',stage:'developer',state:'READY',taskKind:'MILESTONE_TASK',milestoneId:'tracker-root',input:{intent:t.id,acceptanceCriteria:[]}});
+  const roles=new RoleRegistry();
+  for(const role of ['developer','test_engineer','tester','reviewer'])roles.register(role,{
+   prepare:()=>({provider:'fake'}),transition:()=>{throw Error('legacy role transition must not run');},
+  });
+  const statuses=new Map(),started=[];
+  let sequence=0;
+  const providers=new ProviderRegistry();
+  providers.register({id:'fake',async start(spec){
+   const externalId='run-'+(++sequence);
+   started.push(spec.taskId+':'+spec.role);
+   statuses.set(externalId,{state:'RUNNING'});
+   return {externalId};
+  },async poll({externalId}){return statuses.get(externalId);},async cancel(){}});
+  const resources=new ResourcePool({});
+  const scheduler=new V2Scheduler({store,roles,providers,resources});
+  const supervisor=new V2Supervisor({store,providers,resources});
+  for(let i=0;i<60;i++){
+   await scheduler.tick('tracker');
+   for(const task of store.listTasks('tracker').filter(t=>t.state==='WORKING')){
+    statuses.set(task.execution.externalId,{state:'COMPLETED',outcome:'PASS',result:task.stage==='test_engineer'?{
+     testPlan:{testCases:[{entry:'test/task-tracker.test.js',command:'node --test test/task-tracker.test.js',covers:[],executionScope:['test/task-tracker.test.js']}]}
+    }:{}});
+   }
+   await supervisor.audit('tracker');
+   if(store.listTasks('tracker').every(t=>t.state==='DONE'))break;
+  }
+  assert.ok(store.listTasks('tracker').every(t=>t.state==='DONE'));
+  for(const id of ['core','view','integration','tracker-root']){
+   assert.deepEqual(started.filter(x=>x.startsWith(id+':')).map(x=>x.split(':')[1]),['developer','test_engineer','tester','reviewer']);
+  }
+  const firstIntegration=started.findIndex(x=>x.startsWith('integration:'));
+  assert.ok(firstIntegration>started.findIndex(x=>x==='core:reviewer'));
+  assert.ok(firstIntegration>started.findIndex(x=>x==='view:reviewer'));
+  assert.ok(started.findIndex(x=>x.startsWith('tracker-root:'))>started.findIndex(x=>x==='integration:reviewer'));
+  assert.equal(store.getProject('tracker').deliveryPlanVersion??0,0);
+ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});
