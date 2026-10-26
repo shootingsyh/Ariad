@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
+import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore, compileUnifiedTaskTree } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
@@ -1368,6 +1368,7 @@ export function createDefaultV2Roles({
                   if (tree.items.length) validateBoundaryContracts(artifactRoot, type, { allowFrontier: false });
                 }
               }
+              if (isGlobal && phase === 'milestone') compileUnifiedTaskTree(artifactRoot);
               if (!validation.ok || validation.count === 0 || (isGlobal && !validation.complete)) {
                 throw new Error('WORKFLOW_BOUNDARY_INCOMPLETE');
               }
