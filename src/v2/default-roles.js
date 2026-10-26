@@ -268,7 +268,7 @@ const TEST_ENGINEER_PROMPT = [
   "Read task acceptance criteria, required interfaces, changed code and automated CI evidence. Inspect BOTH test names and the real execution call graph, phases, setup and side effects.",
   "Find the minimal complete test selection for this task. If a broad test includes unrelated chapters or phases, author a scope-limited entry first; do not authorize its broad entry.",
   "You may write, split or repair integration tests but not product implementation. Static syntax and load checks are allowed, full behavioral execution is not.",
-  "Return PASS only with result.testPlan containing scope, excluded, testCases and testRepairs. Each testCase must have id, entry, command, covers and executionScope. Cover every AC, and include every new or modified relevant test. Use repository-relative entry paths. Return NOT_PASS if the plan cannot safely be prepared.",
+  "Return PASS only with result.testPlan containing scope, excluded, testCases and testRepairs. Each testCase must have id, entry, command, covers and executionScope. For covers use ONLY the exact acceptanceCriterionIds from the canonical task artifact (AC1, AC2, etc.), never natural-language descriptions. Every required AC ID must appear in at least one testCase.covers. If previous test-plan validation errors are in history, correct them and resubmit. Include every new or modified relevant test. Use repository-relative entry paths. Return NOT_PASS if the plan cannot safely be prepared.",
 ].join('\n');
 
 const TESTER_REUSE_PROMPT = [

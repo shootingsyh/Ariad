@@ -133,7 +133,7 @@ export function piRoleResultToolSchema(role) {
           id: Type.String({ minLength: 1 }),
           entry: Type.String({ minLength: 1 }),
           command: Type.String({ minLength: 1 }),
-          covers: Type.Array(Type.String()),
+          covers: Type.Array(Type.String({ pattern: '^AC[1-9][0-9]*$' })),
           executionScope: Type.Array(Type.String()),
         }, { additionalProperties: true })),
         testRepairs: Type.Array(Type.Any()),
@@ -413,6 +413,16 @@ export async function createDefaultPiRunSession(spec) {
               .map(error => `${error.path || '/'}: ${error.message}`)
               .join('; ');
             throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}; ${detail}`);
+          }
+          if (spec.role === 'test_engineer' && params.outcome === 'PASS') {
+            const required = spec.context?.task?.acceptanceCriterionIds ?? [];
+            const cases = params.result?.testPlan?.testCases ?? [];
+            const invalid = cases.flatMap(c => (c.covers ?? []).filter(id => !required.includes(id)));
+            const missing = required.filter(id => !cases.some(c => c.covers?.includes(id)));
+            if (!cases.length || invalid.length || missing.length) throw new Error(
+              'ARIAD_TEST_PLAN_COVERAGE_INVALID: covers must reference exact acceptanceCriterionIds. ' +
+              'Allowed: ' + JSON.stringify(required) + '; invalid: ' + JSON.stringify(invalid) + '; missing: ' + JSON.stringify(missing)
+            );
           }
           terminalResult = {
             outcome: params.outcome,

@@ -6,7 +6,7 @@ export const milestoneMachine = defineExecutorMachine({
   id: 'milestone-executor', version: 1, initial: 'DEVELOP',
   states: {
     DEVELOP: { operation: 'runDeveloper', transitions: { PASS: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
-    TEST_ENGINEER: { operation: 'runTestEngineer', transitions: { PASS: 'TEST', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
+    TEST_ENGINEER: { operation: 'runTestEngineer', transitions: { PASS: 'TEST', FIX_PLAN: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     TEST: { operation: 'runTester', transitions: { PASS: 'REVIEW', REPLAN_TESTS: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     REVIEW: { operation: 'runReviewer', transitions: { PASS: 'COMPLETE', UX_REVIEW: 'UX_REVIEW', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     UX_REVIEW: { operation: 'runUxReviewer', transitions: { PASS: 'COMPLETE', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },

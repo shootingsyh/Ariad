@@ -28,14 +28,17 @@ function consecutiveRoleFailures(task, role) {
   return count;
 }
 
-function validTestPlan(task, result) {
+export function testPlanValidationIssues(task, result) {
   const cases = result.result?.testPlan?.testCases;
   const criteria = acceptanceCriterionIds(task);
-  return Array.isArray(cases) && cases.length > 0
-    && cases.every(c => c && typeof c.entry === 'string' && c.entry.length > 0
-      && typeof c.command === 'string' && c.command.length > 0
-      && Array.isArray(c.covers) && Array.isArray(c.executionScope))
-    && criteria.every(id => cases.some(c => c.covers.includes(id)));
+  const errors = [];
+  if (!Array.isArray(cases) || !cases.length) return ['testPlan.testCases must contain at least one test'];
+  for (const [i, c] of cases.entries()) {
+    if (!c || typeof c.entry !== 'string' || !c.entry.trim() || typeof c.command !== 'string' || !c.command.trim() || !Array.isArray(c.covers) || !Array.isArray(c.executionScope)) errors.push('testCases[' + i + '] requires entry, command, covers and executionScope');
+    else for (const id of c.covers) if (!criteria.includes(id)) errors.push('testCases[' + i + '].covers invalid criterion ' + JSON.stringify(id) + '; allowed: ' + criteria.join(', '));
+  }
+  for (const id of criteria) if (!cases.some(c => c?.covers?.includes(id))) errors.push('missing coverage for ' + id);
+  return errors;
 }
 
 export function milestoneResultTransition(task, result, { uxReviewEnabled = false } = {}) {
@@ -97,7 +100,8 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       break;
     case 'test_engineer':
       signal = outcome === 'PASS'
-        ? (validTestPlan(task, result) ? 'PASS' : 'ESCALATE')
+        ? (testPlanValidationIssues(task, result).length === 0 ? 'PASS'
+          : (task.history ?? []).filter(h => h.type === 'TEST_PLAN_VALIDATION_FAILED').length < 2 ? 'FIX_PLAN' : 'ESCALATE')
         : (failureCount(task) >= 3 ? 'ESCALATE' : 'RETRY');
       break;
     case 'tester':
@@ -181,5 +185,10 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       // PM/TL routing; do not invent a generic automatic repair verdict.
       return null;
   }
-  return executorTransitionFromResult(task, signal)?.patch ?? null;
+  const patch = executorTransitionFromResult(task, signal)?.patch ?? null;
+  if (signal === 'FIX_PLAN') return { ...patch, transitionHistory: {
+    type: 'TEST_PLAN_VALIDATION_FAILED', role: 'test_engineer',
+    errors: testPlanValidationIssues(task, result), at: new Date().toISOString(),
+  } };
+  return patch;
 }
