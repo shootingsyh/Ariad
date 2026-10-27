@@ -9,6 +9,10 @@ const signature = task => JSON.stringify([
 
 // Conservative initial reconciliation: refuse active jobs and changes to
 // accepted work. All writes happen atomically and retain task IDs/history.
+// A WAITING_REPLAN task exists to be resolved by the new plan, so the plan
+// may also drop it (WAITING_REPLAN -> OBSOLETE is a defined transition).
+// NEEDS_HUMAN / SYSTEM_BLOCKED tasks must be resolved through their own
+// gates first; a replan never silently rewrites or revives them.
 export function reconcileApprovedTaskTree(store, projectId, plan, {artifactRoot=null}={}) {
   const project=store.getProject(projectId);
   if (!project) throw new Error('TASK_TREE_UNKNOWN_PROJECT');
@@ -26,8 +30,9 @@ export function reconcileApprovedTaskTree(store, projectId, plan, {artifactRoot=
   for(const task of existing) {
     const spec=wanted.get(task.id);
     if(!spec && task.state==='DONE') issues.push({id:task.id,reason:'REMOVE_COMPLETED_TASK'});
-    if(!spec && !['READY','OBSOLETE','SKIPPED'].includes(task.state)) issues.push({id:task.id,reason:'REMOVE_UNFINISHED_TASK'});
+    if(!spec && !['READY','WAITING_REPLAN','OBSOLETE','SKIPPED'].includes(task.state)) issues.push({id:task.id,reason:'REMOVE_UNFINISHED_TASK'});
     if(spec && task.state==='DONE' && signature(task)!==signature(spec)) issues.push({id:task.id,reason:'REVISE_COMPLETED_TASK'});
+    if(spec && ['NEEDS_HUMAN','SYSTEM_BLOCKED'].includes(task.state) && signature(task)!==signature(spec)) issues.push({id:task.id,reason:'REVISE_BLOCKED_TASK'});
   }
   if(issues.length) {
     const error=new Error('TASK_TREE_REPLAN_REQUIRES_REVIEW: '+JSON.stringify(issues));
