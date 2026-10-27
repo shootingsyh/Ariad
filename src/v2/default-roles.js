@@ -1774,6 +1774,14 @@ export function createDefaultV2Roles({
             };
           }
           const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
+          // Preserve the one-time human takeover review before requiring offline migration.
+          if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'PM_HUMAN_DECISION', role: 'pm',
+              summary: result.result?.reason ?? 'Review the reconstructed project before migrating legacy delivery state.',
+              at: new Date().toISOString(),
+            } };
+          }
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
           const validated = rawArtifactPlan
             ? validatePlannerArtifactPlan(rawArtifactPlan)
@@ -1788,17 +1796,17 @@ export function createDefaultV2Roles({
               at: new Date().toISOString(),
             } };
           }
-          const firstTree = Boolean(rawArtifactPlan)
-            && store.getProject(task.projectId)?.mode === 'NEW'
-            && existingDelivery.length === 0;
-          if (firstTree) acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
-          else store.applyDeliveryPlan(task.projectId, validated.plan);
-          const migrationReconciliation = firstTree ? null : reconcileMigratedDeliveryTasks({
-            store,
-            projectId: task.projectId,
-            artifactRoot,
-            workspace,
-          });
+          // The legacy delivery-plan writer is retired. Historical projects
+          // require explicit one-time migration before PM can accept a new tree.
+          if (!rawArtifactPlan || existingDelivery.length) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED', role: 'pm',
+              summary: 'Old delivery state must be migrated to the canonical Task Tree before replanning. Nothing has been rewritten or authorized.',
+              at: new Date().toISOString(),
+            } };
+          }
+          acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
+          const migrationReconciliation = null;
           completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');

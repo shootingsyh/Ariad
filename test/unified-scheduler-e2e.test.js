@@ -31,7 +31,7 @@ test('unified scheduler gates aggregate children and completes dev-test-review w
   const resources=new ResourcePool({gpu:1});
   const scheduler=new V2Scheduler({store,roles,providers,resources});
   const supervisor=new V2Supervisor({store,providers,resources});
-  assert.throws(()=>store.applyDeliveryPlan('p',{version:3,tasks:[{id:'old'}]}),/UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER/);
+  assert.equal(typeof store.applyDeliveryPlan,'undefined');
   for(const id of ['leaf','A']) {
    for(const role of ['developer','test_engineer','tester','reviewer']) {
     if(store.getTask(id).state!=='WORKING') await scheduler.tick('p');

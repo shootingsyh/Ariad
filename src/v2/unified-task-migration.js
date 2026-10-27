@@ -107,6 +107,15 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     const aggregateValidation=validateMigratedAggregateStates(remaining);
     const runtimeValidation=validateMigratedTaskRuntime(remaining);
     if(!runtimeValidation.ok) throw new Error('migration runtime validation failed: '+JSON.stringify(runtimeValidation.issues));
+    // Activate the unified compiler only in this migrated COPY. Delivery stays
+    // locked until separate offline review/activation; never alter the live DB.
+    const project=store.getProject(projectId);
+    store.updateProject(projectId,project.version,{
+      unifiedTaskCompilerVersion:1,
+      deliveryEnabled:false,
+      unifiedTaskMigrationCompletedAt:now,
+      unifiedTaskMigrationArchiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
+    });
     db.exec('COMMIT');
     return {aggregateValidation,runtimeValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};

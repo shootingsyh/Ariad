@@ -1,3 +1,4 @@
+import {legacyApplyDeliveryPlan} from './legacy-delivery-plan-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -1129,7 +1130,7 @@ test('iteration logical revisions derive implementation versus regression task m
 
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-revision-modes' });
-    store.applyDeliveryPlan('P-revision-modes', plan);
+    legacyApplyDeliveryPlan(store,'P-revision-modes', plan);
     assert.equal(store.getTask('T-BATTLE-V2').stage, 'developer');
     assert.equal(store.getTask('T-MENU-REGRESSION').stage, 'tester');
     assert.equal(store.getTask('T-V2-INTEGRATION').stage, 'developer');
@@ -1424,7 +1425,7 @@ test('applyDeliveryPlan atomically preserves completed work and obsoletes remove
     store.createTask({ id: 'REMOVE', projectId: 'P13', state: 'READY', stage: 'developer' });
     store.createTask({ id: 'OLD-DONE', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
 
-    store.applyDeliveryPlan('P13', {
+    legacyApplyDeliveryPlan(store,'P13', {
       version: 2,
       projectSummary: 'updated',
       rootTaskId: 'ROOT',
@@ -1584,10 +1585,10 @@ test('takeover task history survives validation and is persisted without duplica
 
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-take-history' });
-    store.applyDeliveryPlan('P-take-history', validated);
+    legacyApplyDeliveryPlan(store,'P-take-history', validated);
     assert.equal(store.getTask('ROOT').history.length, 1);
 
-    store.applyDeliveryPlan('P-take-history', validated);
+    legacyApplyDeliveryPlan(store,'P-take-history', validated);
     assert.equal(store.getTask('ROOT').history.length, 1);
 
     const revised = structuredClone(validated);
@@ -1595,7 +1596,7 @@ test('takeover task history survives validation and is persisted without duplica
       type: 'TAKEOVER_NOTE',
       summary: 'Existing tests were found and should be freshly rerun.',
     });
-    store.applyDeliveryPlan('P-take-history', revised);
+    legacyApplyDeliveryPlan(store,'P-take-history', revised);
     assert.equal(store.getTask('ROOT').history.length, 2);
     store.close();
   } finally {
@@ -1758,8 +1759,8 @@ test('accepted takeover plan pauses at human review until a human decision is re
     assert.equal(first.state, 'NEEDS_HUMAN');
     assert.equal(first.transitionHistory.role, 'pm');
     assert.equal(first.transitionHistory.type, 'PM_HUMAN_DECISION');
-    assert.equal(store.getProject('P-take-gate').deliveryEnabled, false, 'takeover human gate must override PM start request');
-    assert.equal(store.getTask('ROOT').history[0].type, 'TAKEOVER_NOTE');
+    assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'takeover human gate must override PM start request');
+    assert.equal(store.getTask('ROOT'), null, 'takeover review must not create legacy Delivery tasks');
 
     pmTask = store.appendTaskHistory('PM-take', pmTask.version, {
       type: 'HUMAN_DECISION',
@@ -1769,9 +1770,9 @@ test('accepted takeover plan pauses at human review until a human decision is re
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true } },
     });
-    assert.equal(second.state, 'DONE');
-    assert.equal(store.getProject('P-take-gate').deliveryEnabled, true, 'PM must explicitly open delivery after human takeover review');
-    assert.equal(store.getProject('P-take-gate').takeoverReviewRequired, false, 'human-approved takeover review must be durable');
+    assert.equal(second.state, 'NEEDS_HUMAN');
+    assert.equal(second.transitionHistory.type, 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED');
+    assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'legacy delivery stays locked until the one-time offline migration');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1853,8 +1854,8 @@ test('later technical replans in an approved TAKEOVER project do not create anot
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true } },
     });
-    assert.equal(accepted.state, 'DONE');
-    assert.equal(accepted.transitionHistory.type, 'DELIVERY_GATE');
+    assert.equal(accepted.state, 'NEEDS_HUMAN');
+    assert.equal(accepted.transitionHistory.type, 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED');
     assert.equal(store.getProject('P-take-replan').takeoverReviewRequired, false);
     assert.equal(store.getProject('P-take-replan').deliveryEnabled, true);
     store.close();
@@ -2165,7 +2166,7 @@ test('applyDeliveryPlan persists milestone metadata and ordinary task milestoneI
       }],
     }).plan;
 
-    store.applyDeliveryPlan('P-milestone', validated);
+    legacyApplyDeliveryPlan(store,'P-milestone', validated);
     const feature = store.getTask('FEATURE');
     assert.equal(feature.milestoneId, 'M1');
     assert.equal(feature.stage, 'developer');
@@ -3059,7 +3060,7 @@ test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
   const store = new SQLiteV2Store(file);
   try {
     store.createProject({ id: 'P-issue-apply' });
-    store.applyDeliveryPlan('P-issue-apply', {
+    legacyApplyDeliveryPlan(store,'P-issue-apply', {
       version: 3,
       tasks: [{
         id: 'repair-one',
