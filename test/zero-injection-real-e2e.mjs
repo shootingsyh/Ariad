@@ -26,7 +26,11 @@ let last='';
 const deadline=Date.now()+12*60*1000;
 while(Date.now()<deadline){
  if(existsSync(project.stateDb)){
-  const store=new SQLiteV2Store(project.stateDb);
+  let store;
+  try { store=new SQLiteV2Store(project.stateDb); } catch(e) {
+   if(String(e.message).includes('database is locked')) { await new Promise(r=>setTimeout(r,2000)); continue; }
+   throw e;
+  }
   const tasks=store.listTasks(name), p=store.getProject(name);
   const delivery=tasks.filter(t=>t.scope==='delivery');
   const state=JSON.stringify({gate:p?.deliveryEnabled,delivery:delivery.map(t=>[t.id,t.state,t.stage]),planning:tasks.filter(t=>t.scope==='control'&&!['DONE','SKIPPED'].includes(t.state)).length});
