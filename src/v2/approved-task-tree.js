@@ -2,15 +2,10 @@ import { buildExecutionGraph } from './execution-graph.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
 import { buildOwnedExecutionTasks } from './interface-contracts.js';
 
-// Persist the approved planner's task/milestone nodes directly; no second
-// delivery-plan graph or synthetic integration task is generated.
-export function acceptInitialTaskTree(store, projectId, plan, { artifactRoot = null } = {}) {
+// Deterministic projection of approved planner records; IDs stay unchanged.
+export function buildApprovedTreeSpecs(projectId, plan, artifactRoot = null) {
   if (plan?.version !== 3 || !Array.isArray(plan.milestones) || !Array.isArray(plan.tasks)) {
     throw new Error('APPROVED_TASK_TREE_REQUIRES_VALIDATED_V3_PLAN');
-  }
-  if (!store.getProject(projectId)) throw new Error('UNKNOWN_PROJECT');
-  if (store.listTasks(projectId, { scope: 'delivery' }).length) {
-    throw new Error('APPROVED_TASK_TREE_EXISTING_TASKS: revisions require tree-aware reconciliation');
   }
   const milestones = plan.milestones;
   const tasks = plan.tasks;
@@ -58,6 +53,21 @@ export function acceptInitialTaskTree(store, projectId, plan, { artifactRoot = n
     if (failure) throw new Error(failure + ': ' + s.id);
   }
   buildExecutionGraph(specs); // Validate one graph before any writes.
+  return specs;
+}
+
+// Persist the approved planner's task/milestone nodes directly; no second
+// delivery-plan graph or synthetic integration task is generated.
+export function acceptInitialTaskTree(store, projectId, plan, { artifactRoot = null } = {}) {
+  if (plan?.version !== 3 || !Array.isArray(plan.milestones) || !Array.isArray(plan.tasks)) {
+    throw new Error('APPROVED_TASK_TREE_REQUIRES_VALIDATED_V3_PLAN');
+  }
+  if (!store.getProject(projectId)) throw new Error('UNKNOWN_PROJECT');
+  if (store.listTasks(projectId, { scope: 'delivery' }).length) {
+    throw new Error('APPROVED_TASK_TREE_EXISTING_TASKS: revisions require tree-aware reconciliation');
+  }
+  const specs = buildApprovedTreeSpecs(projectId, plan, artifactRoot);
+  const milestones = plan.milestones;
   store.db.exec('BEGIN IMMEDIATE');
   try {
     if (store.listTasks(projectId, {scope:'delivery'}).length) throw new Error('APPROVED_TASK_TREE_RACE');

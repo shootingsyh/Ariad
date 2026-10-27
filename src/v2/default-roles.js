@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { acceptInitialTaskTree } from './approved-task-tree.js';
+import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
@@ -1790,22 +1791,24 @@ export function createDefaultV2Roles({
           // Never let a legacy replan rewrite an already approved Task Tree.
           const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
           if (existingDelivery.some(t => t.taskTreeSchemaVersion === 1)) {
-            return { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'TASK_TREE_REPLAN_REQUIRES_RECONCILIATION', role: 'pm',
-              summary: 'Existing approved Task Tree remains unchanged; safe tree-aware reconciliation is required before a revised plan can replace it.',
-              at: new Date().toISOString(),
-            } };
-          }
-          // The legacy delivery-plan writer is retired. Historical projects
-          // require explicit one-time migration before PM can accept a new tree.
-          if (!rawArtifactPlan || existingDelivery.length) {
+            try {
+              reconcileApprovedTaskTree(store, task.projectId, validated.plan, { artifactRoot });
+            } catch (error) {
+              return { state: 'NEEDS_HUMAN', transitionHistory: {
+                type: 'TASK_TREE_REPLAN_BLOCKED', role: 'pm',
+                summary: String(error?.message ?? error), at: new Date().toISOString(),
+              } };
+            }
+          } else if (!rawArtifactPlan || existingDelivery.length) {
             return { state: 'NEEDS_HUMAN', transitionHistory: {
               type: 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED', role: 'pm',
-              summary: 'Old delivery state must be migrated to the canonical Task Tree before replanning. Nothing has been rewritten or authorized.',
+              summary: 'Legacy delivery must be migrated offline; no changes applied.',
               at: new Date().toISOString(),
             } };
+          } else {
+            acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
           }
-          acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
+          // Canonical tree writes are complete; legacy plan writer is absent.
           const migrationReconciliation = null;
           completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);

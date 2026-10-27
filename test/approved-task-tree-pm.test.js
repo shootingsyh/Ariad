@@ -48,9 +48,9 @@ test('PM PLAN_ACCEPTED persists a NEW project initial tree without legacy plan w
   assert.deepEqual(store.getTask('M1').dependsOn,['implement']);
   assert.equal(store.getTask('M1').taskTreeSchemaVersion,1);
   assert.equal(typeof store.applyDeliveryPlan,'undefined');
-  const rejectedReplan=roles.pm.transition({task,result:{outcome:'PLAN_ACCEPTED',result:{startDelivery:true}}});
-  assert.equal(rejectedReplan.state,'NEEDS_HUMAN');
-  assert.equal(rejectedReplan.transitionHistory.type,'TASK_TREE_REPLAN_REQUIRES_RECONCILIATION');
+  const unchangedReplan=roles.pm.transition({task,result:{outcome:'PLAN_ACCEPTED',result:{startDelivery:true}}});
+  assert.equal(unchangedReplan.state,'DONE');
+  assert.equal(store.getProject('P').taskTreeVersion,2);
   assert.equal(store.listTasks('P',{scope:'delivery'}).length,2);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
