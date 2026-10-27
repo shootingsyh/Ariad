@@ -194,6 +194,18 @@ export class AriadService {
     if (['FAILED', 'SUCCEEDED'].includes(project.executionState)) {
       this.manager.setExecutionState(name, 'IDLE');
     }
+    // An empty NEW project enters regular planning; only PM may authorize delivery.
+    if (project.mode === 'NEW') {
+      const store = this.runtimeFor(project).store;
+      if (store.listTasks(project.id).length === 0 && store.listPlanningRequests(project.id).length === 0) {
+        store.enqueuePlanningRequest({
+          id: `initial-plan:${project.id}`,
+          projectId: project.id,
+          request: { purpose: 'INITIAL_PLAN', instruction: project.goal || 'Plan and deliver the requested project.' },
+          context: { bootstrap: true },
+        });
+      }
+    }
     this.wake('running');
     return this.status(name);
   }

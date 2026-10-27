@@ -12,6 +12,33 @@ import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+test('fresh NEW project start enqueues INITIAL_PLAN once without creating delivery tasks or opening PM gate', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-bootstrap-start-'));
+  const manager = new AriadProjectManager({ projectsRoot: root });
+  const project = manager.create('fresh-project', {
+    goal: 'Build an accessible task tracker',
+    roleModels: Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'test/runtime'])),
+  });
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), {
+    resolveModelConfig: () => ({ kind: 'test', model: 'noop', result: {} }),
+  });
+  const service = new AriadService({ manager, provider });
+  try {
+    await service.ensureRunning(project.id);
+    await service.ensureRunning(project.id);
+    const store = service.runtimeFor(manager.status(project.id)).store;
+    const requests = store.listPlanningRequests(project.id);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].request.purpose, 'INITIAL_PLAN');
+    assert.equal(requests[0].request.instruction, project.goal);
+    assert.equal(store.getProject(project.id).deliveryEnabled, false);
+    assert.deepEqual(store.listTasks(project.id, { scope: 'delivery' }), []);
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AriadService owns reconcile and pause/resume without OpenClaw', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-core-service-'));
   const manager = new AriadProjectManager({ projectsRoot: root });
