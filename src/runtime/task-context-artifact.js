@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readAutomatedRegression } from './automated-regression.js';
 
 function clone(value) {
@@ -127,6 +128,21 @@ function uniqueReferencedFeatures(boundary) {
     .map(stripBinding);
 }
 
+function interfaceLookupField(artifactRoot) {
+  if (!artifactRoot) return null;
+  const artifactsDir = resolve(artifactRoot);
+  const ariDir = dirname(artifactsDir);
+  const workspace = dirname(ariDir);
+  if (basename(artifactsDir) !== 'artifacts' || basename(ariDir) !== '.ariad' || basename(workspace) !== 'workspace') return null;
+  const projectName = basename(dirname(workspace));
+  const projectsRoot = dirname(dirname(workspace));
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+  return {
+    command: `node ${cliPath} project interfaces ${projectName} --projects-root ${projectsRoot}`,
+    usage: 'Resolve an interfaceId to its boundary contract by appending --id <interfaceId>. Use this query instead of searching the filesystem for interface contracts.',
+  };
+}
+
 export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot = null }) {
   const history = task?.history ?? [];
   const developerResult = latestRoleResult(history, 'developer');
@@ -157,6 +173,7 @@ export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot =
       referencedFeatureInterfaces: uniqueReferencedFeatures(boundaryContext),
       milestones: clone(boundaryContext.milestones ?? []),
     } : null,
+    interfaceLookup: interfaceLookupField(artifactRoot),
     dependencies: boundaryContext ? {
       parentExpectations: clone(boundaryContext.parentExpectations ?? []),
       milestoneUses: clone(boundaryContext.milestoneUses ?? []),

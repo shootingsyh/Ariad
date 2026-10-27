@@ -24,9 +24,10 @@ const inputSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop', 'open_issue', 'list_issues'],
+      enum: ['list', 'status', 'models', 'set_role_models', 'create', 'takeover', 'adopt', 'start', 'pause', 'soft_stop', 'resume', 'stop', 'open_issue', 'list_issues', 'interfaces'],
     },
     name: { type: 'string' },
+    interfaceId: { type: ['string', 'null'] },
     goal: { type: ['string', 'null'] },
     sourcePath: { type: 'string' },
     roleModels: { type: 'object', additionalProperties: { type: 'string' } },

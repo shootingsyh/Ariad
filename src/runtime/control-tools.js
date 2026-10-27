@@ -1,4 +1,6 @@
+import { join } from 'node:path';
 import { ARIAD_MODEL_ROLES, normalizeRoleModels } from './role-models.js';
+import { queryInterfaces } from '../v2/interface-query.js';
 import { ARIAD_PI_SPECIAL_NEEDS } from './pi-runtime-config.js';
 
 export class AriadControlTools {
@@ -28,6 +30,14 @@ export class AriadControlTools {
         ? ARIAD_MODEL_ROLES.filter(role => !project.roleModels?.[role])
         : null,
     };
+  }
+
+  interfaces(name, { interfaceId = null } = {}) {
+    if (!name) throw new Error('project name is required');
+    const project = this.manager.status(name);
+    const workspace = project.workspace ?? join(this.manager.projectsRoot, name, 'workspace');
+    const result = queryInterfaces(join(workspace, '.ariad', 'artifacts'), { interfaceId });
+    return { project: name, ...result };
   }
 
   setUxReview(name, uxReview) {
@@ -93,6 +103,7 @@ export class AriadControlTools {
       case 'list': return this.list();
       case 'status': return this.status(input.name);
       case 'models': return this.models(input.name ?? null);
+      case 'interfaces': return this.interfaces(input.name, { interfaceId: input.interfaceId ?? null });
       case 'set_role_models': return this.setRoleModels(input.name, input.roleModels);
       case 'set_ux_review': return this.setUxReview(input.name, input.uxReview);
       case 'create': return this.create(input);
