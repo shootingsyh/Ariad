@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
+import { acceptInitialTaskTree } from './approved-task-tree.js';
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
@@ -1777,8 +1778,14 @@ export function createDefaultV2Roles({
           const validated = rawArtifactPlan
             ? validatePlannerArtifactPlan(rawArtifactPlan)
             : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
-          store.applyDeliveryPlan(task.projectId, validated.plan);
-          const migrationReconciliation = reconcileMigratedDeliveryTasks({
+          // Initial NEW project: persist the approved planner's tree nodes directly.
+          // Replans retain the legacy reconciliation path until tree-aware updates land.
+          const firstTree = Boolean(rawArtifactPlan)
+            && store.getProject(task.projectId)?.mode === 'NEW'
+            && store.listTasks(task.projectId, { scope: 'delivery' }).length === 0;
+          if (firstTree) acceptInitialTaskTree(store, task.projectId, validated.plan);
+          else store.applyDeliveryPlan(task.projectId, validated.plan);
+          const migrationReconciliation = firstTree ? null : reconcileMigratedDeliveryTasks({
             store,
             projectId: task.projectId,
             artifactRoot,
