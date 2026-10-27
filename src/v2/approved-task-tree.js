@@ -43,6 +43,7 @@ export function acceptInitialTaskTree(store, projectId, plan) {
     })),
   ];
   for (const s of specs) {
+    s.taskTreeSchemaVersion = 1;
     const failure = developerTaskPolicyFailure(s);
     if (failure) throw new Error(failure + ': ' + s.id);
   }

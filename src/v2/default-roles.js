@@ -1779,10 +1779,18 @@ export function createDefaultV2Roles({
             ? validatePlannerArtifactPlan(rawArtifactPlan)
             : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
           // Initial NEW project: persist the approved planner's tree nodes directly.
-          // Replans retain the legacy reconciliation path until tree-aware updates land.
+          // Never let a legacy replan rewrite an already approved Task Tree.
+          const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
+          if (existingDelivery.some(t => t.taskTreeSchemaVersion === 1)) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'TASK_TREE_REPLAN_REQUIRES_RECONCILIATION', role: 'pm',
+              summary: 'Existing approved Task Tree remains unchanged; safe tree-aware reconciliation is required before a revised plan can replace it.',
+              at: new Date().toISOString(),
+            } };
+          }
           const firstTree = Boolean(rawArtifactPlan)
             && store.getProject(task.projectId)?.mode === 'NEW'
-            && store.listTasks(task.projectId, { scope: 'delivery' }).length === 0;
+            && existingDelivery.length === 0;
           if (firstTree) acceptInitialTaskTree(store, task.projectId, validated.plan);
           else store.applyDeliveryPlan(task.projectId, validated.plan);
           const migrationReconciliation = firstTree ? null : reconcileMigratedDeliveryTasks({

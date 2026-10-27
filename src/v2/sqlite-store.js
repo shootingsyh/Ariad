@@ -436,6 +436,9 @@ export class SQLiteV2Store {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     // A legacy plan must never silently obsolete promoted aggregate tasks or
     // restore legacy integration IDs after a unified-tree migration.
+    if (this.listTasks(projectId, { scope: 'delivery' }).some(task => task.taskTreeSchemaVersion === 1)) {
+      throw new Error('APPROVED_TASK_TREE_REQUIRES_TREE_AWARE_RECONCILIATION');
+    }
     if (this.listTasks(projectId, { scope: 'delivery' }).some(task => task.unifiedTaskSchemaVersion === 1)) {
       throw new Error('UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER');
     }
