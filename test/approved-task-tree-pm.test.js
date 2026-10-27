@@ -15,6 +15,15 @@ test('PM PLAN_ACCEPTED persists a NEW project initial tree without legacy plan w
  mkdirSync(join(planner,'milestones'),{recursive:true});
  const save=(path,value)=>writeFileSync(path,JSON.stringify(value));
  save(join(planner,'logical','project.json'),{id:'project',title:'Project',summary:'Task tracker',parentId:null});
+ mkdirSync(join(planner,'interfaces','features'),{recursive:true});
+ save(join(planner,'interfaces','features','project.json'),{
+  version:1,nodeId:'project',nodeType:'feature',decomposition:{kind:'leaf',reason:'one task'},
+  interfaces:[{id:'app-interface',kind:'executor',visibility:'exported',
+   contract:{input:['command'],output:['result'],sideEffects:[]}}],
+  imports:[],integrationScenarios:[],bindings:[],
+  featureTasks:[{id:'implement',title:'Implement app',intent:'Working app',
+   acceptanceCriteria:['Working app'],testStrategy:'Node tests',interfaceIds:['app-interface']}],
+ });
  save(join(planner,'milestones','M1.json'),{
    id:'M1',title:'Full delivery',goal:'Working app',parentId:null,dependsOn:[],logicalRefs:['project'],
    acceptanceCriteria:['Functional app'],testStrategy:'Run app tests',
@@ -35,6 +44,7 @@ test('PM PLAN_ACCEPTED persists a NEW project initial tree without legacy plan w
   const all=store.listTasks('P',{scope:'delivery'});
   assert.deepEqual(all.map(x=>x.id).sort(),['M1','implement']);
   assert.equal(store.getTask('implement').parentId,'M1');
+  assert.deepEqual(store.getTask('implement').interfaceIds,['app-interface']);
   assert.deepEqual(store.getTask('M1').dependsOn,['implement']);
   assert.equal(store.getTask('M1').taskTreeSchemaVersion,1);
   assert.throws(()=>store.applyDeliveryPlan('P',{version:3,tasks:[{id:'other'}]}),/APPROVED_TASK_TREE_REQUIRES_TREE_AWARE_RECONCILIATION/);

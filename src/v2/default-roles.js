@@ -1791,7 +1791,7 @@ export function createDefaultV2Roles({
           const firstTree = Boolean(rawArtifactPlan)
             && store.getProject(task.projectId)?.mode === 'NEW'
             && existingDelivery.length === 0;
-          if (firstTree) acceptInitialTaskTree(store, task.projectId, validated.plan);
+          if (firstTree) acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
           else store.applyDeliveryPlan(task.projectId, validated.plan);
           const migrationReconciliation = firstTree ? null : reconcileMigratedDeliveryTasks({
             store,

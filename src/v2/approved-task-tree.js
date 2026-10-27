@@ -1,9 +1,10 @@
 import { buildExecutionGraph } from './execution-graph.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
+import { buildOwnedExecutionTasks } from './interface-contracts.js';
 
 // Persist the approved planner's task/milestone nodes directly; no second
 // delivery-plan graph or synthetic integration task is generated.
-export function acceptInitialTaskTree(store, projectId, plan) {
+export function acceptInitialTaskTree(store, projectId, plan, { artifactRoot = null } = {}) {
   if (plan?.version !== 3 || !Array.isArray(plan.milestones) || !Array.isArray(plan.tasks)) {
     throw new Error('APPROVED_TASK_TREE_REQUIRES_VALIDATED_V3_PLAN');
   }
@@ -13,6 +14,9 @@ export function acceptInitialTaskTree(store, projectId, plan) {
   }
   const milestones = plan.milestones;
   const tasks = plan.tasks;
+  // Interface contracts are metadata on the SAME planned tasks, not new tasks.
+  const ownership = new Map((artifactRoot ? buildOwnedExecutionTasks(artifactRoot) : [])
+    .map(task => [task.id, task]));
   const ids = new Set([...milestones.map(x => x.id), ...tasks.map(x => x.id)]);
   if (ids.size !== milestones.length + tasks.length) throw new Error('APPROVED_TASK_TREE_DUPLICATE_ID');
   const children = new Map(milestones.map(m => [m.id, []]));
@@ -34,13 +38,19 @@ export function acceptInitialTaskTree(store, projectId, plan) {
       dependsOn:[...new Set([...children.get(m.id), ...m.dependsOn])],
       input:{intent:m.goal, milestoneId:m.id, acceptanceCriteria:[...m.acceptanceCriteria], executionMode:'aggregate'},
     })),
-    ...tasks.map(t => ({
-      ...structuredClone(t), projectId, scope:'delivery',
-      taskKind:'MILESTONE_TASK', executionMode:'implementation', stage:t.revisionMode==='regression'?'tester':t.art?.required?'artist':'developer',
-      state:'READY', parentId:t.milestoneId,
-      input:{intent:t.intent, acceptanceCriteria:[...t.acceptanceCriteria], milestoneId:t.milestoneId,
-        testStrategy:t.testStrategy, interfaceIds:[...(t.interfaceIds??[])], executionMode:'implementation'},
-    })),
+    ...tasks.map(t => {
+      const owned = ownership.get(t.id);
+      const interfaceIds = [...(owned?.interfaceIds ?? t.interfaceIds ?? [])];
+      return {
+        ...structuredClone(t), projectId, scope:'delivery',
+        taskKind:'MILESTONE_TASK', executionMode:'implementation', stage:t.revisionMode==='regression'?'tester':t.art?.required?'artist':'developer',
+        state:'READY', parentId:t.milestoneId, interfaceIds,
+        ownerFeatureId: owned?.ownerFeatureId ?? null,
+        ownerMilestoneId: owned?.ownerMilestoneId ?? t.milestoneId,
+        input:{intent:t.intent, acceptanceCriteria:[...t.acceptanceCriteria], milestoneId:t.milestoneId,
+          testStrategy:t.testStrategy, interfaceIds, executionMode:'implementation'},
+      };
+    }),
   ];
   for (const s of specs) {
     s.taskTreeSchemaVersion = 1;
