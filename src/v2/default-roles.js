@@ -452,7 +452,7 @@ function criticPrompt({ store, project, task, artifactRoot }) {
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
-    'Submit the critic result through the provider\'s structured role-result mechanism when available. Use outcome CLEAN|MINOR_ONLY|ISSUES and include result.issues plus result.summary. JSON terminal output is fallback only.',
+    'Submit the critic result through the provider\'s structured role-result mechanism when available. Use outcome CLEAN|MINOR_ONLY|ISSUES and include result.issues plus result.summary. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
     JSON.stringify({
       project: { id: project.id, spec: project.spec ?? null },
@@ -1518,7 +1518,7 @@ export function createDefaultV2Roles({
           plannerPrompt({ store, project, task, artifactRoot }),
           '',
           'FINAL RESULT',
-          'After completing all required file writes, submit outcome PLANNED through the provider structured role-result mechanism when available. Use terminal JSON only as a compatibility fallback.',
+          'After completing all required file writes, submit outcome PLANNED through the provider structured role-result mechanism when available; terminal JSON is not accepted as a result.',
         ].join('\n');
         return prepareLlm(task, prompt);
       },
@@ -1753,7 +1753,7 @@ export function createDefaultV2Roles({
             : project.mode === 'TAKEOVER'
               ? 'This is an existing-project TAKEOVER, but the one-time human takeover review has already been satisfied durably at the project level. Do NOT request another takeover/delivery authorization merely because this technical replan changes tasks or scope. If the validated plan preserves user intent and introduces no genuinely new product decision, return PLAN_ACCEPTED and keep normal delivery authorized.'
               : null,
-          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. JSON terminal output is fallback only.',
+          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
           'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For TAKEOVER, delivery must remain gated until the required human review has been recorded; only a later PM review may explicitly start it.',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },

@@ -332,7 +332,7 @@ test('tester aggregate verdict is computed from required criterion statuses', ()
   assert.equal(unverified.result.aggregate.unverified, 1);
 });
 
-test('supervisor accepts only explicit result-tool-unavailable compatibility results', async () => {
+test('supervisor adopts no terminal-JSON fallback: results come only from the result tool', async () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
@@ -379,13 +379,15 @@ test('supervisor accepts only explicit result-tool-unavailable compatibility res
     const supervisor = new V2Supervisor({ store, providers, resources });
     await supervisor.audit('P-compat');
     const task = store.getTask('T-compat');
-    assert.equal(task.state, 'RESULT_READY');
+    // The terminal-JSON salvage is deleted: a provider-reported fallback is
+    // not a result. The attempt ends as a missing-result interruption,
+    // exactly like a plain completion with no result-tool call.
+    assert.equal(task.state, 'READY');
     assert.equal(task.execution, null);
-    assert.equal(task.history.at(-1)?.type, 'ROLE_RESULT');
-    assert.equal(task.history.at(-1)?.source, 'terminal_json_compatibility');
-    assert.equal(task.history.at(-1)?.outcome, 'PLANNED');
-    assert.equal(task.history.at(-1)?.compatibility?.reason, 'RESULT_TOOL_UNAVAILABLE');
-    assert.equal(store.listIncidents('P-compat').length, 0);
+    assert.equal(task.history.some(entry => entry?.type === 'ROLE_RESULT'), false);
+    assert.equal(task.history.some(entry => entry?.source === 'terminal_json_compatibility'), false);
+    assert.equal(task.history.at(-1)?.failure, 'MISSING_ROLE_RESULT_TOOL');
+    assert.equal(store.listIncidents('P-compat').at(-1)?.failure, 'MISSING_ROLE_RESULT_TOOL');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

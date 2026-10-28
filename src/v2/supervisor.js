@@ -125,41 +125,6 @@ export class V2Supervisor {
       }
 
       if (status?.state === 'COMPLETED' && execution.completionProtocol === 'role_result_tool') {
-        const fallback = status?.roleResultFallback;
-        if (
-          fallback?.source === 'terminal_json_result_tool_unavailable'
-          && fallback?.attemptId === execution.attemptId
-          && fallback?.role === task.stage
-          && typeof fallback?.outcome === 'string'
-        ) {
-          this.store.appendTaskHistory(task.id, current.version, {
-            type: 'ROLE_RESULT',
-            role: task.stage,
-            outcome: fallback.outcome,
-            summary: fallback.summary ?? '',
-            keyPoints: Array.isArray(fallback.keyPoints) ? fallback.keyPoints : [],
-            artifacts: Array.isArray(fallback.artifacts) ? fallback.artifacts : [],
-            result: fallback.result ?? null,
-            attemptId: execution.attemptId,
-            source: 'terminal_json_compatibility',
-            compatibility: {
-              reason: 'RESULT_TOOL_UNAVAILABLE',
-              runtime: fallback.runtime ?? null,
-              raw: fallback.raw ?? null,
-            },
-            provenance: structuredClone(execution?.provenance ?? null),
-            protocolVersion: execution.protocolVersion ?? 'role-result-v2',
-            projectVersion: execution?.projectVersion ?? null,
-            executionContext: structuredClone(status.executionContext ?? null),
-            completedAt: new Date().toISOString(),
-          }, applyTaskEvent(current, 'COMPLETE', {
-            execution: null,
-            artifacts: [...(current.artifacts ?? []), ...(Array.isArray(fallback.artifacts) ? fallback.artifacts : [])],
-          }));
-          this.resources.release(task.id);
-          continue;
-        }
-
         // Do not redo completed role work just because the model omitted its
         // mandatory final result-tool call. Ask the same session to submit the
         // already-completed result once; the provider keeps that recovery run
