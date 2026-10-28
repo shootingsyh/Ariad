@@ -5,7 +5,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { setupPiProviders } from './pi-provider-setup.js';
-import { daemonRequest, ensureAriadDaemon, daemonPaths } from './daemon.js';
+import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
+import { ariadBuildId } from './build-id.js';
 
 function usage() {
   return [
@@ -14,7 +15,7 @@ function usage() {
     '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
-    '  ariad daemon {start|status|stop} [--projects-root <path>]',
+    '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
     '  ariad config local-endpoint <url> [--projects-root <path>]',
     '  ariad project {create|takeover} <name> --goal <text> --role-models <json> [--source-path <dir>]',
@@ -101,8 +102,28 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       const paths = await ensureAriadDaemon(root);
       return { running: true, ...paths };
     }
-    if (action === 'status') return daemonRequest(root, { action: 'ping' });
+    if (action === 'status') {
+      const localBuildId = ariadBuildId();
+      try {
+        const ping = await daemonRequest(root, { action: 'ping' }, { timeoutMs: 2000 });
+        return { ...ping, localBuildId, stale: ping.buildId !== localBuildId };
+      } catch {
+        const liveness = daemonLiveness(root);
+        return { running: false, pid: liveness.pid, pidAlive: liveness.pidAlive, heartbeatAgeMs: liveness.heartbeatAgeMs, localBuildId };
+      }
+    }
     if (action === 'stop') return daemonRequest(root, { action: 'daemon_shutdown' });
+    if (action === 'restart') {
+      try { await daemonRequest(root, { action: 'daemon_shutdown' }, { timeoutMs: 5000 }); } catch {}
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        try { await daemonRequest(root, { action: 'ping' }, { timeoutMs: 400 }); } catch { break; }
+        await new Promise(done => setTimeout(done, 150));
+      }
+      const paths = await ensureAriadDaemon(root);
+      const ping = await daemonRequest(root, { action: 'ping' });
+      return { restarted: true, ...paths, ...ping };
+    }
     throw new Error(usage());
   }
   if (scope === 'dashboard') {
