@@ -6,8 +6,6 @@ import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { isAdhocAnalysis } from '../v2/control-task-policy.js';
-import { activateDeferredIterations } from '../v2/deferred-iterations.js';
-import { recoverPrematureMigrationApprovalGate } from '../v2/migration-gate-recovery.js';
 import { requireCompleteRoleModels } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
@@ -18,10 +16,6 @@ import {
   requireRuntimeDependencies,
 } from './code-intelligence/project-capabilities.js';
 import { join } from 'node:path';
-import {
-  migratePlanningModelDatabase,
-  planningModelMigrationStatus,
-} from '../v2/version-migration.js';
 
 export class AriadService {
   constructor({
@@ -148,8 +142,6 @@ export class AriadService {
           runtime: 'standalone',
           codeCapabilities: this.codeCapabilities.get(project.id) ?? null,
           storageVersion: durableProject?.storageVersion ?? 1,
-          planningModelVersion: durableProject?.planningModelVersion ?? 1,
-          planningModelMigration: planningModelMigrationStatus(durableProject),
           tasks: {
             total: tasks.length,
             ready: tasks.filter(task => task.state === 'READY').length,
@@ -165,20 +157,6 @@ export class AriadService {
       }
     }
     return { ...project, runtime: 'standalone', codeCapabilities: this.codeCapabilities.get(project.id) ?? null };
-  }
-
-  async migratePlanningModel(name) {
-    await this.ensureStopped(name);
-    const project = this.manager.status(name);
-    const migration = migratePlanningModelDatabase({
-      stateDb: project.stateDb,
-      projectId: project.id,
-      artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
-    });
-    if (!migration) return { ...this.status(name), migration: null };
-    this.manager.setExecutionState(name, 'IDLE');
-    this.wake('planning-model-migration');
-    return { ...this.status(name), migration };
   }
 
   async ensureRunning(name, audit = {}) {
@@ -265,8 +243,7 @@ export class AriadService {
   deriveExecutionState(runtime) {
     const tasks = runtime.store.listTasks(runtime.projectId);
     const hasPlanning = runtime.store.hasUnplannedPlanningRequests(runtime.projectId);
-    const migration = runtime.store.getProject(runtime.projectId)?.planningModelMigration ?? null;
-    return deriveProjectExecutionState({ tasks, hasPlanning, migration });
+    return deriveProjectExecutionState({ tasks, hasPlanning });
   }
 
   createOperatorAnalysis(name, { id, instruction }) {
@@ -347,25 +324,10 @@ export class AriadService {
     }
 
     const runtime = this.runtimeFor(project);
-    const migrating = runtime.store.getProject(project.id)?.planningModelMigration?.status === 'REBUILDING';
-    if (!migrating && ['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
+    if (['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
 
     const beforeState = project.executionState;
     try {
-      if (project.desiredState === 'RUNNING') {
-        if (migrating) {
-          const recovered = recoverPrematureMigrationApprovalGate(runtime.store, project.id);
-          if (recovered.length) this.logger?.warn?.(
-            'Ariad rejected premature migration delivery gate: ' + recovered.map(item => item.taskId).join(', ')
-          );
-        }
-        const activated = activateDeferredIterations({
-          store: runtime.store,
-          projectId: project.id,
-          workspace: project.workspace,
-        });
-        if (activated.length) this.logger?.warn?.('Ariad activated iteration requests: ' + activated.join(', '));
-      }
       await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
       const nextState = this.deriveExecutionState(runtime);
       if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);

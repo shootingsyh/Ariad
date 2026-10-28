@@ -109,10 +109,6 @@ export const PROJECT_CONTROL_MACHINE = defineStateMachine({
 
 export const PROJECT_STATE_RULES = Object.freeze([
   {
-    state: 'MIGRATING',
-    when: ({ migration }) => migration?.status === 'REBUILDING',
-  },
-  {
     state: 'NEEDS_HUMAN',
     when: ({ tasks }) => tasks.some(task => task.state === 'NEEDS_HUMAN'),
   },

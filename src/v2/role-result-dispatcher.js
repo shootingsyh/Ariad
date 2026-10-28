@@ -1,7 +1,6 @@
 import { subPlanResultTransition } from './sub-plan-result-executor.js';
 import { adhocResultTransition } from './adhoc-result-executor.js';
 import { milestoneResultTransition } from './milestone-result-executor.js';
-import { isPlannerTask } from './planner-flow.js';
 import { persistRoleExecutorTransition } from './role-executor-persistence.js';
 import { isAdhocAnalysis, TASK_KINDS } from './control-task-policy.js';
 
@@ -56,12 +55,11 @@ export class RoleResultDispatcher {
     };
   }
 
-  async advanceResults(projectId, { migrating = false, adhocOnly = false } = {}) {
+  async advanceResults(projectId, { adhocOnly = false } = {}) {
     const table = this.#dispatchTable();
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'RESULT_READY') continue;
       if (adhocOnly && !isAdhocAnalysis(task)) continue;
-      if (migrating && !(isPlannerTask(task) && task.input?.versionMigration === true)) continue;
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);

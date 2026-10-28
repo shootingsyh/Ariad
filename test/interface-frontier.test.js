@@ -137,68 +137,6 @@ test('planner flow keeps one iterative decompose task before dependency planning
 });
 
 
-test('version migration planning gives one frontier up to three critic rounds before debugger', () => {
-  const tasks = plannerFlowTasks('batch-migrate', [{
-    request: { purpose: 'VERSION_MIGRATION', frontierPhase: 'feature' },
-  }]);
-
-  assert.deepEqual(
-    tasks.map(task => task.input?.purpose),
-    [
-      'PLANNER_DECOMPOSE',
-      'PLANNER_FRONTIER_VALIDATE',
-      'PLANNER_FRONTIER_CRITIC',
-      'PLANNER_FRONTIER_REPAIR',
-      'PLANNER_FRONTIER_VALIDATE',
-      'PLANNER_FRONTIER_CRITIC',
-      'PLANNER_FRONTIER_REPAIR',
-      'PLANNER_FRONTIER_VALIDATE',
-      'PLANNER_FRONTIER_CRITIC',
-      'PLANNER_FRONTIER_DEBUG',
-      'PLANNER_FRONTIER_FINALIZE',
-    ],
-  );
-  assert.equal(tasks[0].input.singleFrontier, true);
-  assert.equal(tasks[0].input.frontierPhase, 'feature');
-  assert.deepEqual(
-    tasks.filter(task => task.input?.purpose === 'PLANNER_FRONTIER_CRITIC').map(task => task.input.round),
-    [1, 2, 3],
-  );
-  assert.deepEqual(
-    tasks.filter(task => task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE').map(task => task.input.round),
-    [1, 2, 3],
-  );
-  assert.equal(tasks.find(task => task.input?.purpose === 'PLANNER_FRONTIER_DEBUG').stage, 'project_debugger');
-  assert.deepEqual(
-    tasks.at(-1).dependsOn,
-    [
-      'planner:batch-migrate:frontier-critic-1',
-      'planner:batch-migrate:frontier-critic-2',
-      'planner:batch-migrate:frontier-critic-3',
-      'planner:batch-migrate:frontier-debugger',
-    ],
-  );
-});
-
-test('version migration finalization compiles the frozen tree before PM review', () => {
-  const tasks = plannerFlowTasks('batch-finalize', [{
-    request: { purpose: 'VERSION_MIGRATION_FINALIZE' },
-  }]);
-  assert.deepEqual(
-    tasks.map(task => task.input?.purpose),
-    [
-      'PLANNER_DEPENDENCIES',
-      'PLANNER_VALIDATE',
-      'PLANNER_CRITIC',
-      'PLANNER_REPAIR',
-      'PLANNER_FINAL_VALIDATE',
-      'PLANNER_PM_REVIEW',
-    ],
-  );
-  assert.equal(tasks[0].input.versionMigration, true);
-  assert.equal(tasks.at(-1).input.versionMigration, true);
-});
-
 test('top-down feature frontier selects BFS first expandable leaf and expands one layer only', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-frontier-'));
   try {

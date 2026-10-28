@@ -50,21 +50,15 @@ export class V2Scheduler {
   async tick(projectId, { adhocOnly = false } = {}) {
     const initialProject = this.store.getProject(projectId);
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
-    const migrating = initialProject.planningModelMigration?.status === 'REBUILDING';
-    await this.resultExecutor.advanceResults(projectId, { migrating, adhocOnly });
-    if (!adhocOnly && !migrating) advanceNodePlanningWorkflows(this.store, projectId);
+    await this.resultExecutor.advanceResults(projectId, { adhocOnly });
+    if (!adhocOnly) advanceNodePlanningWorkflows(this.store, projectId);
     if (!adhocOnly) {
       this.store.reconcileAssignedIssues?.(projectId);
       this.#settlePlanningBatches(projectId);
     }
 
     if (!adhocOnly && this.store.hasUnplannedPlanningRequests(projectId)) {
-      const pending = this.store.listPlanningRequests(projectId, { states: ['PENDING'] });
-      if (!migrating || pending.every(item =>
-        ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
-      )) {
-        createNextPlanningBatch({ store: this.store, projectId });
-      }
+      createNextPlanningBatch({ store: this.store, projectId });
     }
 
     const project = this.store.getProject(projectId);
@@ -98,13 +92,8 @@ export class V2Scheduler {
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && scopeOfTask(task) === 'control' && Boolean(task.input?.blockedTaskId);
-    // Migration is a project-level exclusive mode. Neither Delivery nor
-    // ordinary planning/iteration/diagnostic roles may execute, regardless
-    // of deliveryEnabled, PM authorization, or task graph state.
     const schedulableTasks = adhocOnly
-      ? (migrating ? [] : allTasks.filter(isAdhocAnalysis))
-      : migrating
-      ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
+      ? allTasks.filter(isAdhocAnalysis)
       : planningBlocked
         ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(task.taskKind))
         : allTasks.filter(task =>

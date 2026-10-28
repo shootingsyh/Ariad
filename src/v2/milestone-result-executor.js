@@ -45,52 +45,6 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
   const kind = task.taskKind;
   const diagnostic = kind === TASK_KINDS.DIAGNOSTIC && task.stage === 'project_debugger';
   if (!isDeliveryKind(kind) && !diagnostic) return null;
-  // Planner-frontier diagnostics have a distinct control protocol.
-
-  if (diagnostic && task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
-    const batchId = task.input?.planningBatchId ?? null;
-    if (result?.outcome === 'OVERRIDE_CRITIC') {
-      return { state: 'DONE', transitionHistory: {
-        type: 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN', role: 'project_debugger',
-        frontierPhase: task.input?.frontierPhase ?? null,
-        summary: result.summary ?? result.result?.reason ?? null,
-        at: new Date().toISOString(),
-      } };
-    }
-    if (result?.outcome === 'RETRY_WITH_GUIDANCE') {
-      const guidance = result.result?.guidance ?? result.summary ?? null;
-      if (!String(guidance ?? '').trim()) {
-        return { state: 'NEEDS_HUMAN', transitionHistory: {
-          type: 'PLANNER_FRONTIER_DEBUGGER_MISSING_GUIDANCE',
-          role: 'project_debugger', at: new Date().toISOString(),
-        } };
-      }
-      return {
-        state: 'DONE',
-        planningRequest: {
-          id: 'frontier-retry:' + task.id + ':' + task.version,
-          request: {
-            purpose: 'VERSION_MIGRATION',
-            frontierPhase: task.input?.frontierPhase ?? 'feature',
-            debuggerGuidance: guidance,
-            retryOfPlanningBatchId: batchId,
-          },
-        },
-        skipTaskIds: batchId ? ['planner:' + batchId + ':frontier-finalize'] : [],
-        transitionHistory: {
-          type: 'PLANNER_FRONTIER_DEBUGGER_RETRY', role: 'project_debugger',
-          frontierPhase: task.input?.frontierPhase ?? null,
-          guidance, at: new Date().toISOString(),
-        },
-      };
-    }
-    return { state: 'NEEDS_HUMAN', transitionHistory: {
-      type: 'PLANNER_FRONTIER_DEBUGGER_UNHANDLED_OUTCOME',
-      role: 'project_debugger', diagnosis: result?.outcome ?? null,
-      summary: result?.summary ?? result?.result?.reason ?? null,
-      at: new Date().toISOString(),
-    } };
-  }
   const outcome = result?.outcome;
   let signal;
   switch (task.stage) {

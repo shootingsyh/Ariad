@@ -32,15 +32,7 @@ import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { buildTaskContextArtifact, writeTaskContextArtifact } from '../runtime/task-context-artifact.js';
 import { runAutomatedRegression } from '../runtime/automated-regression.js';
 import { sealRoleInterfaces } from './interface-seal.js';
-import { completePlanningModelMigration } from './version-migration.js';
 import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
-import { reconcileMigratedDeliveryTasks } from './migration-reconciler.js';
-import {
-  beginRevisionPass,
-  finishRevisionPass,
-  nextRevisionFrontier,
-  revisionInstructions,
-} from './revision-traversal.js';
 import {
   ensurePlannerArtifactLayout,
   loadFeatureTreeDiff,
@@ -208,17 +200,6 @@ function latestFrontierCompletion(store, task) {
   return null;
 }
 
-function migrationRevisionRoot(store, projectId) {
-  const migration = store.getProject(projectId)?.planningModelMigration;
-  return migration?.revisionWorkRoot ?? migration?.legacyRevisionRoot ?? null;
-}
-
-function migrationPlanningRequest(store, task) {
-  return planningBatchRequests(store, task).find(
-    item => ['VERSION_MIGRATION', 'VERSION_MIGRATION_FINALIZE'].includes(item.request?.purpose)
-  ) ?? null;
-}
-
 function iterationRequest(store, task) {
   return planningBatchRequests(store, task).find(item => item.request?.purpose === 'UPDATE_DELIVERY_PLAN') ?? null;
 }
@@ -364,10 +345,6 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
   if (purpose === 'PLANNER_DECOMPOSE') {
     const nodeType = task.input?.frontierPhase ?? 'feature';
     const issueRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE');
-    const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
-    const revision = revisionRoot && task.input?.sourceComplete !== true
-      ? beginRevisionPass(revisionRoot, nodeType)
-      : null;
     const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
@@ -381,16 +358,6 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
         JSON.stringify({ issueRequests }, null, 2),
       ].join('\n\n') : null,
       frontierArtifactInstructions(artifactRoot, nodeType),
-      revision && !revision.complete ? [
-        'VERSION MIGRATION SOURCE FRONTIER',
-        'The archived tree is the authoritative traversal source for this round.',
-        'Write exactly one KEEP|AMEND|REMOVE|REFINE revision decision for the legacy node before completing this round.',
-        'During planning-model migration, KEEP and AMEND should normally keep visitChildren=true because every legacy descendant must receive a fresh interface contract under the new schema.',
-        'Use REFINE with visitChildren=false when the old descendants should be replaced by a newly decomposed subtree.',
-        'REMOVE skips materializing this legacy node in the new tree.',
-        revisionInstructions(revisionRoot, nodeType),
-        JSON.stringify({ legacyRevisionFrontier: revision }, null, 2),
-      ].join('\n\n') : null,
       nodeType === 'feature'
         ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition, boundary contracts, and the canonical implementation/local-test tasks owned by every node created or finalized in this round. Do not defer task intent to a later global pass.'
         : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition, feature interface uses, additive links to feature tasks, and milestone-owned integration/E2E tasks for every node created or finalized in this round. Do not defer integration test ownership to a later global pass.',
@@ -405,7 +372,6 @@ function plannerPrompt({ store, project, task, artifactRoot }) {
       JSON.stringify({
         frontierPhase: nodeType,
         frontier,
-        legacyRevisionFrontier: revision,
       }, null, 2),
       nodeType === 'milestone'
         ? 'Milestone artifacts may keep legacy tasks=[] as a compatibility view; canonical task ownership now lives in the milestone boundary contract (featureUses/taskLinks/integrationTasks).'
@@ -651,36 +617,7 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
           if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
-            const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
-            const revisionPass = revisionRoot && task.input?.sourceComplete !== true
-              ? finishRevisionPass(revisionRoot, nodeType)
-              : null;
-            if (revisionPass?.decision?.action === 'REMOVE') {
-              return {
-                state: 'DONE',
-                transitionHistory: {
-                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
-                  role: 'tech_lead',
-                  nodeType,
-                  nodeId: revisionPass.decision.nodeId,
-                  disposition: 'remove',
-                  childIds: [],
-                  nextNodeId: revisionPass.next?.node?.id ?? null,
-                  revisionDecision: revisionPass.decision,
-                  at: new Date().toISOString(),
-                },
-              };
-            }
-            const migration = task.input?.versionMigration
-              ? store.getProject(task.projectId)?.planningModelMigration
-              : null;
-            const pass = finishFrontierPass(artifactRoot, nodeType, {
-              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
-              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
-            });
-            if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
-              throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
-            }
+            const pass = finishFrontierPass(artifactRoot, nodeType);
             const frontierHistory = {
               type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
               role: 'tech_lead',
@@ -689,7 +626,6 @@ export function createDefaultV2Roles({
               disposition: pass.targetDisposition,
               childIds: pass.childIds,
               nextNodeId: pass.next?.node?.id ?? null,
-              revisionDecision: revisionPass?.decision ?? null,
               at: new Date().toISOString(),
             };
             if (task.input?.singleFrontier === true) {
@@ -793,35 +729,6 @@ export function createDefaultV2Roles({
           return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
             transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
               reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
-        }
-        if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
-          const phase = task.input?.frontierPhase ?? 'feature';
-          const complete = result.result?.complete === true;
-          if (!complete) {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'VERSION_MIGRATION',
-                frontierPhase: phase,
-                sourceComplete: result.result?.sourceComplete === true,
-              },
-            });
-            return { state: 'DONE' };
-          }
-          if (phase === 'feature') {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'VERSION_MIGRATION',
-                frontierPhase: 'milestone',
-              },
-            });
-            return { state: 'DONE' };
-          }
-          enqueuePlanning?.({
-            request: {
-              purpose: 'VERSION_MIGRATION_FINALIZE',
-            },
-          });
-          return { state: 'DONE' };
         }
         if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
           if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
@@ -934,7 +841,6 @@ export function createDefaultV2Roles({
               },
             };
           }
-          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
           // Preserve the one-time human takeover review before requiring offline migration.
           if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
             return { state: 'NEEDS_HUMAN', transitionHistory: {
@@ -969,8 +875,6 @@ export function createDefaultV2Roles({
             acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
           }
           // Canonical tree writes are complete; legacy plan writer is absent.
-          const migrationReconciliation = null;
-          completePlanningModelMigration(store, task.projectId);
           const takeover = isTakeoverPlanningTask(store, task);
           const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           const setDeliveryEnabled = (enabled) => {
@@ -978,18 +882,6 @@ export function createDefaultV2Roles({
             if (current?.deliveryEnabled === enabled) return current;
             return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
           };
-          if (wasMigrating) {
-            setDeliveryEnabled(false);
-            return {
-              state: 'DONE',
-              transitionHistory: {
-                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
-                role: 'migration_finalizer',
-                migrationReconciliation,
-                at: new Date().toISOString(),
-              },
-            };
-          }
           if (takeover && !hasHumanDecision) {
             setDeliveryEnabled(false);
             return {
@@ -1015,24 +907,16 @@ export function createDefaultV2Roles({
               role: 'pm',
               enabled: result.result?.startDelivery === true,
               reason: result.result?.reason ?? null,
-              migrationReconciliation,
               at: new Date().toISOString(),
             },
           };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
-          const migration = store.getProject(task.projectId)?.planningModelMigration;
           enqueuePlanning?.({
-            request: migration?.status === 'REBUILDING'
-              ? {
-                  purpose: 'VERSION_MIGRATION_FINALIZE',
-                  guidance: result.result?.guidance ?? result.result ?? null,
-                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
-                }
-              : {
-                  purpose: 'PM_PLAN_REVISION',
-                  guidance: result.result?.guidance ?? result.result ?? null,
-                },
+            request: {
+              purpose: 'PM_PLAN_REVISION',
+              guidance: result.result?.guidance ?? result.result ?? null,
+            },
           });
           return { state: 'DONE' };
         }
@@ -1400,28 +1284,6 @@ export function createDefaultV2Roles({
       sessionPolicy: 'persistent',
       prepare: ({ task }) => {
         if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') return prepareLlm(task, ['Diagnose this node planning failure without changing artifacts.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Failure:', JSON.stringify(task.input.previousGateFailure), 'Distinguish artifact, requirement, and model failures. If a bounded repair is viable, return RETRY_WITH_GUIDANCE and a concrete result.guidance string. Otherwise submit a structured diagnosis; never override validator or critic.'].join('\n'));
-        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
-          const critics = flowTasks(store, task)
-            .filter(item => item.input?.purpose === 'PLANNER_FRONTIER_CRITIC')
-            .map(item => ({
-              round: item.input?.round ?? null,
-              result: latestRoleResult(item),
-            }));
-          return prepareLlm(task, [
-            "You are Ariad's Project Debugger diagnosing one planning frontier after three failed semantic critic rounds.",
-            'Do not edit planner artifacts. Judge both the Tech Lead and the critics.',
-            'You may return OVERRIDE_CRITIC when the current frontier is sound and the critic objections are wrong, irrelevant, contradictory, or overreaching. Ariad will freeze the frontier and continue.',
-            'You may return RETRY_WITH_GUIDANCE when the frontier still needs work but a concrete Tech Lead correction is possible. Put precise corrective instructions in result.guidance. Ariad will start a fresh three-round TL/validator/critic cycle on the same frontier.',
-            'Use REQUIREMENT_DECISION_REQUIRED when the disagreement exposes a genuine product ambiguity that PM must resolve.',
-            'Use MODEL_CAPABILITY_MISMATCH or SYSTEM_RUNTIME_FAILURE only when execution/model/tooling is actually the cause.',
-            'Do not choose RETRY_WITH_GUIDANCE without giving actionable guidance, and do not choose OVERRIDE_CRITIC merely to make progress.',
-            JSON.stringify({
-              frontierPhase: task.input?.frontierPhase ?? null,
-              frontier: latestFrontierCompletion(store, task),
-              critics,
-            }, null, 2),
-          ].join('\n\n'));
-        }
         return prepareLlm(task, task.input?.blockedTaskId ? [
           "You are Ariad's unified Project Debugger.",
           'Automatic execution retry has been exhausted for the blocked business task below.',
@@ -1432,42 +1294,6 @@ export function createDefaultV2Roles({
         ].join('\n\n') : null);
       },
       transition: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {
-          const batchId = task.input?.planningBatchId;
-          if (result.outcome === 'OVERRIDE_CRITIC') {
-            return {
-              state: 'DONE',
-              transitionHistory: {
-                type: 'PLANNER_FRONTIER_CRITIC_OVERRIDDEN',
-                role: 'project_debugger',
-                frontierPhase: task.input?.frontierPhase ?? null,
-                summary: result.summary ?? result.result?.reason ?? null,
-                at: new Date().toISOString(),
-              },
-            };
-          }
-          if (result.outcome === 'RETRY_WITH_GUIDANCE') {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'VERSION_MIGRATION',
-                frontierPhase: task.input?.frontierPhase ?? 'feature',
-                debuggerGuidance: result.result?.guidance ?? result.summary ?? null,
-                retryOfPlanningBatchId: batchId ?? null,
-              },
-            });
-            return {
-              state: 'DONE',
-              skipTaskIds: batchId ? [`planner:${batchId}:frontier-finalize`] : [],
-              transitionHistory: {
-                type: 'PLANNER_FRONTIER_DEBUGGER_RETRY',
-                role: 'project_debugger',
-                frontierPhase: task.input?.frontierPhase ?? null,
-                guidance: result.result?.guidance ?? result.summary ?? null,
-                at: new Date().toISOString(),
-              },
-            };
-          }
-        }
         const blockedTaskId = task.input?.blockedTaskId ?? null;
         const blocked = blockedTaskId ? store.getTask(blockedTaskId) : null;
         const routeBlocked = (patch, history) => {
@@ -1793,25 +1619,6 @@ export function createDefaultV2Roles({
               };
             }
           }
-          if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
-            const phase = task.input?.frontierPhase ?? 'feature';
-            const revisionRoot = migrationRevisionRoot(store, task.projectId);
-            const sourceNext = revisionRoot ? nextRevisionFrontier(revisionRoot, phase) : null;
-            const next = nextBoundaryFrontier(artifactRoot, phase);
-            return {
-              outcome: 'PASS',
-              result: {
-                phase,
-                sourceComplete: sourceNext == null,
-                sourceNext: sourceNext == null ? null : { nodeId: sourceNext.node?.id ?? null },
-                complete: sourceNext == null && next == null,
-                next: next == null ? null : {
-                  bootstrap: next.bootstrap === true,
-                  nodeId: next.node?.id ?? null,
-                },
-              },
-            };
-          }
           try {
             materializeIterationFeatureTree(store, task, artifactRoot);
           } catch (error) {
@@ -1906,52 +1713,6 @@ export function createDefaultV2Roles({
             }, null, 2),
           ].join('\n\n');
           return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
-        }
-        if (task.input?.versionMigration === true) {
-          return {
-            provider: codeProviderId,
-            executionProvenance: executionProvenanceFor(task),
-            execute: async () => {
-              const preceding = predecessorResults(store, task)[0] ?? null;
-              if (preceding?.outcome !== 'PASS') {
-                return {
-                  outcome: 'PLAN_REVISION_REQUIRED',
-                  result: {
-                    reason: 'Migration final validation has not PASSED; no delivery approval is possible.',
-                    guidance: preceding?.result?.error ?? 'Regenerate and revalidate the migration delivery plan.',
-                    startDelivery: false,
-                  },
-                };
-              }
-              try {
-                const raw = loadPlannerArtifactPlan(artifactRoot);
-                if (!raw || !hasBoundaryContracts(artifactRoot, 'feature')
-                  || !hasBoundaryContracts(artifactRoot, 'milestone')) {
-                  throw new Error('Migration needs complete planner and interface artifacts');
-                }
-                const validated = validatePlannerArtifactPlan(raw);
-                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
-                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
-                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
-                return {
-                  outcome: 'PLAN_ACCEPTED',
-                  result: {
-                    reason: 'Migration artifacts validated. Finalize planning model with delivery locked.',
-                    startDelivery: false,
-                  },
-                };
-              } catch (error) {
-                return {
-                  outcome: 'PLAN_REVISION_REQUIRED',
-                  result: {
-                    reason: 'Migration artifacts are not ready for finalization.',
-                    guidance: error instanceof Error ? error.message : String(error),
-                    startDelivery: false,
-                  },
-                };
-              }
-            },
-          };
         }
         // Once the user has explicitly approved a validator-passed plan,
         // finalize that decision deterministically. Do not ask the PM model to

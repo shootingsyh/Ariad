@@ -5,7 +5,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { setupPiProviders } from './pi-provider-setup.js';
-import { migratePlanningModelDatabase } from '../v2/version-migration.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths } from './daemon.js';
 
 function usage() {
@@ -20,7 +19,6 @@ function usage() {
     '  ariad config local-endpoint <url> [--projects-root <path>]',
     '  ariad project {create|takeover} <name> --goal <text> --role-models <json> [--source-path <dir>]',
     '  ariad project adopt <name> --source-path <dir> [--role-models <json>]',
-    '  ariad project migrate <name> [--projects-root <path>]',
     '  ariad project status <name> [--projects-root <path>]',
     '',
     'Setup prepares/checks global Pi provider authentication without printing credentials.',
@@ -155,7 +153,7 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     };
   }
 
-  if (scope !== 'project' || !name || !['migrate', 'status'].includes(action)) {
+  if (scope !== 'project' || !name || action !== 'status') {
     throw new Error(usage());
   }
 
@@ -166,35 +164,6 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     return { action, project };
   }
 
-  if (project.desiredState !== 'STOPPED') {
-    throw new Error(
-      `project ${project.id} must be STOPPED before planning-model migration; current desiredState=${project.desiredState}`,
-    );
-  }
-
-  const migration = migratePlanningModelDatabase({
-    stateDb: project.stateDb,
-    projectId: project.id,
-    artifactRoot: join(project.workspace, '.ariad', 'artifacts'),
-  });
-
-  if (!migration) {
-    return {
-      action,
-      projectId: project.id,
-      migrated: false,
-      reason: 'planning model already current',
-    };
-  }
-
-  manager.setExecutionState(project.id, 'IDLE');
-  return {
-    action,
-    projectId: project.id,
-    migrated: true,
-    migration,
-    next: `start/resume project ${project.id} so Ariad can rebuild and reconcile the new control plane`,
-  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
