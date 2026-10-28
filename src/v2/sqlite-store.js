@@ -54,15 +54,12 @@ function issueFingerprint(issue) {
   return createHash('sha256').update(stable).digest('hex').slice(0, 24);
 }
 
-// Canonical task shape: taskKind is the only type field. Reads of stored
-// rows restamp the kind from whatever legacy signals the row still carries
-// and strip the shadow copies (input.taskKind, input.executionMode,
-// executorType) so no consumer ever sees two sources of type truth.
-// Stored-shape hygiene only: shadow type fields from the pre-convergence
+// Canonical task shape: taskKind is the only type field. Stored-shape
+// hygiene only: shadow type fields from the pre-convergence
 // schema are stripped, and taskKind is trusted exactly as stored. Legacy
-// type signals are NOT interpreted anywhere in the runtime; existing
-// databases are canonicalized once, offline, by
-// scripts/migrate-task-kinds.mjs.
+// type signals are NOT interpreted anywhere in the runtime; there is no
+// built-in migration machinery — pre-convergence databases are
+// canonicalized ad hoc, out of band, before this runtime reads them.
 function normalizeStoredTask(task) {
   if (!task || typeof task !== 'object') return task;
   const input = { ...(task.input ?? {}) };
