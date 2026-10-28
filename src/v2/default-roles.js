@@ -43,6 +43,17 @@ import {
   validatePlannerArtifactPlan,
 } from './planner-artifacts.js';
 
+// Escalation whitelist (product rule): a human may be summoned only when
+// the system is dead after exhausting recovery, or when the PM judges the
+// requirements themselves are the problem. The PM's NEEDS_HUMAN is honored
+// only when it carries concrete requirements questions; without them it
+// falls through to the body's revision/retry path like any other
+// non-accepting outcome.
+function pmEscalationHasQuestions(result) {
+  const questions = result?.result?.questions;
+  return Array.isArray(questions) && questions.some(q => typeof q === 'string' && q.trim().length > 0);
+}
+
 function latestRoleResult(task) {
   const history = task?.history ?? [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -566,7 +577,7 @@ export function createDefaultV2Roles({
                 },
               };
             }
-            if (result.outcome === 'NEEDS_HUMAN') {
+            if (result.outcome === 'NEEDS_HUMAN' && pmEscalationHasQuestions(result)) {
               return {
                 state: 'NEEDS_HUMAN',
                 transitionHistory: {
@@ -790,7 +801,7 @@ export function createDefaultV2Roles({
               },
             };
           }
-          if (result.outcome === 'NEEDS_HUMAN') {
+          if (result.outcome === 'NEEDS_HUMAN' && pmEscalationHasQuestions(result)) {
             return {
               state: 'NEEDS_HUMAN',
               transitionHistory: {
@@ -920,7 +931,7 @@ export function createDefaultV2Roles({
           });
           return { state: 'DONE' };
         }
-        if (result.outcome === 'NEEDS_HUMAN') {
+        if (result.outcome === 'NEEDS_HUMAN' && pmEscalationHasQuestions(result)) {
           return {
             state: 'NEEDS_HUMAN',
             transitionHistory: {
@@ -1753,7 +1764,7 @@ export function createDefaultV2Roles({
             : project.mode === 'TAKEOVER'
               ? 'This is an existing-project TAKEOVER, but the one-time human takeover review has already been satisfied durably at the project level. Do NOT request another takeover/delivery authorization merely because this technical replan changes tasks or scope. If the validated plan preserves user intent and introduces no genuinely new product decision, return PLAN_ACCEPTED and keep normal delivery authorized.'
               : null,
-          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
+          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Use NEEDS_HUMAN only when the requirements/goal themselves are the problem (unclear, contradictory, infeasible, or missing a decision only the requirements owner can make); it is honored only with concrete questions in result.questions - a question-less NEEDS_HUMAN is rejected and treated as a revision request. For any plan problem, use PLAN_REVISION_REQUIRED. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
           'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For TAKEOVER, delivery must remain gated until the required human review has been recorded; only a later PM review may explicitly start it.',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },

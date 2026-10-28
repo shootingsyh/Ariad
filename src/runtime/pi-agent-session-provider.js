@@ -496,6 +496,14 @@ export async function createDefaultPiRunSession(spec) {
               'Allowed: ' + JSON.stringify(required) + '; invalid: ' + JSON.stringify(invalid) + '; missing: ' + JSON.stringify(missing)
             );
           }
+          if (spec.role === 'pm' && params.outcome === 'NEEDS_HUMAN') {
+            // Escalation whitelist: a human may only be summoned over the
+            // requirements themselves, and only with concrete questions.
+            const questions = params.result?.questions;
+            if (!Array.isArray(questions) || !questions.some(q => typeof q === 'string' && q.trim())) {
+              throw new Error('ARIAD_PM_HUMAN_ESCALATION_INVALID: NEEDS_HUMAN is reserved for problems with the requirements/goal themselves and requires concrete questions in result.questions. If the plan needs work, submit PLAN_REVISION_REQUIRED instead.');
+            }
+          }
           terminalResult = {
             outcome: params.outcome,
             summary: params.summary,
