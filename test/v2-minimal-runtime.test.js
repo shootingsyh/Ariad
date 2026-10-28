@@ -1,3 +1,4 @@
+import { scopeOfTask } from '../src/v2/control-task-policy.js';
 import {legacyApplyDeliveryPlan} from './legacy-delivery-plan-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -111,7 +112,7 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
 
     await scheduler.tick('P1');
     let task = store.getTask('T1');
-    assert.equal(task.scope, 'delivery');
+    assert.equal(scopeOfTask(task), 'delivery');
     assert.equal(task.state, 'WORKING');
     assert.equal(task.stage, 'developer');
     assert.deepEqual(resources.snapshot().map(x => x.owner), ['T1']);

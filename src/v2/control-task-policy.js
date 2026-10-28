@@ -34,22 +34,16 @@ export function effectiveTaskKind(task) {
     : TASK_KINDS.MILESTONE_TASK;
 }
 export function controlTaskPolicyFailure(task) {
-  const kind = effectiveTaskKind(task);
+  const kind = task?.taskKind;
   if (!VALID.has(kind)) return 'UNKNOWN_TASK_KIND';
-  if (task.scope === 'delivery') {
-    return isDeliveryKind(kind) ? null : 'NON_DELIVERY_TASK_IN_DELIVERY';
-  }
-  if (task.scope !== 'control') return 'INVALID_TASK_SCOPE';
-  if (isDeliveryKind(kind)) return 'MILESTONE_TASK_REQUIRES_DELIVERY';
+  if (isDeliveryKind(kind)) return null;
   if (kind === TASK_KINDS.WORKFLOW) {
     if (!String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_REQUIRES_WORKFLOW_FLOW';
     return null;
   }
   if (kind === TASK_KINDS.NODE_PLANNING || kind === TASK_KINDS.GLOBAL_REVIEW) {
     if (!task.parentTaskId || !String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_CHILD_REQUIRES_PARENT';
-    const allowed = kind === TASK_KINDS.NODE_PLANNING
-      ? ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger']
-      : ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger'];
+    const allowed = ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger'];
     if (!allowed.includes(task.stage)) return 'WORKFLOW_CHILD_INVALID_STAGE';
     return null;
   }
@@ -65,12 +59,11 @@ export function controlTaskPolicyFailure(task) {
   if (kind === TASK_KINDS.DIAGNOSTIC && task.stage !== 'project_debugger') return 'DIAGNOSTIC_REQUIRES_DEBUGGER';
   return null;
 }
-// Scope is derived from the kind alone: delivery kinds run in the project's
-// delivery graph, every other kind is control-plane work.
+
 export function scopeOfTask(task) {
   return isDeliveryKind(effectiveTaskKind(task)) ? 'delivery' : 'control';
 }
 
 export function isAdhocAnalysis(task) {
-  return task?.scope === 'control' && effectiveTaskKind(task) === TASK_KINDS.ADHOC_ANALYSIS;
+  return effectiveTaskKind(task) === TASK_KINDS.ADHOC_ANALYSIS;
 }

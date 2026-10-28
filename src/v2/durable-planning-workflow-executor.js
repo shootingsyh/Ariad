@@ -34,7 +34,7 @@ export function advanceDurablePlanningWorkflow(store, parent) {
       if (!unit) throw new Error('WORKFLOW_SPAWN_CURSOR_OUT_OF_RANGE');
       const childId = `${parent.id}:${index}`;
       const child = {
-        id: childId, projectId: parent.projectId, scope: 'control', flowId: parent.flowId,
+        id: childId, projectId: parent.projectId, flowId: parent.flowId,
         parentTaskId: parent.id, taskKind: unit.kind, stage: unit.stages[0],
         input: { purpose: 'NODE_PLANNING_WORKFLOW', phase: parent.input.phase, nodeId: unit.nodeId,
           stages: unit.stages, reason: parent.input.reason, nodes, rootId,

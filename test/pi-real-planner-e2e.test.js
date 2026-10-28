@@ -27,6 +27,7 @@ import { ResourcePool } from '../src/v2/resource-pool.js';
 import { V2Scheduler } from '../src/v2/scheduler.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
 import { FunctionProvider } from '../src/v2/function-provider.js';
+import { scopeOfTask } from '../src/v2/control-task-policy.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -437,7 +438,7 @@ test('real Ariad planner runs critic repair, PM replan, delivery, test, and revi
     assert.equal(requests[1].request.purpose, 'PM_PLAN_REVISION');
     assert.equal(requests[1].state, 'PLANNED');
 
-    const plannerTasks = store.listTasks('P-real').filter(task => task.scope === 'control');
+    const plannerTasks = store.listTasks('P-real').filter(task => scopeOfTask(task) === 'control');
     assert.ok(
       plannerTasks.some(task =>
         (task.history ?? []).some(entry => entry.type === 'ROLE_RESULT' && entry.role === 'tech_lead_critic' && entry.outcome === 'ISSUES')

@@ -10,7 +10,6 @@ export function compileUnifiedTaskTree(artifactRoot) {
   if(!validation.ok) throw new Error('UNIFIED_TASK_TREE_INVALID: '+JSON.stringify(validation.issues));
   const tasks=preview.tasks.map(task=>({
     ...structuredClone(task),
-    scope:'delivery',
     unifiedTaskSchemaVersion:1,
     input:{intent:task.intent,acceptanceCriteria:[...(task.acceptanceCriteria??[])],
       interfaceIds:[...(task.interfaceIds??[])],milestoneId:task.milestoneId,

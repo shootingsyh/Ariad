@@ -65,19 +65,12 @@ function normalizeStoredTask(task) {
   delete input.executionMode;
   const normalized = { ...task, input, taskKind: effectiveTaskKind(task) };
   delete normalized.executorType;
+  delete normalized.scope;
   return normalized;
 }
 
 function normalizeTask(task) {
-  const scope = task.scope ?? 'delivery';
-  if (!['delivery', 'control'].includes(scope)) throw new Error(`invalid task scope: ${scope}`);
-  if (scope === 'control' && (!task.flowId || typeof task.flowId !== 'string')) {
-    throw new Error('control task requires flowId');
-  }
-  if (scope === 'delivery' && task.flowId != null) {
-    throw new Error('delivery task cannot have flowId');
-  }
-  const normalized = {
+  const canonical = normalizeStoredTask({
     dependsOn: [],
     stage: 'developer',
     state: 'READY',
@@ -86,13 +79,18 @@ function normalizeTask(task) {
     artifacts: [],
     execution: null,
     ...structuredClone(task),
-    scope,
-    flowId: scope === 'control' ? task.flowId : undefined,
-  };
-  const canonical = normalizeStoredTask(normalized);
-  const policyError = controlTaskPolicyFailure(canonical);
+  });
+  const scope = scopeOfTask(canonical);
+  if (scope === 'control' && (!canonical.flowId || typeof canonical.flowId !== 'string')) {
+    throw new Error('control task requires flowId');
+  }
+  if (scope === 'delivery' && canonical.flowId != null) {
+    throw new Error('delivery task cannot have flowId');
+  }
+  const normalized = { ...canonical, flowId: scope === 'control' ? canonical.flowId : undefined };
+  const policyError = controlTaskPolicyFailure(normalized);
   if (policyError) throw new Error(policyError);
-  return canonical;
+  return normalized;
 }
 
 function graphKey(task) {
@@ -264,7 +262,7 @@ export class SQLiteV2Store {
         if (!target || target.state !== 'READY' || target.execution) throw new Error(`insertion target must be idle READY: ${id}`);
       }
       const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
-      const fix = normalizeTask({ ...task, projectId, scope: 'delivery', issueRefs: refs,
+      const fix = normalizeTask({ ...task, projectId, issueRefs: refs,
         input: { ...(task.input ?? {}), issueRefs: refs },
         history: [...(task.history ?? []), { type: 'TL_INSERT_FIX_TASK', issueId, at: new Date().toISOString() }] });
       if (fix.state !== 'READY' || fix.stage !== 'developer' || fix.execution) throw new Error('fix task must start READY/developer');
@@ -338,8 +336,8 @@ export class SQLiteV2Store {
       const created = tasks.map(task => this.#insertTask({
         ...task,
         projectId,
-        scope: 'control',
         flowId,
+        taskKind: task.taskKind ?? (task.stage === 'project_debugger' ? TASK_KINDS.DIAGNOSTIC : TASK_KINDS.PLANNING),
       }));
       this.db.exec('COMMIT');
       return created;
@@ -523,7 +521,7 @@ export class SQLiteV2Store {
     }
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     return this.createTask({
-      id, projectId, scope: 'control', flowId: `workflow:${projectId}:${id}`,
+      id, projectId, flowId: `workflow:${projectId}:${id}`,
       stage: 'tech_lead', taskKind: 'WORKFLOW',
       input: { phase, reason, scopeNodeId, nodes, requestedByTaskId },
       workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null },
@@ -653,8 +651,8 @@ export class SQLiteV2Store {
       const created = tasks.map(task => this.#insertTask({
         ...task,
         projectId,
-        scope: 'control',
         flowId,
+        taskKind: task.taskKind ?? (task.stage === 'project_debugger' ? TASK_KINDS.DIAGNOSTIC : TASK_KINDS.PLANNING),
       }));
       this.db.exec('COMMIT');
       return { batchId, flowId, tasks: created };

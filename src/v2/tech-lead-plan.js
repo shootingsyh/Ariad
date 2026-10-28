@@ -330,7 +330,6 @@ export function validateTechLeadPlan(plan) {
 
     const normalizedTask = {
       id: task.id,
-      scope: 'delivery',
       state: 'READY',
       stage: task.art?.required ? 'artist' : 'developer',
       parentId: task.parentId,

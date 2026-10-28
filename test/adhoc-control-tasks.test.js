@@ -9,7 +9,7 @@ import { V2Supervisor } from '../src/v2/supervisor.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
-import { controlTaskPolicyFailure, TASK_KINDS } from '../src/v2/control-task-policy.js';
+import { controlTaskPolicyFailure, scopeOfTask, TASK_KINDS } from '../src/v2/control-task-policy.js';
 import { piToolsForTask } from '../src/runtime/pi-runtime-config.js';
 import { AriadService } from '../src/runtime/ariad-service.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
@@ -28,16 +28,16 @@ test('adhoc task factory validates issuer, restricts role and preserves separate
     assert.throws(()=>store.createAdhocAnalysis({projectId:'P',id:'x',requestedBy:'pm',instruction:''}),/REQUIRES_INSTRUCTION/);
     assert.equal(store.listTasks('P').length,0);
     const task=store.createAdhocAnalysis({projectId:'P',id:'investigate',requestedBy:'pm',instruction:'Inspect architecture'});
-    assert.equal(task.scope,'control');
+    assert.equal(scopeOfTask(task),'control');
     assert.equal(task.stage,'tech_lead');
     assert.equal(task.taskKind,TASK_KINDS.ADHOC_ANALYSIS);
     assert.equal(task.flowId,'adhoc:P:investigate');
     assert.equal(controlTaskPolicyFailure(task),null);
     assert.throws(()=>store.createTask({
-      id:'bad',projectId:'P',scope:'delivery',taskKind:TASK_KINDS.ADHOC_ANALYSIS,stage:'developer',
-    }),/NON_DELIVERY_TASK_IN_DELIVERY/);
+      id:'bad',projectId:'P',taskKind:TASK_KINDS.ADHOC_ANALYSIS,stage:'developer',
+    }),/control task requires flowId/);
     assert.throws(()=>store.createTask({
-      id:'bad2',projectId:'P',scope:'control',flowId:'adhoc:P:bad2',taskKind:TASK_KINDS.ADHOC_ANALYSIS,
+      id:'bad2',projectId:'P',flowId:'adhoc:P:bad2',taskKind:TASK_KINDS.ADHOC_ANALYSIS,
       stage:'developer', input:{requestedBy:'pm',instruction:'Inspect'},
     }),/ADHOC_ANALYSIS_REQUIRES_TECH_LEAD/);
   });
@@ -75,7 +75,7 @@ test('STOPPED scheduling dispatches only ad-hoc TL; planning and delivery remain
   try {
     store.createProject({ id: 'P', deliveryEnabled: true, deliveryPlanVersion: 3 });
     store.createAdhocAnalysis({ projectId: 'P', id: 'inspect', requestedBy: 'operator', instruction: 'Inspect' });
-    store.createTask({ id: 'D', projectId: 'P', scope: 'delivery', stage: 'developer', milestoneId: 'M1' });
+    store.createTask({ id: 'D', projectId: 'P', stage: 'developer', milestoneId: 'M1' });
     store.createTask({ id: 'C', projectId: 'P', scope: 'control',
       flowId: 'planner:P:unrelated', stage: 'tech_lead', state: 'READY' });
     store.enqueuePlanningRequest({ id: 'new-plan', projectId: 'P', request: { purpose: 'PLANNER_DECOMPOSE' } });
@@ -232,34 +232,32 @@ test('negative task kind, role, scope and issuer combinations fail closed', () =
   setup(store => {
     store.createProject({ id: 'POLICY', deliveryEnabled: true });
     const invalid = [
-      [{ scope: 'control', flowId: 'adhoc:POLICY:wrong', stage: 'developer',
+      [{ flowId: 'adhoc:POLICY:wrong', stage: 'developer',
          taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: 'Inspect' } },
        /ADHOC_ANALYSIS_REQUIRES_TECH_LEAD/],
-      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'planner:POLICY:bad', stage: 'tech_lead',
          taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: 'Inspect' } },
        /ADHOC_ANALYSIS_REQUIRES_ADHOC_FLOW/],
-      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
          taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'developer', instruction: 'Inspect' } },
        /ADHOC_ANALYSIS_UNAUTHORIZED_ISSUER/],
-      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
          taskKind: 'ADHOC_ANALYSIS', input: { requestedBy: 'operator', instruction: ' ' } },
        /ADHOC_ANALYSIS_REQUIRES_INSTRUCTION/],
-      [{ scope: 'delivery', stage: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' },
-       /NON_DELIVERY_TASK_IN_DELIVERY/],
-      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'developer',
-         taskKind: 'MILESTONE_TASK' }, /MILESTONE_TASK_REQUIRES_DELIVERY/],
-      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'developer',
+      [{ stage: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' },
+       /control task requires flowId/],
+      [{ flowId: 'adhoc:POLICY:bad', stage: 'developer',
+         taskKind: 'MILESTONE_TASK' }, /delivery task cannot have flowId/],
+      [{ flowId: 'planner:POLICY:bad', stage: 'developer',
          taskKind: 'PLANNING' }, /CONTROL_TASK_INVALID_ROLE/],
-      [{ scope: 'control', flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'adhoc:POLICY:bad', stage: 'tech_lead',
          taskKind: 'PLANNING' }, /PLANNING_REQUIRES_PLANNER_FLOW/],
-      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'planner:POLICY:bad', stage: 'tech_lead',
          taskKind: 'REVIEW_GATE' }, /REVIEW_GATE_REQUIRES_PM/],
-      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'pm',
+      [{ flowId: 'planner:POLICY:bad', stage: 'pm',
          taskKind: 'DIAGNOSTIC' }, /DIAGNOSTIC_REQUIRES_DEBUGGER/],
-      [{ scope: 'control', flowId: 'planner:POLICY:bad', stage: 'tech_lead',
+      [{ flowId: 'planner:POLICY:bad', stage: 'tech_lead',
          taskKind: 'MALICIOUS_UNKNOWN' }, /UNKNOWN_TASK_KIND/],
-      [{ scope: 'unrecognized', stage: 'developer', taskKind: 'MILESTONE_TASK' },
-       /invalid task scope/],
     ];
     for (const [i, [task, failure]] of invalid.entries()) {
       assert.throws(() => store.createTask({ id: 'bad-' + i,

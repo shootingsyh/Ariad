@@ -9,6 +9,7 @@ import { V2Supervisor } from '../src/v2/supervisor.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
+import { scopeOfTask } from '../src/v2/control-task-policy.js';
 
 async function scenario(failOnce) {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-fake-e2e-'));
@@ -29,7 +30,7 @@ async function scenario(failOnce) {
     let failed = false;
     for (let i = 0; i < 35 && store.getTask('wf').state !== 'DONE'; i++) {
       await scheduler.tick('P');
-      for (const task of store.listTasks('P').filter(t => t.state === 'WORKING' && t.scope === 'control')) {
+      for (const task of store.listTasks('P').filter(t => t.state === 'WORKING' && scopeOfTask(t) === 'control')) {
         let outcome = task.stage === 'tech_lead' ? 'PLANNED' : task.stage === 'tech_lead_critic' ? 'CLEAN' : 'PASS';
         if (failOnce && !failed && task.stage === 'plan_validator') { outcome = 'NOT_PASS'; failed = true; }
         store.appendTaskHistory(task.id, task.version, { type: 'ROLE_RESULT', source: 'role_result_tool', attemptId: task.execution.attemptId, role: task.stage, outcome });

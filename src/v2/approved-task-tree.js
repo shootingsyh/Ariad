@@ -25,7 +25,7 @@ export function buildApprovedTreeSpecs(projectId, plan, artifactRoot = null) {
   }
   const specs = [
     ...milestones.map(m => ({
-      id:m.id, projectId, scope:'delivery', taskKind:'MILESTONE_TASK',
+      id:m.id, projectId, taskKind:'MILESTONE_TASK',
       executionMode:'aggregate', stage:'developer', state:'READY',
       parentId:m.parentId, milestoneId:m.id, title:m.title, intent:m.goal,
       acceptanceCriteria:[...m.acceptanceCriteria], testStrategy:m.testStrategy,
@@ -37,7 +37,7 @@ export function buildApprovedTreeSpecs(projectId, plan, artifactRoot = null) {
       const owned = ownership.get(t.id);
       const interfaceIds = [...(owned?.interfaceIds ?? t.interfaceIds ?? [])];
       return {
-        ...structuredClone(t), projectId, scope:'delivery',
+        ...structuredClone(t), projectId,
         taskKind:'MILESTONE_TASK', executionMode:'implementation', stage:t.revisionMode==='regression'?'tester':t.art?.required?'artist':'developer',
         state:'READY', parentId:t.milestoneId, interfaceIds,
         ownerFeatureId: owned?.ownerFeatureId ?? null,

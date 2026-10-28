@@ -1,5 +1,6 @@
 // Legacy-only fixture for historical test cases; never imported by production code.
 import {isApprovalGateTask,developerTaskPolicyFailure} from '../src/v2/developer-task-policy.js';
+import { scopeOfTask } from '../src/v2/control-task-policy.js';
 export function legacyApplyDeliveryPlan(store, projectId, plan) {
     if (!store.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     // A legacy plan must never silently obsolete promoted aggregate tasks or
@@ -116,7 +117,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
           continue;
         }
 
-        if (existing.projectId !== projectId || existing.scope !== 'delivery') {
+        if (existing.projectId !== projectId || scopeOfTask(existing) !== 'delivery') {
           throw new Error(`delivery plan task id collides outside project delivery graph: ${spec.id}`);
         }
 

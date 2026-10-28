@@ -150,7 +150,7 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = 'NEEDS_HUMAN';
       else signal = 'ROUTE_PM';
       const transition = executorTransitionFromResult(diagnostic
-        ? { ...task, taskKind: TASK_KINDS.MILESTONE_TASK, scope: 'delivery' } : task, signal);
+        ? { ...task, taskKind: TASK_KINDS.MILESTONE_TASK } : task, signal);
       const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
       const blockedTaskId = task.input?.blockedTaskId ?? null;
       const blockedRoute = blockedTaskId && route ? {
