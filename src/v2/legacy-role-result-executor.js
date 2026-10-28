@@ -8,6 +8,13 @@ import { isAdhocAnalysis } from './control-task-policy.js';
 // Compatibility executor: preserve legacy role results, history, and v2 state
 // semantics while removing role-specific result advancement from Scheduler.
 // The new declarative executor replaces this adapter incrementally.
+async function fallbackTransition(role, task, result) {
+  if (typeof role.transition !== 'function') {
+    throw new Error(`ROLE_TRANSITION_UNAVAILABLE:${task.stage}`);
+  }
+  return role.transition({ task, result });
+}
+
 function latestResult(task) {
   const history = task.history ?? [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -32,7 +39,7 @@ export class LegacyRoleResultExecutor {
       const result = latestResult(task);
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
-      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer', 'project_debugger'].includes(task.stage) ? milestoneResultTransition(task, result, { uxReviewEnabled: this.uxReviewEnabled || (this.roles.roles?.get('reviewer')?.uxReviewEnabled === true || (!this.roles.roles && role.uxReviewEnabled === true)) }) : null) ?? await role.transition({ task, result });
+      const next = subPlanResultTransition(task, result) ?? adhocResultTransition(task, result) ?? (['developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer', 'project_debugger'].includes(task.stage) ? milestoneResultTransition(task, result, { uxReviewEnabled: this.uxReviewEnabled || (this.roles.roles?.get('reviewer')?.uxReviewEnabled === true || (!this.roles.roles && role.uxReviewEnabled === true)) }) : null) ?? await fallbackTransition(role, task, result);
       await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
     }
   }

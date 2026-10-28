@@ -10,6 +10,8 @@ const STATE_TO_STAGE = Object.freeze({
   ARTIST: 'artist', PM: 'pm',
   PLAN: 'tech_lead', VALIDATE: 'plan_validator',
   CRITIQUE: 'tech_lead_critic', ANALYZE: 'tech_lead',
+  PM_REVIEW: 'pm', FEATURE_PLAN: 'feature_planner',
+  MILESTONE_PLAN: 'milestone_planner', INTERFACE_PLAN: 'interface_architect',
 });
 
 export function executorTransitionFromResult(task, signal) {

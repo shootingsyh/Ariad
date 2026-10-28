@@ -29,6 +29,21 @@ export const subPlanMachine = defineExecutorMachine({
   },
 });
 
+export const planMachine = defineExecutorMachine({
+  id: 'plan-executor', version: 1, initial: 'PLAN',
+  states: {
+    PLAN: { operation: 'runTechLead', transitions: { FINISH: 'COMPLETE', ADVANCE: 'PLAN', ESCALATE: 'PM_REVIEW', ROUTE_FEATURE: 'FEATURE_PLAN', ROUTE_MILESTONE: 'MILESTONE_PLAN', ROUTE_INTERFACE: 'INTERFACE_PLAN', BLOCKED: 'FAILED' } },
+    VALIDATE: { operation: 'runPlanValidator', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', BLOCKED: 'FAILED' } },
+    CRITIQUE: { operation: 'runCritic', transitions: { FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
+    PM_REVIEW: { operation: 'runPM', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', BLOCKED: 'FAILED' } },
+    FEATURE_PLAN: { operation: 'runFeaturePlanner', transitions: { ADVANCE_MILESTONE: 'MILESTONE_PLAN', ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
+    MILESTONE_PLAN: { operation: 'runMilestonePlanner', transitions: { ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
+    INTERFACE_PLAN: { operation: 'runInterfaceArchitect', transitions: { FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
+    DEBUG: { operation: 'runDebugger', transitions: { REPAIRED: 'PLAN', NEEDS_HUMAN: 'FAILED' } },
+    COMPLETE: {}, FAILED: {},
+  },
+});
+
 export const adhocMachine = defineExecutorMachine({
   id: 'adhoc-executor', version: 1, initial: 'ANALYZE',
   states: {

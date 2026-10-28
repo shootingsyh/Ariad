@@ -1,5 +1,5 @@
 import { effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
-import { milestoneMachine, subPlanMachine, adhocMachine } from './role-executor-machines.js';
+import { milestoneMachine, subPlanMachine, adhocMachine, planMachine } from './role-executor-machines.js';
 
 // Boundary between persisted v2 role names and executor-owned DSL states.
 // Do not infer success from a role name: the role result is evaluated by the
@@ -13,6 +13,12 @@ const SUB_PLAN_STAGES = Object.freeze({
   tech_lead_critic: 'CRITIQUE', project_debugger: 'DEBUG',
 });
 const ADHOC_STAGES = Object.freeze({ tech_lead: 'ANALYZE' });
+const PLAN_STAGES = Object.freeze({
+  tech_lead: 'PLAN', plan_validator: 'VALIDATE',
+  tech_lead_critic: 'CRITIQUE', pm: 'PM_REVIEW',
+  feature_planner: 'FEATURE_PLAN', milestone_planner: 'MILESTONE_PLAN',
+  interface_architect: 'INTERFACE_PLAN', project_debugger: 'DEBUG',
+});
 
 export function roleExecutorBinding(task) {
   const kind = effectiveTaskKind(task);
@@ -23,6 +29,8 @@ export function roleExecutorBinding(task) {
     machine = adhocMachine; stages = ADHOC_STAGES;
   } else if (kind === TASK_KINDS.NODE_PLANNING || kind === TASK_KINDS.GLOBAL_REVIEW) {
     machine = subPlanMachine; stages = SUB_PLAN_STAGES;
+  } else if (kind === TASK_KINDS.PLANNING) {
+    machine = planMachine; stages = PLAN_STAGES;
   } else {
     // PM gates and diagnostic control tasks have different contracts.
     // They must be modeled explicitly rather than forced into a wrong machine.

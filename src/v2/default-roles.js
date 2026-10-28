@@ -1,6 +1,11 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { acceptInitialTaskTree } from './approved-task-tree.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
+import { roleExecutorBinding } from './role-executor-binding.js';
+import { executorTransitionFromResult } from './role-executor-transition.js';
+import { effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
+
+export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { resolve, sep } from 'node:path';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from './tech-lead-plan.js';
@@ -561,6 +566,534 @@ export function createDefaultV2Roles({
     return next ? { stage: roleNames[next], state: 'READY' } : { state: 'DONE' };
   };
 
+  const techLeadDeliveryTransition = (task, result) => {
+        // PLANNING tasks are owned by the plan executor; this residue only
+        // serves delivery-scope Tech Lead replan requests.
+        if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          return { stage: 'developer', state: 'WAITING_REPLAN' };
+        }
+        throw new Error('TECH_LEAD_PLANNING_TASKS_ARE_EXECUTOR_OWNED');
+  };
+
+  const pmDeliveryTransition = (task, result) => {
+          if (task.scope === 'delivery') {
+            if (result.outcome === 'PRODUCT_DECISION') {
+              const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
+              enqueuePlanning?.({
+                request: {
+                  purpose: 'PRODUCT_DECISION_REPLAN',
+                  taskId: task.id,
+                  decision,
+                  guidance: result.result?.guidance ?? null,
+                  instruction: 'Translate the PM product decision into the smallest correct engineering change. Amend the current task when local, replan the affected subtree when cross-task, or replan the project only when product scope truly requires it.',
+                },
+              });
+              return {
+                stage: 'developer',
+                state: 'WAITING_REPLAN',
+                transitionHistory: {
+                  type: 'PRODUCT_DECISION',
+                  role: 'pm',
+                  decision,
+                  guidance: result.result?.guidance ?? null,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            if (result.outcome === 'NEEDS_HUMAN') {
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'PM_HUMAN_DECISION',
+                  role: 'pm',
+                  summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
+                  questions: result.result?.questions ?? [],
+                  guidance: result.result?.guidance ?? null,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            return {
+              stage: 'pm',
+              state: 'READY',
+              transitionHistory: {
+                type: 'PM_DECISION_RETRY',
+                role: 'pm',
+                summary: `Unexpected PM delivery-escalation outcome: ${result.outcome}`,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+        throw new Error('PM_PLANNING_TASKS_ARE_EXECUTOR_OWNED');
+  };
+  const planTransitionBodies = {
+    tech_lead: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE') {
+          if (result.outcome !== 'PLANNING_ROUTE') return { state: 'NEEDS_HUMAN' };
+          const route = result.result;
+          const next = ['feature', 'milestone', 'interface'].find(name => route.stages[name] === 'RUN');
+          const roles = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
+          return next ? { stage: roles[next], state: 'READY', input: { ...task.input, planningRoute: route } }
+            : { state: 'DONE', input: { ...task.input, planningRoute: route } };
+        }
+        if (task.taskKind === 'ADHOC_ANALYSIS') {
+          return {
+            state: 'DONE',
+            transitionHistory: {
+              type: 'ADHOC_ANALYSIS_COMPLETED',
+              role: 'tech_lead',
+              outcome: result.outcome,
+              findings: result.summary ?? result.result ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
+            const nodeType = task.input?.frontierPhase ?? 'feature';
+            const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
+            const revisionPass = revisionRoot && task.input?.sourceComplete !== true
+              ? finishRevisionPass(revisionRoot, nodeType)
+              : null;
+            if (revisionPass?.decision?.action === 'REMOVE') {
+              return {
+                state: 'DONE',
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType,
+                  nodeId: revisionPass.decision.nodeId,
+                  disposition: 'remove',
+                  childIds: [],
+                  nextNodeId: revisionPass.next?.node?.id ?? null,
+                  revisionDecision: revisionPass.decision,
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            const migration = task.input?.versionMigration
+              ? store.getProject(task.projectId)?.planningModelMigration
+              : null;
+            const pass = finishFrontierPass(artifactRoot, nodeType, {
+              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
+              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
+            });
+            if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
+              throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
+            }
+            const frontierHistory = {
+              type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
+              role: 'tech_lead',
+              nodeType,
+              nodeId: pass.targetNodeId,
+              disposition: pass.targetDisposition,
+              childIds: pass.childIds,
+              nextNodeId: pass.next?.node?.id ?? null,
+              revisionDecision: revisionPass?.decision ?? null,
+              at: new Date().toISOString(),
+            };
+            if (task.input?.singleFrontier === true) {
+              return {
+                state: 'DONE',
+                transitionHistory: frontierHistory,
+              };
+            }
+            if (pass.next) {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: nodeType,
+                },
+                transitionHistory: frontierHistory,
+              };
+            }
+            if (nodeType === 'feature') {
+              return {
+                state: 'READY',
+                input: {
+                  ...task.input,
+                  frontierPhase: 'milestone',
+                },
+                transitionHistory: {
+                  type: 'PLANNER_FRONTIER_PHASE_COMPLETE',
+                  role: 'tech_lead',
+                  nodeType: 'feature',
+                  nextPhase: 'milestone',
+                  at: new Date().toISOString(),
+                },
+              };
+            }
+            return { state: 'DONE' };
+          }
+          return task.scope === 'control'
+            ? { state: 'DONE' }
+            : { stage: 'developer', state: 'WAITING_REPLAN' };
+        }
+        return {
+          stage: 'pm',
+          state: 'READY',
+          transitionHistory: {
+            type: 'TECH_LEAD_ESCALATED_TO_PM',
+            role: 'tech_lead',
+            summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a product-level decision before planning can continue.',
+            guidance: result.result?.guidance ?? null,
+            at: new Date().toISOString(),
+          },
+        };
+    },
+    tech_lead_critic: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_CRITIC') {
+          return ['CLEAN', 'MINOR_ONLY'].includes(result.outcome)
+            ? { state: 'DONE' }
+            : { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'PLANNING_ROUTE_CRITIC_FAILED', at: new Date().toISOString() } };
+        }
+        if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
+          const batchId = task.input?.planningBatchId;
+          const round = task.input?.round ?? 1;
+          if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
+            const skipByRound = {
+              1: [
+                `planner:${batchId}:frontier-repair-1`,
+                `planner:${batchId}:frontier-validate-2`,
+                `planner:${batchId}:frontier-critic-2`,
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              2: [
+                `planner:${batchId}:frontier-repair-2`,
+                `planner:${batchId}:frontier-validate-3`,
+                `planner:${batchId}:frontier-critic-3`,
+                `planner:${batchId}:frontier-debugger`,
+              ],
+              3: [
+                `planner:${batchId}:frontier-debugger`,
+              ],
+            };
+            return {
+              state: 'DONE',
+              skipTaskIds: skipByRound[round] ?? [],
+            };
+          }
+          return { state: 'DONE' };
+        }
+        if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
+          return {
+            state: 'DONE',
+            skipTaskIds: planningSkipIds(task, task.input?.round),
+          };
+        }
+        return { state: 'DONE' };
+    },
+    plan_validator: ({ task, result }) => {
+        if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
+          return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
+            transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
+              reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
+        }
+        if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
+          const phase = task.input?.frontierPhase ?? 'feature';
+          const complete = result.result?.complete === true;
+          if (!complete) {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: phase,
+                sourceComplete: result.result?.sourceComplete === true,
+              },
+            });
+            return { state: 'DONE' };
+          }
+          if (phase === 'feature') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'VERSION_MIGRATION',
+                frontierPhase: 'milestone',
+              },
+            });
+            return { state: 'DONE' };
+          }
+          enqueuePlanning?.({
+            request: {
+              purpose: 'VERSION_MIGRATION_FINALIZE',
+            },
+          });
+          return { state: 'DONE' };
+        }
+        if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
+          if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'AUTONOMY_REPLAN',
+                diagnosis: result.result,
+                instruction: 'Replace required external/manual human work with an autonomous verification strategy. Do not weaken the acceptance requirement.',
+              },
+            });
+            return { state: 'DONE' };
+          }
+          if (['ITERATION_LOGICAL_REVISION_REQUIRED', 'ITERATION_FEATURE_TREE_DIFF_REQUIRED'].includes(result.result?.errorCode)) {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'ITERATION_REVISION_REPLAN',
+                diagnosis: result.result,
+                instruction: 'Repair feature-tree-diff.json against the immutable previous-version snapshot/current durable logical tree. Use add/update/remove operations with stable ids; Ariad will deterministically materialize the next living feature tree. Do not hand-edit the generated logical tree as the authoritative change description.',
+              },
+            });
+            return { state: 'DONE' };
+          }
+          return {
+            stage: 'tech_lead',
+            state: 'READY',
+            transitionHistory: {
+              type: 'PLANNER_VALIDATION_ESCALATION',
+              role: 'plan_validator',
+              summary: result.result?.error ?? 'Planner validation failed after deterministic repair paths.',
+              errorCode: result.result?.errorCode ?? null,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        return { state: 'DONE' };
+    },
+    pm: ({ task, result }) => {
+        if (task.scope === 'delivery') {
+          if (result.outcome === 'PRODUCT_DECISION') {
+            const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
+            enqueuePlanning?.({
+              request: {
+                purpose: 'PRODUCT_DECISION_REPLAN',
+                taskId: task.id,
+                decision,
+                guidance: result.result?.guidance ?? null,
+                instruction: 'Translate the PM product decision into the smallest correct engineering change. Amend the current task when local, replan the affected subtree when cross-task, or replan the project only when product scope truly requires it.',
+              },
+            });
+            return {
+              stage: 'developer',
+              state: 'WAITING_REPLAN',
+              transitionHistory: {
+                type: 'PRODUCT_DECISION',
+                role: 'pm',
+                decision,
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'NEEDS_HUMAN') {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION',
+                role: 'pm',
+                summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          return {
+            stage: 'pm',
+            state: 'READY',
+            transitionHistory: {
+              type: 'PM_DECISION_RETRY',
+              role: 'pm',
+              summary: `Unexpected PM delivery-escalation outcome: ${result.outcome}`,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        if (result.outcome === 'PLAN_ACCEPTED') {
+          // A migrated unified tree must not pass through the legacy plan writer.
+          // Verify the compiled view without mutating tasks, history, or delivery state.
+          if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
+            const project = store.getProject(task.projectId);
+            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+            if (project?.unifiedTaskCompilerVersion === 1 && compatibility.ok) {
+              // The migrated tree is already compiled and accepted. Re-accepting
+              // it must not rewrite existing delivery state or enable scheduling.
+              const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
+              return {state:'DONE',transitionHistory:{
+                type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
+                summary:'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
+                taskCount:loaded.tasks.length,at:new Date().toISOString(),
+              }};
+            }
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                summary: compatibility.ok
+                  ? 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.'
+                  : 'Unified Task Tree compiler/store mismatch; delivery remains unchanged.',
+                compatibility, at: new Date().toISOString(),
+              },
+            };
+          }
+          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
+          // Preserve the one-time human takeover review before requiring offline migration.
+          if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'PM_HUMAN_DECISION', role: 'pm',
+              summary: result.result?.reason ?? 'Review the reconstructed project before migrating legacy delivery state.',
+              at: new Date().toISOString(),
+            } };
+          }
+          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
+          const validated = rawArtifactPlan
+            ? validatePlannerArtifactPlan(rawArtifactPlan)
+            : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
+          // Initial NEW project: persist the approved planner's tree nodes directly.
+          // Never let a legacy replan rewrite an already approved Task Tree.
+          const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
+          if (existingDelivery.some(t => t.taskTreeSchemaVersion === 1)) {
+            try {
+              reconcileApprovedTaskTree(store, task.projectId, validated.plan, { artifactRoot });
+            } catch (error) {
+              return { state: 'NEEDS_HUMAN', transitionHistory: {
+                type: 'TASK_TREE_REPLAN_BLOCKED', role: 'pm',
+                summary: String(error?.message ?? error), at: new Date().toISOString(),
+              } };
+            }
+          } else if (!rawArtifactPlan || existingDelivery.length) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED', role: 'pm',
+              summary: 'Legacy delivery must be migrated offline; no changes applied.',
+              at: new Date().toISOString(),
+            } };
+          } else {
+            acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
+          }
+          // Canonical tree writes are complete; legacy plan writer is absent.
+          const migrationReconciliation = null;
+          completePlanningModelMigration(store, task.projectId);
+          const takeover = isTakeoverPlanningTask(store, task);
+          const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
+          const setDeliveryEnabled = (enabled) => {
+            const current = store.getProject(task.projectId);
+            if (current?.deliveryEnabled === enabled) return current;
+            return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
+          };
+          if (wasMigrating) {
+            setDeliveryEnabled(false);
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
+                role: 'migration_finalizer',
+                migrationReconciliation,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (takeover && !hasHumanDecision) {
+            setDeliveryEnabled(false);
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION',
+                role: 'pm',
+                summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
+                guidance: result.result?.guidance ?? null,
+                questions: result.result?.questions?.length
+                  ? result.result.questions
+                  : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (takeover && hasHumanDecision) completeTakeoverReview(store, task.projectId);
+          setDeliveryEnabled(result.result?.startDelivery === true);
+          return {
+            state: 'DONE',
+            transitionHistory: {
+              type: 'DELIVERY_GATE',
+              role: 'pm',
+              enabled: result.result?.startDelivery === true,
+              reason: result.result?.reason ?? null,
+              migrationReconciliation,
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        if (result.outcome === 'PLAN_REVISION_REQUIRED') {
+          const migration = store.getProject(task.projectId)?.planningModelMigration;
+          enqueuePlanning?.({
+            request: migration?.status === 'REBUILDING'
+              ? {
+                  purpose: 'VERSION_MIGRATION_FINALIZE',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
+                }
+              : {
+                  purpose: 'PM_PLAN_REVISION',
+                  guidance: result.result?.guidance ?? result.result ?? null,
+                },
+          });
+          return { state: 'DONE' };
+        }
+        if (result.outcome === 'NEEDS_HUMAN') {
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'PM_HUMAN_DECISION',
+              role: 'pm',
+              summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
+              guidance: result.result?.guidance ?? null,
+              questions: result.result?.questions ?? [],
+              at: new Date().toISOString(),
+            },
+          };
+        }
+        return {
+          stage: 'tech_lead',
+          state: 'READY',
+          transitionHistory: {
+            type: 'PM_ESCALATED_TO_TECH_LEAD',
+            role: 'pm',
+            summary: result.summary ?? result.result?.reason ?? 'PM requires planning revision.',
+            guidance: result.result?.guidance ?? null,
+            at: new Date().toISOString(),
+          },
+        };
+    },
+    feature_planner: ({ task, result }) => specialistTransition(task, result, 'feature'),
+    milestone_planner: ({ task, result }) => specialistTransition(task, result, 'milestone'),
+    interface_architect: ({ task, result }) => specialistTransition(task, result, 'interface'),
+  };
+
+  const PLAN_SIGNALS = {
+    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'NEEDS_HUMAN:': 'BLOCKED' },
+    VALIDATE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'NEEDS_HUMAN:': 'BLOCKED' },
+    CRITIQUE: { 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    PM_REVIEW: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'NEEDS_HUMAN:': 'BLOCKED' },
+    FEATURE_PLAN: { 'READY:milestone_planner': 'ADVANCE_MILESTONE', 'READY:interface_architect': 'ADVANCE_INTERFACE', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    MILESTONE_PLAN: { 'READY:interface_architect': 'ADVANCE_INTERFACE', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    INTERFACE_PLAN: { 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+  };
+
+  const planResultTransition = (task, result) => {
+    if (effectiveTaskKind(task) !== TASK_KINDS.PLANNING) return null;
+    const body = planTransitionBodies[task.stage];
+    if (!body) return null;
+    const legacy = body({ task, result });
+    if (!legacy) return null;
+    const { state, stage, ...extras } = legacy;
+    const binding = roleExecutorBinding(task);
+    if (!binding) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
+    const signal = PLAN_SIGNALS[binding.state]?.[`${state}:${stage ?? (state === 'READY' ? task.stage : '')}`];
+    if (!signal) throw new Error(`PLAN_EXECUTOR_UNMAPPED_MOVE:${binding.state}/${state}:${stage ?? ''}`);
+    const resolved = executorTransitionFromResult(task, signal);
+    if (!resolved) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
+    if (resolved.patch.state !== state) throw new Error(`PLAN_EXECUTOR_STATE_MISMATCH:${task.id}`);
+    if (stage && resolved.patch.stage !== stage) throw new Error(`PLAN_EXECUTOR_STAGE_MISMATCH:${task.id}`);
+    return { ...resolved.patch, ...extras };
+  };
+
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
     const sharedDeliveryContext = ['developer', 'test_engineer', 'tester', 'reviewer'].includes(task.stage);
@@ -677,7 +1210,7 @@ export function createDefaultV2Roles({
     };
   };
 
-  return {
+  const roleDefinitions = {
     artist: {
       prepare: ({ task }) => {
         const art = task.art ?? task.input?.art ?? null;
@@ -1096,7 +1629,7 @@ export function createDefaultV2Roles({
         'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
         'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
       ].join('\n')),
-      transition: ({ task, result }) => specialistTransition(task, result, 'feature'),
+      transition: ({ task, result }) => planResultTransition(task, result),
     },
     milestone_planner: {
       prepare: ({ task }) => prepareLlm(task, [
@@ -1106,7 +1639,7 @@ export function createDefaultV2Roles({
         'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
         'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
       ].join('\n')),
-      transition: ({ task, result }) => specialistTransition(task, result, 'milestone'),
+      transition: ({ task, result }) => planResultTransition(task, result),
     },
     interface_architect: {
       prepare: ({ task }) => prepareLlm(task, [
@@ -1117,7 +1650,7 @@ export function createDefaultV2Roles({
         'Existing interface artifact layout:', String(artifactRoot ?? ''),
         'Submit outcome PASS or NOT_PASS through ariad_role_result with evidence and changed artifact paths.',
       ].join('\n')),
-      transition: ({ task, result }) => specialistTransition(task, result, 'interface'),
+      transition: ({ task, result }) => planResultTransition(task, result),
     },
 
     tech_lead: {
@@ -1163,121 +1696,7 @@ export function createDefaultV2Roles({
         ].join('\n');
         return prepareLlm(task, prompt);
       },
-      transition: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE') {
-          if (result.outcome !== 'PLANNING_ROUTE') return { state: 'NEEDS_HUMAN' };
-          const route = result.result;
-          const next = ['feature', 'milestone', 'interface'].find(name => route.stages[name] === 'RUN');
-          const roles = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
-          return next ? { stage: roles[next], state: 'READY', input: { ...task.input, planningRoute: route } }
-            : { state: 'DONE', input: { ...task.input, planningRoute: route } };
-        }
-        if (task.taskKind === 'ADHOC_ANALYSIS') {
-          return {
-            state: 'DONE',
-            transitionHistory: {
-              type: 'ADHOC_ANALYSIS_COMPLETED',
-              role: 'tech_lead',
-              outcome: result.outcome,
-              findings: result.summary ?? result.result ?? null,
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
-          if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
-            const nodeType = task.input?.frontierPhase ?? 'feature';
-            const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
-            const revisionPass = revisionRoot && task.input?.sourceComplete !== true
-              ? finishRevisionPass(revisionRoot, nodeType)
-              : null;
-            if (revisionPass?.decision?.action === 'REMOVE') {
-              return {
-                state: 'DONE',
-                transitionHistory: {
-                  type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
-                  role: 'tech_lead',
-                  nodeType,
-                  nodeId: revisionPass.decision.nodeId,
-                  disposition: 'remove',
-                  childIds: [],
-                  nextNodeId: revisionPass.next?.node?.id ?? null,
-                  revisionDecision: revisionPass.decision,
-                  at: new Date().toISOString(),
-                },
-              };
-            }
-            const migration = task.input?.versionMigration
-              ? store.getProject(task.projectId)?.planningModelMigration
-              : null;
-            const pass = finishFrontierPass(artifactRoot, nodeType, {
-              expectedTargetNodeId: revisionPass?.decision?.nodeId ?? null,
-              legacyBaselineRoot: migration?.legacyRevisionRoot ?? null,
-            });
-            if (revisionPass?.decision && pass.targetNodeId !== revisionPass.decision.nodeId) {
-              throw new Error(`VERSION_MIGRATION_FRONTIER_MISMATCH: legacy ${revisionPass.decision.nodeId} != new ${pass.targetNodeId}`);
-            }
-            const frontierHistory = {
-              type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
-              role: 'tech_lead',
-              nodeType,
-              nodeId: pass.targetNodeId,
-              disposition: pass.targetDisposition,
-              childIds: pass.childIds,
-              nextNodeId: pass.next?.node?.id ?? null,
-              revisionDecision: revisionPass?.decision ?? null,
-              at: new Date().toISOString(),
-            };
-            if (task.input?.singleFrontier === true) {
-              return {
-                state: 'DONE',
-                transitionHistory: frontierHistory,
-              };
-            }
-            if (pass.next) {
-              return {
-                state: 'READY',
-                input: {
-                  ...task.input,
-                  frontierPhase: nodeType,
-                },
-                transitionHistory: frontierHistory,
-              };
-            }
-            if (nodeType === 'feature') {
-              return {
-                state: 'READY',
-                input: {
-                  ...task.input,
-                  frontierPhase: 'milestone',
-                },
-                transitionHistory: {
-                  type: 'PLANNER_FRONTIER_PHASE_COMPLETE',
-                  role: 'tech_lead',
-                  nodeType: 'feature',
-                  nextPhase: 'milestone',
-                  at: new Date().toISOString(),
-                },
-              };
-            }
-            return { state: 'DONE' };
-          }
-          return task.scope === 'control'
-            ? { state: 'DONE' }
-            : { stage: 'developer', state: 'WAITING_REPLAN' };
-        }
-        return {
-          stage: 'pm',
-          state: 'READY',
-          transitionHistory: {
-            type: 'TECH_LEAD_ESCALATED_TO_PM',
-            role: 'tech_lead',
-            summary: result.summary ?? result.result?.reason ?? 'Tech Lead requires a product-level decision before planning can continue.',
-            guidance: result.result?.guidance ?? null,
-            at: new Date().toISOString(),
-          },
-        };
-      },
+      transition: ({ task, result }) => planResultTransition(task, result) ?? techLeadDeliveryTransition(task, result),
     },
 
     tech_lead_critic: {
@@ -1290,52 +1709,7 @@ export function createDefaultV2Roles({
              'Do not modify artifacts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.',
              'Route result:', JSON.stringify(flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE')?.input?.planningRoute ?? {})].join('\n')
           : criticPrompt({ store, project, task, artifactRoot })),
-      transition: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE_CRITIC') {
-          return ['CLEAN', 'MINOR_ONLY'].includes(result.outcome)
-            ? { state: 'DONE' }
-            : { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'PLANNING_ROUTE_CRITIC_FAILED', at: new Date().toISOString() } };
-        }
-        if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
-          const batchId = task.input?.planningBatchId;
-          const round = task.input?.round ?? 1;
-          if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
-            const skipByRound = {
-              1: [
-                `planner:${batchId}:frontier-repair-1`,
-                `planner:${batchId}:frontier-validate-2`,
-                `planner:${batchId}:frontier-critic-2`,
-                `planner:${batchId}:frontier-repair-2`,
-                `planner:${batchId}:frontier-validate-3`,
-                `planner:${batchId}:frontier-critic-3`,
-                `planner:${batchId}:frontier-debugger`,
-              ],
-              2: [
-                `planner:${batchId}:frontier-repair-2`,
-                `planner:${batchId}:frontier-validate-3`,
-                `planner:${batchId}:frontier-critic-3`,
-                `planner:${batchId}:frontier-debugger`,
-              ],
-              3: [
-                `planner:${batchId}:frontier-debugger`,
-              ],
-            };
-            return {
-              state: 'DONE',
-              skipTaskIds: skipByRound[round] ?? [],
-            };
-          }
-          return { state: 'DONE' };
-        }
-        if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
-          return {
-            state: 'DONE',
-            skipTaskIds: planningSkipIds(task, task.input?.round),
-          };
-        }
-        return { state: 'DONE' };
-      },
+      transition: ({ task, result }) => planResultTransition(task, result),
     },
 
     plan_validator: {
@@ -1501,76 +1875,7 @@ export function createDefaultV2Roles({
           }
         },
       }),
-      transition: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
-          return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
-            transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
-              reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
-        }
-        if (task.input?.purpose === 'PLANNER_FRONTIER_FINALIZE') {
-          const phase = task.input?.frontierPhase ?? 'feature';
-          const complete = result.result?.complete === true;
-          if (!complete) {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'VERSION_MIGRATION',
-                frontierPhase: phase,
-                sourceComplete: result.result?.sourceComplete === true,
-              },
-            });
-            return { state: 'DONE' };
-          }
-          if (phase === 'feature') {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'VERSION_MIGRATION',
-                frontierPhase: 'milestone',
-              },
-            });
-            return { state: 'DONE' };
-          }
-          enqueuePlanning?.({
-            request: {
-              purpose: 'VERSION_MIGRATION_FINALIZE',
-            },
-          });
-          return { state: 'DONE' };
-        }
-        if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
-          if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'AUTONOMY_REPLAN',
-                diagnosis: result.result,
-                instruction: 'Replace required external/manual human work with an autonomous verification strategy. Do not weaken the acceptance requirement.',
-              },
-            });
-            return { state: 'DONE' };
-          }
-          if (['ITERATION_LOGICAL_REVISION_REQUIRED', 'ITERATION_FEATURE_TREE_DIFF_REQUIRED'].includes(result.result?.errorCode)) {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'ITERATION_REVISION_REPLAN',
-                diagnosis: result.result,
-                instruction: 'Repair feature-tree-diff.json against the immutable previous-version snapshot/current durable logical tree. Use add/update/remove operations with stable ids; Ariad will deterministically materialize the next living feature tree. Do not hand-edit the generated logical tree as the authoritative change description.',
-              },
-            });
-            return { state: 'DONE' };
-          }
-          return {
-            stage: 'tech_lead',
-            state: 'READY',
-            transitionHistory: {
-              type: 'PLANNER_VALIDATION_ESCALATION',
-              role: 'plan_validator',
-              summary: result.result?.error ?? 'Planner validation failed after deterministic repair paths.',
-              errorCode: result.result?.errorCode ?? null,
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        return { state: 'DONE' };
-      },
+      transition: ({ task, result }) => planResultTransition(task, result),
     },
 
     pm: {
@@ -1698,209 +2003,9 @@ export function createDefaultV2Roles({
         ].filter(Boolean).join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
       },
-      transition: ({ task, result }) => {
-        if (task.scope === 'delivery') {
-          if (result.outcome === 'PRODUCT_DECISION') {
-            const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
-            enqueuePlanning?.({
-              request: {
-                purpose: 'PRODUCT_DECISION_REPLAN',
-                taskId: task.id,
-                decision,
-                guidance: result.result?.guidance ?? null,
-                instruction: 'Translate the PM product decision into the smallest correct engineering change. Amend the current task when local, replan the affected subtree when cross-task, or replan the project only when product scope truly requires it.',
-              },
-            });
-            return {
-              stage: 'developer',
-              state: 'WAITING_REPLAN',
-              transitionHistory: {
-                type: 'PRODUCT_DECISION',
-                role: 'pm',
-                decision,
-                guidance: result.result?.guidance ?? null,
-                at: new Date().toISOString(),
-              },
-            };
-          }
-          if (result.outcome === 'NEEDS_HUMAN') {
-            return {
-              state: 'NEEDS_HUMAN',
-              transitionHistory: {
-                type: 'PM_HUMAN_DECISION',
-                role: 'pm',
-                summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
-                questions: result.result?.questions ?? [],
-                guidance: result.result?.guidance ?? null,
-                at: new Date().toISOString(),
-              },
-            };
-          }
-          return {
-            stage: 'pm',
-            state: 'READY',
-            transitionHistory: {
-              type: 'PM_DECISION_RETRY',
-              role: 'pm',
-              summary: `Unexpected PM delivery-escalation outcome: ${result.outcome}`,
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        if (result.outcome === 'PLAN_ACCEPTED') {
-          // A migrated unified tree must not pass through the legacy plan writer.
-          // Verify the compiled view without mutating tasks, history, or delivery state.
-          if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
-            const project = store.getProject(task.projectId);
-            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
-            if (project?.unifiedTaskCompilerVersion === 1 && compatibility.ok) {
-              // The migrated tree is already compiled and accepted. Re-accepting
-              // it must not rewrite existing delivery state or enable scheduling.
-              const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
-              return {state:'DONE',transitionHistory:{
-                type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
-                summary:'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
-                taskCount:loaded.tasks.length,at:new Date().toISOString(),
-              }};
-            }
-            return {
-              state: 'NEEDS_HUMAN',
-              transitionHistory: {
-                type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                summary: compatibility.ok
-                  ? 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.'
-                  : 'Unified Task Tree compiler/store mismatch; delivery remains unchanged.',
-                compatibility, at: new Date().toISOString(),
-              },
-            };
-          }
-          const wasMigrating = store.getProject(task.projectId)?.planningModelMigration?.status === 'REBUILDING';
-          // Preserve the one-time human takeover review before requiring offline migration.
-          if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
-            return { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'PM_HUMAN_DECISION', role: 'pm',
-              summary: result.result?.reason ?? 'Review the reconstructed project before migrating legacy delivery state.',
-              at: new Date().toISOString(),
-            } };
-          }
-          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
-          const validated = rawArtifactPlan
-            ? validatePlannerArtifactPlan(rawArtifactPlan)
-            : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
-          // Initial NEW project: persist the approved planner's tree nodes directly.
-          // Never let a legacy replan rewrite an already approved Task Tree.
-          const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
-          if (existingDelivery.some(t => t.taskTreeSchemaVersion === 1)) {
-            try {
-              reconcileApprovedTaskTree(store, task.projectId, validated.plan, { artifactRoot });
-            } catch (error) {
-              return { state: 'NEEDS_HUMAN', transitionHistory: {
-                type: 'TASK_TREE_REPLAN_BLOCKED', role: 'pm',
-                summary: String(error?.message ?? error), at: new Date().toISOString(),
-              } };
-            }
-          } else if (!rawArtifactPlan || existingDelivery.length) {
-            return { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED', role: 'pm',
-              summary: 'Legacy delivery must be migrated offline; no changes applied.',
-              at: new Date().toISOString(),
-            } };
-          } else {
-            acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
-          }
-          // Canonical tree writes are complete; legacy plan writer is absent.
-          const migrationReconciliation = null;
-          completePlanningModelMigration(store, task.projectId);
-          const takeover = isTakeoverPlanningTask(store, task);
-          const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
-          const setDeliveryEnabled = (enabled) => {
-            const current = store.getProject(task.projectId);
-            if (current?.deliveryEnabled === enabled) return current;
-            return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
-          };
-          if (wasMigrating) {
-            setDeliveryEnabled(false);
-            return {
-              state: 'DONE',
-              transitionHistory: {
-                type: 'MIGRATION_COMPLETED_DELIVERY_LOCKED',
-                role: 'migration_finalizer',
-                migrationReconciliation,
-                at: new Date().toISOString(),
-              },
-            };
-          }
-          if (takeover && !hasHumanDecision) {
-            setDeliveryEnabled(false);
-            return {
-              state: 'NEEDS_HUMAN',
-              transitionHistory: {
-                type: 'PM_HUMAN_DECISION',
-                role: 'pm',
-                summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
-                guidance: result.result?.guidance ?? null,
-                questions: result.result?.questions?.length
-                  ? result.result.questions
-                  : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
-                at: new Date().toISOString(),
-              },
-            };
-          }
-          if (takeover && hasHumanDecision) completeTakeoverReview(store, task.projectId);
-          setDeliveryEnabled(result.result?.startDelivery === true);
-          return {
-            state: 'DONE',
-            transitionHistory: {
-              type: 'DELIVERY_GATE',
-              role: 'pm',
-              enabled: result.result?.startDelivery === true,
-              reason: result.result?.reason ?? null,
-              migrationReconciliation,
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        if (result.outcome === 'PLAN_REVISION_REQUIRED') {
-          const migration = store.getProject(task.projectId)?.planningModelMigration;
-          enqueuePlanning?.({
-            request: migration?.status === 'REBUILDING'
-              ? {
-                  purpose: 'VERSION_MIGRATION_FINALIZE',
-                  guidance: result.result?.guidance ?? result.result ?? null,
-                  instruction: 'Repair validation errors and finish the migration plan. Never enable Delivery.',
-                }
-              : {
-                  purpose: 'PM_PLAN_REVISION',
-                  guidance: result.result?.guidance ?? result.result ?? null,
-                },
-          });
-          return { state: 'DONE' };
-        }
-        if (result.outcome === 'NEEDS_HUMAN') {
-          return {
-            state: 'NEEDS_HUMAN',
-            transitionHistory: {
-              type: 'PM_HUMAN_DECISION',
-              role: 'pm',
-              summary: result.summary ?? result.result?.reason ?? 'PM requires a new product decision from the user.',
-              guidance: result.result?.guidance ?? null,
-              questions: result.result?.questions ?? [],
-              at: new Date().toISOString(),
-            },
-          };
-        }
-        return {
-          stage: 'tech_lead',
-          state: 'READY',
-          transitionHistory: {
-            type: 'PM_ESCALATED_TO_TECH_LEAD',
-            role: 'pm',
-            summary: result.summary ?? result.result?.reason ?? 'PM requires planning revision.',
-            guidance: result.result?.guidance ?? null,
-            at: new Date().toISOString(),
-          },
-        };
-      },
+      transition: ({ task, result }) => planResultTransition(task, result) ?? pmDeliveryTransition(task, result),
     },
   };
+  roleDefinitions[PLAN_RESULT_TRANSITION] = planResultTransition;
+  return roleDefinitions;
 }

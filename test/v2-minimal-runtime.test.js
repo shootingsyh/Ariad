@@ -2428,7 +2428,7 @@ test('PM is the only business role that may create a human-decision gate', () =>
     assert.equal(unknown.state, 'READY');
 
     const techLeadEscalation = definitions.tech_lead.transition({
-      task: { ...task, scope: 'control' },
+      task: { ...task, scope: 'control', stage: 'tech_lead', taskKind: 'PLANNING' },
       result: { outcome: 'UNRESOLVED_PRODUCT_DECISION', summary: 'Need product intent.' },
     });
     assert.equal(techLeadEscalation.stage, 'pm');
