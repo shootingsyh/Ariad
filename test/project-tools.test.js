@@ -157,6 +157,41 @@ test('required runtime dependency probe fails fast when ripgrep is unavailable',
   }
 });
 
+test('ariad_interface_contract resolves boundary contracts by id and lists all', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pi-iface-'));
+  try {
+    const dir = path.join(workspace, '.ariad', 'artifacts', 'planner', 'interfaces', 'features');
+    fs.mkdirSync(dir, { recursive: true });
+    const contract = (nodeId, interfaces, imports = []) => JSON.stringify({
+      version: 1, nodeId, nodeType: 'feature',
+      decomposition: { kind: 'leaf', reason: 'fixture' },
+      interfaces, imports, integrationScenarios: [],
+    });
+    const iface = id => ({
+      id, kind: 'executor', visibility: 'exported',
+      contract: { input: ['in'], output: ['out'], sideEffects: [] },
+      verificationSketch: 'fixture',
+    });
+    fs.writeFileSync(path.join(dir, 'alpha.json'), contract('alpha', [iface('alpha.service')]));
+    fs.writeFileSync(path.join(dir, 'beta.json'), contract('beta', [iface('beta.view')], [
+      { fromNodeId: 'alpha', interfaceId: 'alpha.service', purpose: 'render alpha data' },
+    ]));
+    const registered = new Map();
+    registerAriadProjectTools({ registerTool(tool) { registered.set(tool.name, tool); } }, { workspace });
+    const tool = registered.get('ariad_interface_contract');
+    assert.equal(typeof tool?.execute, 'function');
+    const listed = await tool.execute('call-1', {});
+    assert.equal(listed.details.count, 2);
+    const one = await tool.execute('call-2', { interfaceId: 'alpha.service' });
+    assert.equal(one.details.count, 1);
+    assert.equal(one.details.interfaces[0].nodeId, 'alpha');
+    assert.deepEqual(one.details.interfaces[0].importedBy.map(i => i.nodeId), ['beta']);
+    await assert.rejects(() => tool.execute('call-3', { interfaceId: 'nope' }), /unknown interface id: nope/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Pi project tools expose code, interface, memory search and memory write', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-pi-tools-'));
   try {

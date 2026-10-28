@@ -1,9 +1,10 @@
 import { Type } from 'typebox';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
+import { queryInterfaces } from '../v2/interface-query.js';
 import { sessionHistory } from './session-history.js';
 
 function textResult(value) {
@@ -16,6 +17,7 @@ function textResult(value) {
 export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_code_search',
   'ariad_interface_search',
+  'ariad_interface_contract',
   'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search',
   'ariad_memory_write',
@@ -91,6 +93,18 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
     }, { additionalProperties: false }),
     async execute(_id, params) {
       return textResult({ hits: interfaceSearch(workspace, params.query, { limit: params.limit ?? 20 }) });
+    },
+  });
+
+  pi.registerTool({
+    name: 'ariad_interface_contract',
+    label: 'Ariad interface contract',
+    description: 'Resolve an interfaceId to its exact boundary contract: owning node, kind, visibility, contract terms, verification sketch, and which nodes import it. Omit interfaceId to list every interface in the project. Use this instead of searching files for interface contracts.',
+    parameters: Type.Object({
+      interfaceId: Type.Optional(Type.String({ minLength: 1 })),
+    }, { additionalProperties: false }),
+    async execute(_id, params) {
+      return textResult(queryInterfaces(join(workspace, '.ariad', 'artifacts'), { interfaceId: params.interfaceId ?? null }));
     },
   });
 

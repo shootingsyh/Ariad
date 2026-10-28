@@ -139,7 +139,7 @@ function interfaceLookupField(artifactRoot) {
   const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
   return {
     command: `node ${cliPath} project interfaces ${projectName} --projects-root ${projectsRoot}`,
-    usage: 'Resolve an interfaceId to its boundary contract by appending --id <interfaceId>. Use this query instead of searching the filesystem for interface contracts.',
+    usage: 'Resolve an interfaceId to its boundary contract with the ariad_interface_contract tool (omit the id to list all interfaces), or with this command by appending --id <interfaceId>. Use these instead of searching the filesystem for interface contracts.',
   };
 }
 
