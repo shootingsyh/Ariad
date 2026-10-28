@@ -6,10 +6,10 @@ const codex='openai-codex/gpt-5.6-sol';
 const muse='meta/muse-spark-1.2-contributor';
 async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
   const calls=[];
-  let disposed=0, switched=0;
+  let disposed=0;
   const provider=new PiAgentSessionProvider({
     createRunSession:async spec=>{
-      let active=spec.context.roleModelRef;
+      const active=spec.context.roleModelRef;
       calls.push({model:active,policy:spec.sessionPolicy,attempt:spec.attemptId});
       const session={messages:[],
         async prompt(message){
@@ -21,7 +21,6 @@ async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
       };
       return {
         session,
-        async switchModel(ref){ active=ref; switched++; calls.push({switchTo:ref}); },
         getTerminalResult:()=>((active===codex?primaryError:fallbackError)?null:{
           outcome:'PLANNED',summary:'Completed using '+active,keyPoints:[]}),
       };
@@ -36,19 +35,23 @@ async function execute({primaryError, roleModelRef=codex, fallbackError=null}) {
   await provider.runs.get(handle.externalId).promise;
   const state=await provider.poll(handle);
   await provider.close();
-  return {calls,state,disposed,switched};
+  return {calls,state,disposed};
 }
-test('Codex account quota falls back to Muse only for this attempt',async()=>{
+test('Codex account quota fails over to a fresh Muse session for this attempt',async()=>{
  const r=await execute({primaryError:'Codex error: The usage limit has been reached'});
- assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
- assert.equal(r.switched,1);
+ // No in-place transplant: a SECOND session is created from the fallback
+ // spec (fresh policy, suffixed attempt), and the abandoned primary
+ // session is disposed as well as the fallback one.
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{model:muse,policy:'fresh',attempt:'P:TL:1:quota-fallback'}]);
  assert.equal(r.state.state,'COMPLETED');
  assert.match(r.state.summary,/meta\/muse/);
  assert.ok(r.state.keyPoints.some(x=>x.includes('ARIAD_MODEL_QUOTA_FALLBACK')));
- assert.equal(r.disposed,1);
+ assert.ok(r.state.keyPoints.some(x=>x.includes('fresh session')));
+ assert.equal(r.disposed,2);
  // Next new task/attempt always starts with primary Codex, not Muse.
  const next=await execute({primaryError:null});
  assert.deepEqual(next.calls.map(x=>x.model),[codex]);
+ assert.equal(next.disposed,1);
 });
 test('quota fallback is not used for errors unrelated to quota',async()=>{
  const r=await execute({primaryError:'404: model not found'});
@@ -59,7 +62,7 @@ test('Muse fallback failures remain failures; do not claim success',async()=>{
  const r=await execute({primaryError:'usage limit has been reached',fallbackError:'Muse auth denied'});
  assert.equal(r.state.state,'FAILED');
  assert.match(r.state.failure,/Muse auth denied/);
- assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{model:muse,policy:'fresh',attempt:'P:TL:1:quota-fallback'}]);
 });
 test('other providers are never forced through Codex fallback',async()=>{
  const r=await execute({roleModelRef:muse,primaryError:null});
@@ -72,14 +75,13 @@ test('quota classifier excludes generic transient rate limits',()=>{
  assert.equal(isCodexQuotaExhaustion('insufficient_quota'),true);
 });
 
-test('live ChatGPT Plus quota message continues in the same session using Muse',async()=>{
+test('live ChatGPT Plus quota message starts a fresh Muse session',async()=>{
  const message='You have hit your ChatGPT usage limit (plus plan). Try again in ~272 min.';
  assert.equal(isCodexQuotaExhaustion(message),true);
  const r=await execute({primaryError:message});
  assert.equal(r.state.state,'COMPLETED');
- assert.equal(r.switched,1);
- assert.equal(r.disposed,1);
- assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{switchTo:muse}]);
+ assert.equal(r.disposed,2);
+ assert.deepEqual(r.calls,[{model:codex,policy:'persistent',attempt:'P:TL:1'},{model:muse,policy:'fresh',attempt:'P:TL:1:quota-fallback'}]);
  const next=await execute({primaryError:null});
  assert.deepEqual(next.calls.map(x=>x.model),[codex]);
 });

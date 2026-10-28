@@ -455,8 +455,8 @@ export async function createDefaultPiRunSession(spec) {
     tools: piToolsForTask({ role: spec.role, taskKind: spec.taskKind }),
   });
   await session.bindExtensions({ mode: 'json' });
-  // A persistent session may have ended with a Muse quota fallback.
-  // Every NEW role run still uses Ariad's configured primary model.
+  // A resumed persistent session always runs this run's configured
+  // model, whatever model its stored transcript was created with.
   if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
     await session.setModel(model, { persist: false });
   }
@@ -464,17 +464,6 @@ export async function createDefaultPiRunSession(spec) {
   return {
     session,
     getTerminalResult: () => terminalResult,
-    async switchModel(modelRef) {
-      const target = resolveAriadPiModelRef(modelRef);
-      if (target.provider === 'meta' && process.env.META_API_KEY) {
-        await modelRuntime.setRuntimeApiKey('meta', process.env.META_API_KEY);
-      }
-      const nextModel = modelRuntime.getModel(target.provider, target.model);
-      if (!nextModel) throw new Error(`MODEL_PROVIDER_UNAVAILABLE: fallback ${modelRef}`);
-      // Pi persists the model change inside the SAME session transcript,
-      // but never rewrites the preferred model in the global defaults.
-      await session.setModel(nextModel, { persist: false });
-    },
   };
 }
 
@@ -500,21 +489,25 @@ export class PiAgentSessionProvider {
     };
     this.runs.set(externalId, record);
 
-    const rolePrompt = buildStandaloneRolePrompt(spec.context ?? {}, spec.prompt ?? '');
-    const prompt = [
-      rolePrompt,
+    const buildRunPrompt = (runSpec, { quotaRetry = false } = {}) => [
+      buildStandaloneRolePrompt(runSpec.context ?? {}, runSpec.prompt ?? ''),
       '',
       'ARIAD RUNTIME CONTEXT',
       JSON.stringify({
-        projectId: spec.projectId,
-        taskId: spec.taskId,
-        role: spec.role,
-        attemptId: spec.attemptId ?? null,
-        sessionPolicy: spec.sessionPolicy ?? 'fresh',
+        projectId: runSpec.projectId,
+        taskId: runSpec.taskId,
+        role: runSpec.role,
+        attemptId: runSpec.attemptId ?? null,
+        sessionPolicy: runSpec.sessionPolicy ?? 'fresh',
       }),
       '',
+      ...(quotaRetry ? [
+        'A previous attempt at this same task was cut off when the primary model exhausted its usage quota. The workspace may contain partial work from that attempt: assess the current state on its merits, do not assume it is correct or complete, and complete the assigned role work in full.',
+        '',
+      ] : []),
       `When the assigned role work is actually complete, call ${RESULT_TOOL} exactly once. Do not finish with ordinary prose.`,
     ].join('\n');
+    const prompt = buildRunPrompt(spec);
 
     const checkTerminalResult = run => {
       const result = run.getTerminalResult?.() ?? null;
@@ -537,23 +530,27 @@ export class PiAgentSessionProvider {
         } catch (error) {
           const fallbackSpec = isCodexQuotaExhaustion(error) ? codexQuotaFallbackSpec(spec) : null;
           if (!fallbackSpec || record.state === 'CANCELLED') throw error;
-          if (typeof run.switchModel !== 'function') {
-            throw new Error('ARIAD_MODEL_FALLBACK_UNAVAILABLE: Pi session cannot switch models in place');
-          }
-          await run.switchModel(fallbackSpec.context.roleModelRef);
-          // Continue the SAME session and full transcript. Do not create
-          // another Pi session, replay tools, or reset the role context.
-          await run.session.prompt(
-            'The previous model exhausted its usage quota. Continue the same Ariad role task ' +
-            'from the existing session history and tool results. Do not repeat completed work. ' +
-            'When complete, submit the required ariad_role_result.',
-          );
-          result = checkTerminalResult(run);
+          // Quota failover NEVER transplants a second model into this
+          // session's transcript. The inheriting model, handed a long
+          // foreign transcript plus a terse "continue" nudge, rushes a
+          // bare result and drops the role's structured payload (E2E
+          // evidence: every seal failure came from a switched session;
+          // uninterrupted sessions on any model sealed cleanly). Run
+          // the role again in a FRESH session on the fallback model,
+          // from the canonical task artifact, as the fallback spec
+          // describes. One failover per attempt: if the fresh session
+          // also fails, the attempt fails.
+          try { run.session?.dispose?.(); } catch {}
+          const fallbackRun = await this.createRunSession(fallbackSpec);
+          record.session = fallbackRun.session;
+          if (record.state === 'CANCELLED') throw error;
+          await fallbackRun.session.prompt(buildRunPrompt(fallbackSpec, { quotaRetry: true }));
+          result = checkTerminalResult(fallbackRun);
           result = {
             ...result,
             keyPoints: [
               ...(result.keyPoints ?? []),
-              `ARIAD_MODEL_QUOTA_FALLBACK: ${spec.context.roleModelRef} -> ${fallbackSpec.context.roleModelRef} (same Pi session)`,
+              `ARIAD_MODEL_QUOTA_FALLBACK: ${spec.context.roleModelRef} -> ${fallbackSpec.context.roleModelRef} (fresh session)`,
             ],
           };
         }
