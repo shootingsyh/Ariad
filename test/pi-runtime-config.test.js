@@ -62,9 +62,17 @@ test('Ariad Pi model refs preserve production policy without fallback', () => {
     model: 'qwen3.8-27b',
     auth: 'none',
   });
+  // No Ariad-side whitelist: any other provider delegates to Pi's
+  // catalog / models.json and is resolved (or rejected) there.
+  assert.deepEqual(resolveAriadPiModelRef('anthropic/claude-sonnet-4-5'), {
+    ariadRef: 'anthropic/claude-sonnet-4-5',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-5',
+    auth: 'pi-auth-or-environment',
+  });
   assert.throws(
-    () => resolveAriadPiModelRef('unknown/model'),
-    /MODEL_PROVIDER_UNAVAILABLE/,
+    () => resolveAriadPiModelRef('no-slash'),
+    /Invalid Ariad model ref/,
   );
 });
 

@@ -53,7 +53,17 @@ export function resolveAriadPiModelRef(modelRef) {
     };
   }
 
-  throw new Error(`MODEL_PROVIDER_UNAVAILABLE: no bundled Pi mapping for ${value}`);
+  // Every other provider delegates to Pi's own catalog and models.json:
+  // Ariad keeps no provider whitelist. Whether the provider and model
+  // actually exist (and whether credentials resolve) is decided by Pi's
+  // ModelRuntime at session start - or earlier by the configuration
+  // layer's validation - not by a hardcoded list here.
+  return {
+    ariadRef: value,
+    provider,
+    model,
+    auth: 'pi-auth-or-environment',
+  };
 }
 
 export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
