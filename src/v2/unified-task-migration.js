@@ -92,7 +92,7 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
       data.legacyTaskId=task.legacyIntegrationTaskId ?? null;
       data.unifiedTaskSchemaVersion=1;
       data.interfaceIds=[...(task.interfaceIds ?? [])];
-      data.input={...data.input,executionMode:task.executionMode,interfaceIds:[...(task.interfaceIds ?? [])],milestoneId:task.milestoneId,taskKind:data.taskKind,ownerMilestoneId:data.ownerMilestoneId};
+      data.input={...data.input,interfaceIds:[...(task.interfaceIds ?? [])],milestoneId:task.milestoneId,ownerMilestoneId:data.ownerMilestoneId};
       // Aggregate tasks retain their normal developer/tester/reviewer lifecycle.
       // Child completion is only a prerequisite, never an automatic verdict.
       if(task.executionMode==='aggregate' && data.state==='DONE' && !(data.history??[]).some(h=>h.type==='ROLE_RESULT')) {

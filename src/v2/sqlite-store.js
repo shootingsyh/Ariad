@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -19,13 +19,13 @@ function rowToProject(row) {
 
 function rowToTask(row) {
   if (!row) return null;
-  return {
+  return normalizeStoredTask({
     ...decode(row.data_json),
     id: row.id,
     projectId: row.project_id,
     version: row.version,
     updatedAt: row.updated_at,
-  };
+  });
 }
 
 function rowToIssue(row) {
@@ -54,6 +54,20 @@ function issueFingerprint(issue) {
   return createHash('sha256').update(stable).digest('hex').slice(0, 24);
 }
 
+// Canonical task shape: taskKind is the only type field. Reads of stored
+// rows restamp the kind from whatever legacy signals the row still carries
+// and strip the shadow copies (input.taskKind, input.executionMode,
+// executorType) so no consumer ever sees two sources of type truth.
+function normalizeStoredTask(task) {
+  if (!task || typeof task !== 'object') return task;
+  const input = { ...(task.input ?? {}) };
+  delete input.taskKind;
+  delete input.executionMode;
+  const normalized = { ...task, input, taskKind: effectiveTaskKind(task) };
+  delete normalized.executorType;
+  return normalized;
+}
+
 function normalizeTask(task) {
   const scope = task.scope ?? 'delivery';
   if (!['delivery', 'control'].includes(scope)) throw new Error(`invalid task scope: ${scope}`);
@@ -75,9 +89,10 @@ function normalizeTask(task) {
     scope,
     flowId: scope === 'control' ? task.flowId : undefined,
   };
-  const policyError = controlTaskPolicyFailure(normalized);
+  const canonical = normalizeStoredTask(normalized);
+  const policyError = controlTaskPolicyFailure(canonical);
   if (policyError) throw new Error(policyError);
-  return normalized;
+  return canonical;
 }
 
 function graphKey(task) {
@@ -192,6 +207,12 @@ export class SQLiteV2Store {
   createTask(task) {
     if (!task?.id) throw new Error('task.id is required');
     if (!task?.projectId) throw new Error('task.projectId is required');
+    // Admission rule for explicitly declared planning tasks: they must be
+    // born inside a planner batch flow. (Derived kinds are not subject to
+    // this; it guards the declared type, not the normalized one.)
+    if (task.taskKind === TASK_KINDS.PLANNING && !String(task.flowId ?? '').startsWith('planner:')) {
+      throw new Error('PLANNING_REQUIRES_PLANNER_FLOW');
+    }
     return this.#insertTask(task);
   }
 
@@ -294,7 +315,7 @@ export class SQLiteV2Store {
         id: `adhoc:${projectId}:${id}:analysis`,
         stage: 'tech_lead',
         taskKind: TASK_KINDS.ADHOC_ANALYSIS,
-        input: { taskKind: TASK_KINDS.ADHOC_ANALYSIS, requestedBy, instruction, context },
+        input: { requestedBy, instruction, context },
       }],
     })[0];
   }
@@ -503,7 +524,7 @@ export class SQLiteV2Store {
     if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     return this.createTask({
       id, projectId, scope: 'control', flowId: `workflow:${projectId}:${id}`,
-      stage: 'tech_lead', taskKind: 'WORKFLOW', executorType: 'node-planning',
+      stage: 'tech_lead', taskKind: 'WORKFLOW',
       input: { phase, reason, scopeNodeId, nodes, requestedByTaskId },
       workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null },
     });
@@ -513,7 +534,7 @@ export class SQLiteV2Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const parent = this.getTask(parentTaskId);
-      if (!parent || parent.taskKind !== 'WORKFLOW' || parent.executorType !== 'node-planning') throw new Error('INVALID_WORKFLOW_PARENT');
+      if (!parent || parent.taskKind !== 'WORKFLOW') throw new Error('INVALID_WORKFLOW_PARENT');
       if (['DONE', 'SKIPPED', 'SYSTEM_BLOCKED'].includes(parent.state)) throw new Error('WORKFLOW_NOT_ACTIVE');
       if (parent.version !== expectedVersion) throw new Error('WORKFLOW_VERSION_CONFLICT');
       if (!workflowState || !Number.isInteger(workflowState.cursor)) throw new Error('INVALID_WORKFLOW_CHECKPOINT');

@@ -3,7 +3,7 @@ import { advanceDurablePlanningWorkflow } from './durable-planning-workflow-exec
 // Stable legacy entrypoint; all planning workflows use the new executor.
 export function advanceNodePlanningWorkflows(store, projectId) {
   const parents = store.listTasks(projectId, { scope: 'control' }).filter(task =>
-    task.taskKind === 'WORKFLOW' && task.executorType === 'node-planning' && task.state === 'READY');
+    task.taskKind === 'WORKFLOW' && task.state === 'READY');
   for (const parent of parents) advanceDurablePlanningWorkflow(store, parent);
 }
 

@@ -5,7 +5,7 @@ import { readWorkflowExecutorCheckpoint, persistWorkflowExecutorSignal, persistW
 
 // Default planning executor behind the existing public entrypoint.\n// One durable state transition per invocation.
 export function advanceDurablePlanningWorkflow(store, parent) {
-  if (parent.taskKind !== 'WORKFLOW' || parent.executorType !== 'node-planning' || parent.state !== 'READY') return false;
+  if (parent.taskKind !== 'WORKFLOW' || parent.state !== 'READY') return false;
   const state = parent.workflowState ?? { cursor: 0, completedNodes: [], activeChildTaskId: null };
   const checkpoint = readWorkflowExecutorCheckpoint(parent, machine);
   const nodes = parent.input?.nodes;

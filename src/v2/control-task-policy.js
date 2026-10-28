@@ -42,7 +42,6 @@ export function controlTaskPolicyFailure(task) {
   if (task.scope !== 'control') return 'INVALID_TASK_SCOPE';
   if (isDeliveryKind(kind)) return 'MILESTONE_TASK_REQUIRES_DELIVERY';
   if (kind === TASK_KINDS.WORKFLOW) {
-    if (task.executorType !== 'node-planning') return 'WORKFLOW_REQUIRES_EXECUTOR';
     if (!String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_REQUIRES_WORKFLOW_FLOW';
     return null;
   }
@@ -62,7 +61,6 @@ export function controlTaskPolicyFailure(task) {
     return null;
   }
   if (!CONTROL_ROLES.has(task.stage)) return 'CONTROL_TASK_INVALID_ROLE';
-  if (kind === TASK_KINDS.PLANNING && task.taskKind === TASK_KINDS.PLANNING && !String(task.flowId ?? '').startsWith('planner:')) return 'PLANNING_REQUIRES_PLANNER_FLOW';
   if (kind === TASK_KINDS.REVIEW_GATE && task.stage !== 'pm') return 'REVIEW_GATE_REQUIRES_PM';
   if (kind === TASK_KINDS.DIAGNOSTIC && task.stage !== 'project_debugger') return 'DIAGNOSTIC_REQUIRES_DEBUGGER';
   return null;
