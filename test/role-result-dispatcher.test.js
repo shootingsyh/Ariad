@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LegacyRoleResultExecutor } from '../src/v2/legacy-role-result-executor.js';
+import { RoleResultDispatcher } from '../src/v2/role-result-dispatcher.js';
 
 // Characterization test for the original Scheduler result-advance contract.
 // No database migration, new task states, or RoleRegistry API changes.
@@ -24,7 +24,7 @@ test('legacy executor preserves RESULT_READY -> READY stage advancement', async 
     assert.ok(['developer', 'reviewer'].includes(name));
     return { transition: () => ({ stage: 'test_engineer', state: 'READY' }) };
   } };
-  await new LegacyRoleResultExecutor({ store, roles }).advanceResults('P');
+  await new RoleResultDispatcher({ store, roles }).advanceResults('P');
   assert.equal(updates.length, 1);
   assert.equal(updates[0].state, 'READY');
   assert.equal(updates[0].stage, 'test_engineer');
@@ -47,7 +47,7 @@ test('legacy executor preserves RESULT_READY -> DONE and history behavior', asyn
     },
   };
   const roles = { get: () => ({ transition: () => ({ state: 'DONE' }) }) };
-  await new LegacyRoleResultExecutor({ store, roles }).advanceResults('P');
+  await new RoleResultDispatcher({ store, roles }).advanceResults('P');
   assert.equal(final.state, 'DONE');
 });
 
@@ -55,7 +55,7 @@ test('legacy executor preserves adhocOnly and migration filters', async () => {
   const task = { id: 'T', state: 'RESULT_READY', stage: 'developer', scope: 'delivery' };
   const store = { listTasks: () => [task], updateTask: () => { throw Error('must not update'); } };
   const roles = { get: () => { throw Error('must not get role'); } };
-  const executor = new LegacyRoleResultExecutor({ store, roles });
+  const executor = new RoleResultDispatcher({ store, roles });
   await executor.advanceResults('P', { adhocOnly: true });
   await executor.advanceResults('P', { migrating: true });
 });

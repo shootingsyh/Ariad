@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LegacyRoleResultExecutor } from '../src/v2/legacy-role-result-executor.js';
+import { RoleResultDispatcher } from '../src/v2/role-result-dispatcher.js';
 
 async function advance({ outcome = 'PASS', ux = false, configuredUx = false, role = 'reviewer', afterPersist } = {}) {
   let task = {
@@ -27,7 +27,7 @@ async function advance({ outcome = 'PASS', ux = false, configuredUx = false, rol
     transition: () => { throw new Error('legacy transition must not run'); },
     ...(afterPersist ? { afterPersist } : {}),
   }) };
-  await new LegacyRoleResultExecutor({ store, roles, uxReviewEnabled: ux }).advanceResults('P');
+  await new RoleResultDispatcher({ store, roles, uxReviewEnabled: ux }).advanceResults('P');
   return task;
 }
 

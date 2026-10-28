@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LegacyRoleResultExecutor } from '../src/v2/legacy-role-result-executor.js';
+import { RoleResultDispatcher } from '../src/v2/role-result-dispatcher.js';
 
 function run(stage, outcome, extra = {}) {
   let task = {
@@ -20,7 +20,7 @@ function run(stage, outcome, extra = {}) {
   const roles = { get: () => ({
     transition: () => { throw new Error('legacy transition called'); },
   }) };
-  return new LegacyRoleResultExecutor({ store, roles }).advanceResults('P')
+  return new RoleResultDispatcher({ store, roles }).advanceResults('P')
     .then(() => task);
 }
 test('milestone developer result uses DSL in scheduler adapter', async () => {

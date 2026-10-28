@@ -1,6 +1,6 @@
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
 import { advanceNodePlanningWorkflows } from './node-planning-workflow-executor.js';
-import { LegacyRoleResultExecutor } from './legacy-role-result-executor.js';
+import { RoleResultDispatcher } from './role-result-dispatcher.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
@@ -34,7 +34,7 @@ export class V2Scheduler {
     this.roles = roles;
     this.providers = providers;
     this.resources = resources;
-    this.resultExecutor = new LegacyRoleResultExecutor({ store, roles, uxReviewEnabled });
+    this.resultExecutor = new RoleResultDispatcher({ store, roles, uxReviewEnabled });
   }
 
   #settlePlanningBatches(projectId) {
