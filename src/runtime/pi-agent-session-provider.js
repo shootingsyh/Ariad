@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
@@ -23,7 +23,7 @@ import {
 } from './pi-runtime-config.js';
 
 const RESULT_TOOL = 'ariad_role_result';
-const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'reviewer']);
+const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'artist', 'reviewer', 'ux_reviewer']);
 const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
@@ -287,9 +287,73 @@ export function piDeclaredRoleResultToolSchema(role) {
   }, { additionalProperties: false });
 }
 
-export function deliveryToolPolicy(role, toolName) {
+const BASH_DEVICE_ALLOWLIST = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr']);
+const REVIEWER_GIT_VERBS = new Set(['status', 'diff', 'add', 'commit', 'push', 'log', 'show']);
+
+function bashTokens(command) {
+  return (String(command).match(/"[^"]*"|'[^']*'|[^\s;|&<>()]+/g) ?? [])
+    .map(token => token.replace(/^["']|["']$/g, ''));
+}
+
+/**
+ * Deterministic guardrail (not a sandbox): bash sessions run with the
+ * project workspace as cwd, and commands must stay inside it. Absolute
+ * paths outside the workspace are rejected — the failure this prevents
+ * is a role scanning or reading the host (`find /`, `cat /etc/...`).
+ * An absolute path to an executable FILE is a program invocation (e.g.
+ * a Godot binary) and is allowed; its arguments are still checked.
+ */
+export function bashConfinementViolation(command, workspace) {
+  if (typeof command !== 'string' || typeof workspace !== 'string' || !workspace.trim()) return null;
+  const root = workspace.replace(/\/+$/, '');
+  if (/(^|[;&|]\s*)cd\s+(?:\.\.(?:\/|\s|$)|\.\.$)/.test(command)) {
+    return 'cd .. leaves the workspace root';
+  }
+  for (const rawToken of bashTokens(command)) {
+    let token = rawToken;
+    const eq = token.lastIndexOf('=');
+    if (eq > 0) token = token.slice(eq + 1);
+    token = token.replace(/[,;]+$/, '');
+    if (token === '~' || token.startsWith('~/') || token.startsWith('$HOME')) {
+      return `home-relative path escapes the workspace: ${rawToken}`;
+    }
+    if (!token.startsWith('/')) continue;
+    if (token === '/') return 'filesystem root used as a path argument';
+    if (token === root || token.startsWith(`${root}/`)) continue;
+    if (BASH_DEVICE_ALLOWLIST.has(token) || token.startsWith('/dev/fd/')) continue;
+    try {
+      const stat = statSync(token);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0) continue;
+    } catch {}
+    return `absolute path outside the workspace: ${token}`;
+  }
+  return null;
+}
+
+export function deliveryToolPolicy(role, toolName, context = {}) {
   if ((role === 'reviewer' || role === 'ux_reviewer') && REVIEWER_MUTATING_TOOLS.has(toolName)) {
     return { block: true, reason: `Ariad reviewer runtime policy denies mutating tool: ${toolName}` };
+  }
+  if (toolName === 'bash') {
+    const command = context.input?.command;
+    if (role === 'reviewer' || role === 'ux_reviewer') {
+      // Reviewer bash exists for git finalization only (see the reviewer
+      // protocol): every command segment must be an allowed git call.
+      if (typeof command !== 'string' || !command.trim()) {
+        return { block: true, reason: 'Ariad reviewer runtime policy: bash is git-only and needs a command to evaluate' };
+      }
+      for (const segment of command.split(/[;|&\n]+/)) {
+        const tokens = bashTokens(segment);
+        if (tokens.length === 0) continue;
+        if (tokens[0] !== 'git' || !REVIEWER_GIT_VERBS.has(tokens[1] ?? '')) {
+          return { block: true, reason: `Ariad reviewer runtime policy: bash is git-only (status/diff/add/commit/push/log/show); denied segment: ${segment.trim().slice(0, 80)}` };
+        }
+      }
+    }
+    const violation = bashConfinementViolation(command, context.workspace);
+    if (violation) {
+      return { block: true, reason: `Ariad bash confinement: ${violation}. Stay inside the project workspace; use relative paths, ariad_code_search, or ariad_anchor_lookup for code lookup.` };
+    }
   }
   return null;
 }
@@ -406,7 +470,7 @@ export async function createDefaultPiRunSession(spec) {
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
       });
       if (DELIVERY_ROLES.has(spec.role)) {
-        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName) ?? undefined);
+        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace }) ?? undefined);
       }
       pi.registerTool({
         name: RESULT_TOOL,

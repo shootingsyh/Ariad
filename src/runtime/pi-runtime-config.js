@@ -74,10 +74,45 @@ export const ARIAD_PI_REVIEW_TOOLS = Object.freeze([
   'ariad_memory_search', 'ariad_session_history', 'ariad_role_result',
 ]);
 
+// Read-only project tools shared by every non-executing tier: code and
+// interface inspection plus memory/session recall. No shell, no mutation.
+const ARIAD_PI_READONLY_PROJECT_TOOLS = Object.freeze([
+  'ariad_code_search', 'ariad_interface_search', 'ariad_interface_contract', 'ariad_anchor_lookup',
+  'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
+  'ariad_memory_search', 'ariad_session_history', 'ariad_role_result',
+]);
+
+// Planning read tier: critics, plan validators, PM, debugger and seal
+// checker sessions judge artifacts and code; they never execute or edit.
+// (The Critic session that ran `find /` across the host had been handed
+// the full delivery set, bash included.)
+export const ARIAD_PI_PLANNING_READ_TOOLS = Object.freeze([
+  'read', 'grep', 'find', 'ls',
+  ...ARIAD_PI_READONLY_PROJECT_TOOLS,
+]);
+
+// Planning write tier: the Tech Lead authors planning artifacts as files,
+// so it keeps edit/write — but no bash: planning never runs commands.
+export const ARIAD_PI_PLANNING_WRITE_TOOLS = Object.freeze([
+  'read', 'edit', 'write', 'grep', 'find', 'ls',
+  ...ARIAD_PI_READONLY_PROJECT_TOOLS,
+]);
+
+const PI_EXECUTION_ROLES = Object.freeze(['developer', 'test_engineer', 'tester', 'artist']);
+const PI_PLANNING_READ_ROLES = Object.freeze(['tech_lead_critic', 'plan_validator', 'pm', 'project_debugger', 'interface_seal']);
+
 export function piToolsForTask({ role, taskKind } = {}) {
   if (taskKind === 'ADHOC_ANALYSIS') return [...ARIAD_PI_REVIEW_TOOLS];
-  if (['developer', 'test_engineer', 'tester', 'reviewer'].includes(role)) return [...ARIAD_PI_DELIVERY_TOOLS];
-  return [...ARIAD_PI_DELIVERY_TOOLS];
+  if (PI_EXECUTION_ROLES.includes(role)) return [...ARIAD_PI_DELIVERY_TOOLS];
+  // Reviewer keeps the shared delivery declaration set (stable provider
+  // prefix across Dev -> Test -> Review); runtime tool policy blocks its
+  // mutating tools AND bash, so the declaration is not the capability.
+  if (role === 'reviewer' || role === 'ux_reviewer') return [...ARIAD_PI_DELIVERY_TOOLS];
+  if (role === 'tech_lead') return [...ARIAD_PI_PLANNING_WRITE_TOOLS];
+  if (PI_PLANNING_READ_ROLES.includes(role)) return [...ARIAD_PI_PLANNING_READ_TOOLS];
+  // Least privilege by default: an unrecognized session role gets the
+  // read-only planning tier, never the full delivery set.
+  return [...ARIAD_PI_PLANNING_READ_TOOLS];
 }
 
 export function piToolsForRole(_role) {

@@ -75,7 +75,11 @@ test('delivery roles share one tool declaration set while reviewer mutations are
   assert.deepEqual(developer, [...ARIAD_PI_DELIVERY_TOOLS]);
   assert.deepEqual(tester, developer);
   assert.deepEqual(reviewer, developer);
-  assert.equal(deliveryToolPolicy('reviewer', 'bash'), null, 'reviewer bash is available for git finalization');
+  const ws = { workspace: '/tmp/ariad-proj' };
+  assert.equal(deliveryToolPolicy('reviewer', 'bash', { ...ws, input: { command: 'git status --short' } }), null, 'reviewer bash is available for git finalization');
+  assert.equal(deliveryToolPolicy('reviewer', 'bash', { ...ws, input: { command: 'git add src/ && git commit -m "x"' } }), null);
+  assert.equal(deliveryToolPolicy('reviewer', 'bash', { ...ws, input: { command: 'npm test' } })?.block, true, 'reviewer bash is git-only');
+  assert.equal(deliveryToolPolicy('reviewer', 'bash', { ...ws, input: { command: 'git status; rm -rf build' } })?.block, true, 'every segment must be git');
   for (const forbidden of ['edit', 'write', 'ariad_memory_write']) {
     assert.equal(deliveryToolPolicy('reviewer', forbidden)?.block, true, forbidden);
     assert.equal(deliveryToolPolicy('developer', forbidden), null);
@@ -84,6 +88,30 @@ test('delivery roles share one tool declaration set while reviewer mutations are
   const adhoc = piToolsForTask({ role: 'tech_lead', taskKind: 'ADHOC_ANALYSIS' });
   assert.deepEqual(adhoc, [...ARIAD_PI_REVIEW_TOOLS]);
   assert.equal(adhoc.includes('write'), false);
+});
+
+test('planning roles get minimal tool tiers and bash stays confined to the workspace', () => {
+  const tl = piToolsForTask({ role: 'tech_lead', taskKind: 'PLANNING_TASK' });
+  assert.equal(tl.includes('write'), true, 'tech lead authors artifact files');
+  assert.equal(tl.includes('bash'), false, 'planning never runs a shell');
+  for (const role of ['tech_lead_critic', 'plan_validator', 'pm', 'project_debugger', 'interface_seal']) {
+    const tools = piToolsForTask({ role, taskKind: 'PLANNING_TASK' });
+    for (const forbidden of ['bash', 'edit', 'write']) assert.equal(tools.includes(forbidden), false, `${role} must not have ${forbidden}`);
+    assert.equal(tools.includes('ariad_role_result'), true);
+  }
+  const unknown = piToolsForTask({ role: 'some_future_role', taskKind: 'MILESTONE_TASK' });
+  assert.equal(unknown.includes('bash'), false, 'unknown roles default to the read tier');
+  assert.deepEqual(piToolsForTask({ role: 'artist', taskKind: 'MILESTONE_TASK' }), [...ARIAD_PI_DELIVERY_TOOLS]);
+
+  const ws = { workspace: '/tmp/ariad-proj' };
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'npm test' } }), null);
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'cat src/main.js 2>/dev/null' } }), null);
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'ls /tmp/ariad-proj/src' } }), null, 'absolute paths inside the workspace are fine');
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: '/bin/echo ok' } }), null, 'absolute executable invocation is fine');
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'cat /etc/passwd' } })?.block, true);
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'find / -name "*.gd" 2>/dev/null' } })?.block, true);
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'cd .. && ls' } })?.block, true);
+  assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'cat ~/.ssh/config' } })?.block, true);
 });
 
 test('Ariad generates local llama.cpp provider configuration from role models', () => {
