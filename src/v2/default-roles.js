@@ -966,25 +966,84 @@ export function createDefaultV2Roles({
   };
 
   const PLAN_SIGNALS = {
-    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'NEEDS_HUMAN:': 'BLOCKED' },
-    VALIDATE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'NEEDS_HUMAN:': 'BLOCKED' },
-    CRITIQUE: { 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
-    PM_REVIEW: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'NEEDS_HUMAN:': 'BLOCKED' },
-    FEATURE_PLAN: { 'READY:milestone_planner': 'ADVANCE_MILESTONE', 'READY:interface_architect': 'ADVANCE_INTERFACE', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
-    MILESTONE_PLAN: { 'READY:interface_architect': 'ADVANCE_INTERFACE', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
-    INTERFACE_PLAN: { 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    VALIDATE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    CRITIQUE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    PM_REVIEW: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    FEATURE_PLAN: { 'READY:milestone_planner': 'ADVANCE_MILESTONE', 'READY:interface_architect': 'ADVANCE_INTERFACE', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    MILESTONE_PLAN: { 'READY:interface_architect': 'ADVANCE_INTERFACE', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'DONE:': 'FINISH', 'NEEDS_HUMAN:': 'BLOCKED' },
+    INTERFACE_PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    DEBUG: { 'READY:tech_lead': 'REPAIRED', 'SYSTEM_BLOCKED:': 'NEEDS_HUMAN' },
+  };
+
+  planTransitionBodies.project_debugger = ({ task, result }) => {
+    // Planning debugger, mirroring the sub-plan executor's semantics: one
+    // guided recovery back to the tech lead; anything else is a terminal
+    // diagnosis, which the executor maps to SYSTEM_BLOCKED (never a
+    // per-task human decision).
+    const guidance = result.result?.guidance;
+    const repaired = result.outcome === 'RETRY_WITH_GUIDANCE'
+      && typeof guidance === 'string' && Boolean(guidance.trim())
+      && (task.input?.planDebuggerRecoveryCount ?? 0) < 1;
+    if (repaired) {
+      return {
+        state: 'READY', stage: 'tech_lead',
+        input: {
+          ...(task.input ?? {}), planGateRetries: 0, planDebuggerRecoveryCount: 1,
+          previousGateFailure: { ...(task.input?.previousGateFailure ?? {}), debuggerGuidance: guidance.trim() },
+        },
+        transitionHistory: { type: 'PLAN_DEBUGGER_RECOVERY', at: new Date().toISOString() },
+      };
+    }
+    return {
+      state: 'SYSTEM_BLOCKED',
+      transitionHistory: {
+        type: 'PLAN_DEBUGGER_DIAGNOSIS', outcome: result.outcome,
+        guidance: guidance ?? result.summary ?? null, at: new Date().toISOString(),
+      },
+    };
   };
 
   const planResultTransition = (task, result) => {
     if (task.taskKind !== TASK_KINDS.PLANNING) return null;
     const body = planTransitionBodies[task.stage];
     if (!body) return null;
-    const legacy = body({ task, result });
+    let legacy = body({ task, result });
     if (!legacy) return null;
+    // Escalation whitelist: a planning-stage failure is machinery, not a
+    // human decision. Bodies still report it as NEEDS_HUMAN; the bridge
+    // converts it into the executor's recovery progression - back to the
+    // tech lead twice, then to the project debugger, whose terminal
+    // diagnosis lands in SYSTEM_BLOCKED. Deliberate human channels pass
+    // through untouched: PM_HUMAN_DECISION (the PM's requirements call and
+    // the takeover review) and the debugger's own terminal diagnosis.
+    if (legacy.state === 'NEEDS_HUMAN' && task.stage !== 'project_debugger'
+      && legacy.transitionHistory?.type !== 'PM_HUMAN_DECISION') {
+      const retries = task.input?.planGateRetries ?? 0;
+      const blockedType = legacy.transitionHistory?.type ?? null;
+      const previousGateFailure = {
+        stage: task.stage, blockedType,
+        summary: legacy.transitionHistory?.summary ?? legacy.transitionHistory?.reason ?? null,
+      };
+      legacy = retries < 2
+        ? {
+          state: 'READY', stage: 'tech_lead',
+          input: { ...(task.input ?? {}), planGateRetries: retries + 1, previousGateFailure },
+          transitionHistory: { type: 'PLAN_GATE_RETRY', stage: task.stage, attempt: retries + 1, blockedType, at: new Date().toISOString() },
+        }
+        : {
+          state: 'READY', stage: 'project_debugger',
+          input: { ...(task.input ?? {}), previousGateFailure },
+          transitionHistory: { type: 'PLAN_DEBUGGER_ROUTED', stage: task.stage, attempts: retries, blockedType, at: new Date().toISOString() },
+        };
+    }
     const { state, stage, ...extras } = legacy;
     const binding = roleExecutorBinding(task);
     if (!binding) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
-    const signal = PLAN_SIGNALS[binding.state]?.[`${state}:${stage ?? (state === 'READY' ? task.stage : '')}`];
+    let signal = PLAN_SIGNALS[binding.state]?.[`${state}:${stage ?? (state === 'READY' ? task.stage : '')}`];
+    // The PM's deliberate human gate (requirements call / takeover review)
+    // exits the executor through its own terminal, not the failure path.
+    if (legacy.transitionHistory?.type === 'PM_HUMAN_DECISION') signal = 'HUMAN_GATE';
     if (!signal) throw new Error(`PLAN_EXECUTOR_UNMAPPED_MOVE:${binding.state}/${state}:${stage ?? ''}`);
     const resolved = executorTransitionFromResult(task, signal);
     if (!resolved) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
@@ -1309,6 +1368,7 @@ export function createDefaultV2Roles({
         ].join('\n\n') : null);
       },
       transition: ({ task, result }) => {
+        if (task.taskKind === TASK_KINDS.PLANNING) return planResultTransition(task, result);
         const blockedTaskId = task.input?.blockedTaskId ?? null;
         const blocked = blockedTaskId ? store.getTask(blockedTaskId) : null;
         const routeBlocked = (patch, history) => {

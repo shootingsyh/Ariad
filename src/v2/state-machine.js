@@ -53,6 +53,7 @@ export const TASK_MACHINE = defineStateMachine({
       FINISH: 'DONE',
       WAIT_REPLAN: 'WAITING_REPLAN',
       NEED_HUMAN: 'NEEDS_HUMAN',
+      BLOCK_SYSTEM_FAILURE: 'SYSTEM_BLOCKED',
       SKIP: 'SKIPPED',
     },
     WAITING_REPLAN: {

@@ -28,5 +28,5 @@ test('debugger guidance is bounded and cannot override rejection', () => {
   assert.equal(repaired.input.debuggerRecoveryCount, 1);
   assert.equal(subPlanResultTransition(task('project_debugger', { debuggerRecoveryCount: 1 }), {
     outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'again' },
-  }).state, 'NEEDS_HUMAN');
+  }).state, 'SYSTEM_BLOCKED');
 });

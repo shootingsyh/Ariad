@@ -7,7 +7,7 @@ export async function persistRoleExecutorTransition({ store, roles, task, result
   const { skipTaskIds = [], transitionHistory = null, blockedRoute = null, planningRequest = null, state: requestedState, ...patch } = next;
   const event = ({
     READY: 'NEXT_ROLE', DONE: 'FINISH', WAITING_REPLAN: 'WAIT_REPLAN',
-    NEEDS_HUMAN: 'NEED_HUMAN', SKIPPED: 'SKIP',
+    NEEDS_HUMAN: 'NEED_HUMAN', SKIPPED: 'SKIP', SYSTEM_BLOCKED: 'BLOCK_SYSTEM_FAILURE',
   })[requestedState];
   if (!event) throw new Error(`unsupported executor task state: ${requestedState}`);
   const taskPatch = applyTaskEvent(task, event, { ...patch, execution: null });

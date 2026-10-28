@@ -32,15 +32,15 @@ export const subPlanMachine = defineExecutorMachine({
 export const planMachine = defineExecutorMachine({
   id: 'plan-executor', version: 1, initial: 'PLAN',
   states: {
-    PLAN: { operation: 'runTechLead', transitions: { FINISH: 'COMPLETE', ADVANCE: 'PLAN', ESCALATE: 'PM_REVIEW', ROUTE_FEATURE: 'FEATURE_PLAN', ROUTE_MILESTONE: 'MILESTONE_PLAN', ROUTE_INTERFACE: 'INTERFACE_PLAN', BLOCKED: 'FAILED' } },
-    VALIDATE: { operation: 'runPlanValidator', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', BLOCKED: 'FAILED' } },
-    CRITIQUE: { operation: 'runCritic', transitions: { FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
-    PM_REVIEW: { operation: 'runPM', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', BLOCKED: 'FAILED' } },
-    FEATURE_PLAN: { operation: 'runFeaturePlanner', transitions: { ADVANCE_MILESTONE: 'MILESTONE_PLAN', ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
-    MILESTONE_PLAN: { operation: 'runMilestonePlanner', transitions: { ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
-    INTERFACE_PLAN: { operation: 'runInterfaceArchitect', transitions: { FINISH: 'COMPLETE', BLOCKED: 'FAILED' } },
+    PLAN: { operation: 'runTechLead', transitions: { FINISH: 'COMPLETE', ADVANCE: 'PLAN', ESCALATE: 'PM_REVIEW', ROUTE_FEATURE: 'FEATURE_PLAN', ROUTE_MILESTONE: 'MILESTONE_PLAN', ROUTE_INTERFACE: 'INTERFACE_PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    VALIDATE: { operation: 'runPlanValidator', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    CRITIQUE: { operation: 'runCritic', transitions: { FINISH: 'COMPLETE', RETRY: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    PM_REVIEW: { operation: 'runPM', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', ROUTE_DEBUG: 'DEBUG', HUMAN_GATE: 'HUMAN_GATE', BLOCKED: 'FAILED' } },
+    FEATURE_PLAN: { operation: 'runFeaturePlanner', transitions: { ADVANCE_MILESTONE: 'MILESTONE_PLAN', ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', RETRY: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    MILESTONE_PLAN: { operation: 'runMilestonePlanner', transitions: { ADVANCE_INTERFACE: 'INTERFACE_PLAN', FINISH: 'COMPLETE', RETRY: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    INTERFACE_PLAN: { operation: 'runInterfaceArchitect', transitions: { FINISH: 'COMPLETE', RETRY: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
     DEBUG: { operation: 'runDebugger', transitions: { REPAIRED: 'PLAN', NEEDS_HUMAN: 'FAILED' } },
-    COMPLETE: {}, FAILED: {},
+    COMPLETE: {}, FAILED: {}, HUMAN_GATE: {},
   },
 });
 

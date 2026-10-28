@@ -13,7 +13,10 @@ test('controlled planning route is opt-in and uses existing role registry',()=>{
  assert.equal(next.stage,'interface_architect');
  assert.equal(next.input.planningRoute,route);
  assert.equal(roles.interface_architect.transition({task:{...task,stage:'interface_architect',input:next.input},result:{outcome:'PASS'}}).state,'DONE');
- assert.equal(roles.interface_architect.transition({task:{...task,stage:'interface_architect',input:next.input},result:{outcome:'NOT_PASS'}}).state,'NEEDS_HUMAN');
+ const failed=roles.interface_architect.transition({task:{...task,stage:'interface_architect',input:next.input},result:{outcome:'NOT_PASS'}});
+ assert.equal(failed.state,'READY');
+ assert.equal(failed.stage,'tech_lead');
+ assert.equal(failed.transitionHistory.type,'PLAN_GATE_RETRY');
 });
 test('specialists execute in feature, milestone, interface order and skip unchanged stages',()=>{
  const roles=createDefaultV2Roles({store:{},workspace:'/tmp'});
