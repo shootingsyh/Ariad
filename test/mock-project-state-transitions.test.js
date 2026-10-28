@@ -7,7 +7,7 @@ import path from 'node:path';
 import { AriadService } from '../src/runtime/ariad-service.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
 import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';
-import { PydanticRuntimeClient, PydanticV2Provider } from '../src/runtime/pydantic-v2-provider.js';
+import { PydanticRuntimeClient, PydanticV2Provider } from './helpers/pydantic-v2-provider.js';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

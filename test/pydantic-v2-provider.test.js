@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { PydanticRuntimeClient, PydanticV2Provider } from '../src/runtime/pydantic-v2-provider.js';
+import { PydanticRuntimeClient, PydanticV2Provider } from './helpers/pydantic-v2-provider.js';
 import { StandaloneProjectRuntime } from '../src/runtime/standalone-project-runtime.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
 import { ARIAD_MODEL_ROLES } from '../src/runtime/role-models.js';

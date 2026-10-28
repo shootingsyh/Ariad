@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MockAgentHostProvider } from '../src/v2/mock-agent-host-provider.js';
+import { MockAgentHostProvider } from './helpers/mock-agent-host-provider.js';
 
 test('one agent host isolates concurrent sessions across roles and projects', async () => {
   const seen = [];

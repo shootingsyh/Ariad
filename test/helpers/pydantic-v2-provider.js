@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { buildStandaloneRolePrompt } from './role-run-prompt.js';
+import { buildStandaloneRolePrompt } from '../../src/runtime/role-run-prompt.js';
 
 const defaultWorkerPath = fileURLToPath(
   new URL('../../runtime/pydantic/worker.py', import.meta.url),

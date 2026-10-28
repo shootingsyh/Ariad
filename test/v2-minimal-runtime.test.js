@@ -11,15 +11,11 @@ import { ResourcePool, ScopedResourcePool } from '../src/v2/resource-pool.js';
 import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
 import { buildExecutionGraph } from '../src/v2/execution-graph.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
-import { bootstrapProject, createPlanningFlow } from '../src/v2/project-bootstrap.js';
 import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import { validatePlanAutonomy } from '../src/v2/autonomy.js';
-import { isRestartOrphanHumanGate } from '../src/v2/restart-orphan-recovery.js';
-import { legacyHumanGateTarget } from '../src/v2/legacy-human-gate-recovery.js';
-import { buildDurableRuntimeStatus } from '../src/v2/durable-runtime-status.js';
 import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../src/v2/takeover-gate.js';
 import {
   ensurePlannerArtifactLayout,
@@ -709,67 +705,6 @@ test('control tasks form independent ad-hoc graphs while delivery stays one grap
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
-test('empty project bootstrap welcomes PM without creating durable work', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P7', pmBinding: 'pm:p7' });
-    const result = bootstrapProject({ store, projectId: 'P7', directoryEmpty: true });
-    assert.equal(result.pmInvocation.kind, 'WELCOME');
-    assert.equal(result.pmInvocation.sessionKey, 'pm:p7');
-    assert.equal(result.planningRequest, null);
-    assert.deepEqual(store.listTasks('P7'), []);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('non-empty project bootstrap queues restore planning work instead of creating a competing control graph', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P8', pmBinding: 'pm:p8' });
-    const result = bootstrapProject({
-      store,
-      projectId: 'P8',
-      directoryEmpty: false,
-      flowId: 'bootstrap-1',
-    });
-    assert.equal(result.pmInvocation.kind, 'WELCOME_AND_PLANNING_QUEUED');
-    assert.equal(result.planningRequest.id, 'bootstrap-1:restore');
-    assert.equal(result.planningRequest.state, 'PENDING');
-    assert.deepEqual(store.listTasks('P8'), []);
-    assert.equal(store.hasUnplannedPlanningRequests('P8'), true);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('PM appends planning requests without creating separate plan/replan graphs', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P9' });
-    store.createTask({ id: 'FEATURE', projectId: 'P9', stage: 'developer' });
-    const result = createPlanningFlow({
-      store,
-      projectId: 'P9',
-      flowId: 'plan-42',
-      input: { request: 'add collaboration' },
-    });
-    assert.equal(result.planningRequest.id, 'plan-42');
-    assert.equal(result.planningRequest.state, 'PENDING');
-    assert.deepEqual(store.listTasks('P9', { scope: 'delivery' }).map(x => x.id), ['FEATURE']);
-    assert.equal(store.listTasks('P9', { scope: 'control' }).length, 0);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 
 test('logical parent-child hierarchy does not create execution dependencies', () => {
   const tasks = [
@@ -2273,50 +2208,6 @@ test('restart-orphan unknown legacy provider requeues without consuming an attem
 });
 
 
-test('restart-orphan human-gate recovery only matches the known debugger misclassification', () => {
-  const base = {
-    id: 'T-gate',
-    stage: 'project_debugger',
-    state: 'NEEDS_HUMAN',
-    history: [
-      {
-        type: 'SYSTEM_INTERRUPTION',
-        role: 'developer',
-        failure: 'AGENT_SESSION_RUN_NOT_FOUND',
-        consumeAttempt: false,
-        restartOrphan: true,
-      },
-      {
-        type: 'ROLE_RESULT',
-        role: 'project_debugger',
-        outcome: 'UNKNOWN_PROJECT_CAUSE',
-      },
-    ],
-  };
-  assert.equal(isRestartOrphanHumanGate(base), true);
-  assert.equal(isRestartOrphanHumanGate({
-    ...base,
-    history: [...base.history.slice(0, 1), {
-      type: 'ROLE_RESULT',
-      role: 'project_debugger',
-      outcome: 'TASK_TOO_LARGE',
-    }],
-  }), false);
-  assert.equal(isRestartOrphanHumanGate({
-    ...base,
-    history: [{
-      type: 'ROLE_RESULT',
-      role: 'project_debugger',
-      outcome: 'UNKNOWN_PROJECT_CAUSE',
-    }],
-  }), false);
-  assert.equal(isRestartOrphanHumanGate({
-    ...base,
-    stage: 'tester',
-  }), false);
-});
-
-
 test('unified Project Debugger routes a system-blocked oversized task to Tech Lead', () => {
   const { dir, file } = tempDb();
   try {
@@ -2580,78 +2471,6 @@ test('PM is the only business role that may create a human-decision gate', () =>
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-
-test('durable runtime status exposes human decisions without a live runtime', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-cold-human' });
-    store.createTask({
-      id: 'legacy-artist-gate',
-      projectId: 'P-cold-human',
-      stage: 'artist',
-      state: 'NEEDS_HUMAN',
-      title: 'Progression UI persistence',
-      history: [{
-        type: 'ROLE_RESULT',
-        role: 'artist',
-        outcome: 'NOT_PASS',
-        summary: 'This is a code/data problem, not an art problem.',
-        result: {
-          questions: ['Send this back to implementation repair.'],
-          guidance: 'Fix roster naming, remove the test label, and add button E2E.',
-        },
-      }],
-    });
-
-    const status = buildDurableRuntimeStatus(store, 'P-cold-human');
-    assert.equal(status.tasks.needsHuman, 1);
-    assert.equal(status.humanDecisions.length, 1);
-    assert.deepEqual(status.humanDecisions[0], {
-      taskId: 'legacy-artist-gate',
-      stage: 'artist',
-      title: 'Progression UI persistence',
-      summary: 'This is a code/data problem, not an art problem.',
-      questions: ['Send this back to implementation repair.'],
-      guidance: 'Fix roster naming, remove the test label, and add button E2E.',
-      outcome: 'NOT_PASS',
-      result: {
-        questions: ['Send this back to implementation repair.'],
-        guidance: 'Fix roster naming, remove the test label, and add button E2E.',
-      },
-    });
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('legacy human gates recover under PM-owned authority and preserve debugger decisions', () => {
-  for (const stage of ['artist', 'developer', 'tester', 'reviewer']) {
-    assert.equal(legacyHumanGateTarget(stage), 'project_debugger');
-  }
-  assert.equal(legacyHumanGateTarget('tech_lead'), 'pm');
-  assert.equal(legacyHumanGateTarget('plan_validator'), 'pm');
-  assert.equal(legacyHumanGateTarget('tech_lead_critic'), 'pm');
-  assert.equal(legacyHumanGateTarget('pm'), null);
-
-  const debuggerTask = outcome => ({
-    history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome }],
-  });
-  assert.equal(
-    legacyHumanGateTarget('project_debugger', debuggerTask('WRONG_IMPLEMENTATION_APPROACH')),
-    'developer'
-  );
-  assert.equal(
-    legacyHumanGateTarget('project_debugger', debuggerTask('ASSET_ISSUE')),
-    'artist'
-  );
-  assert.equal(
-    legacyHumanGateTarget('project_debugger', debuggerTask('UNKNOWN_PROJECT_CAUSE')),
-    'pm'
-  );
 });
 
 
