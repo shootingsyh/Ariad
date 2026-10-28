@@ -3,7 +3,7 @@ import { acceptInitialTaskTree } from './approved-task-tree.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { roleExecutorBinding } from './role-executor-binding.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
-import { effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
+import { effectiveTaskKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
@@ -576,7 +576,7 @@ export function createDefaultV2Roles({
   };
 
   const pmDeliveryTransition = (task, result) => {
-          if (task.scope === 'delivery') {
+          if (scopeOfTask(task) === 'delivery') {
             if (result.outcome === 'PRODUCT_DECISION') {
               const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
               enqueuePlanning?.({
@@ -649,7 +649,7 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
-          if (task.scope === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
+          if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
             const revisionRoot = task.input?.versionMigration ? migrationRevisionRoot(store, task.projectId) : null;
             const revisionPass = revisionRoot && task.input?.sourceComplete !== true
@@ -726,7 +726,7 @@ export function createDefaultV2Roles({
             }
             return { state: 'DONE' };
           }
-          return task.scope === 'control'
+          return scopeOfTask(task) === 'control'
             ? { state: 'DONE' }
             : { stage: 'developer', state: 'WAITING_REPLAN' };
         }
@@ -859,7 +859,7 @@ export function createDefaultV2Roles({
         return { state: 'DONE' };
     },
     pm: ({ task, result }) => {
-        if (task.scope === 'delivery') {
+        if (scopeOfTask(task) === 'delivery') {
           if (result.outcome === 'PRODUCT_DECISION') {
             const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
             enqueuePlanning?.({
@@ -1881,7 +1881,7 @@ export function createDefaultV2Roles({
     pm: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
-        if (task.scope === 'delivery') {
+        if (scopeOfTask(task) === 'delivery') {
           const debuggerResult = [...(task.history ?? [])].reverse().find(
             entry => entry?.type === 'ROLE_RESULT' && entry?.role === 'project_debugger'
           ) ?? null;

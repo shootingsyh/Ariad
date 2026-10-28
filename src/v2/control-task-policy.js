@@ -65,6 +65,12 @@ export function controlTaskPolicyFailure(task) {
   if (kind === TASK_KINDS.DIAGNOSTIC && task.stage !== 'project_debugger') return 'DIAGNOSTIC_REQUIRES_DEBUGGER';
   return null;
 }
+// Scope is derived from the kind alone: delivery kinds run in the project's
+// delivery graph, every other kind is control-plane work.
+export function scopeOfTask(task) {
+  return isDeliveryKind(effectiveTaskKind(task)) ? 'delivery' : 'control';
+}
+
 export function isAdhocAnalysis(task) {
   return task?.scope === 'control' && effectiveTaskKind(task) === TASK_KINDS.ADHOC_ANALYSIS;
 }

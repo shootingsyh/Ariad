@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -96,7 +96,7 @@ function normalizeTask(task) {
 }
 
 function graphKey(task) {
-  return task.scope === 'control' ? `control:${task.flowId}` : 'delivery';
+  return scopeOfTask(task) === 'control' ? `control:${task.flowId}` : 'delivery';
 }
 
 export class SQLiteV2Store {
@@ -223,7 +223,7 @@ export class SQLiteV2Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const task = this.getTask(taskId);
-      if (!task || task.projectId !== projectId || task.scope !== 'delivery') throw new Error('unknown project delivery task');
+      if (!task || task.projectId !== projectId || scopeOfTask(task) !== 'delivery') throw new Error('unknown project delivery task');
       if (task.state !== 'WAITING_REPLAN' || task.execution) throw new Error('task is not idle WAITING_REPLAN');
       const history = task.history ?? [];
       const marker = [...history].reverse().find(entry => entry?.type === 'DISCOVERED_BLOCKING_ISSUE');
@@ -252,7 +252,7 @@ export class SQLiteV2Store {
     const issue = this.getIssue(issueId);
     if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
     if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
-    if (!task?.id || task.scope === 'control') throw new Error('delivery fix task id required');
+    if (!task?.id || scopeOfTask(task) === 'control') throw new Error('delivery fix task id required');
     if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -358,7 +358,7 @@ export class SQLiteV2Store {
       'SELECT * FROM v2_tasks WHERE project_id = ? ORDER BY rowid'
     ).all(projectId).map(rowToTask);
     return tasks.filter(task => {
-      if (filter.scope && task.scope !== filter.scope) return false;
+      if (filter.scope && scopeOfTask(task) !== filter.scope) return false;
       if (filter.flowId && task.flowId !== filter.flowId) return false;
       return true;
     });
@@ -540,7 +540,7 @@ export class SQLiteV2Store {
       if (!workflowState || !Number.isInteger(workflowState.cursor)) throw new Error('INVALID_WORKFLOW_CHECKPOINT');
       let child = null;
       if (childTask) {
-        if (childTask.parentTaskId !== parent.id || childTask.projectId !== parent.projectId || childTask.flowId !== parent.flowId || childTask.scope !== 'control' || !['NODE_PLANNING', 'GLOBAL_REVIEW'].includes(childTask.taskKind)) throw new Error('INVALID_WORKFLOW_CHILD');
+        if (childTask.parentTaskId !== parent.id || childTask.projectId !== parent.projectId || childTask.flowId !== parent.flowId || scopeOfTask(childTask) !== 'control' || !['NODE_PLANNING', 'GLOBAL_REVIEW'].includes(childTask.taskKind)) throw new Error('INVALID_WORKFLOW_CHILD');
         child = this.#insertTask(childTask);
       }
       const updated = this.updateTask(parent.id, parent.version, { workflowState });

@@ -1,3 +1,4 @@
+import { scopeOfTask } from './control-task-policy.js';
 function latestDurableDeliveryGate(store, projectId) {
   let latest = null;
   for (const task of store.listTasks(projectId)) {
@@ -10,7 +11,7 @@ function latestDurableDeliveryGate(store, projectId) {
 }
 
 function plannerPmTask(task) {
-  return task?.scope === 'control'
+  return scopeOfTask(task) === 'control'
     && task?.stage === 'pm'
     && task?.input?.purpose === 'PLANNER_PM_REVIEW';
 }
@@ -21,7 +22,7 @@ function hasHumanDecision(task) {
 
 function hasExecutedDelivery(tasks) {
   return tasks.some(task =>
-    task?.scope === 'delivery'
+    scopeOfTask(task) === 'delivery'
     && ['DONE', 'WORKING', 'RESULT_READY', 'WAITING_REPLAN', 'SYSTEM_BLOCKED'].includes(task.state)
   );
 }

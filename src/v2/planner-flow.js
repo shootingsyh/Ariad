@@ -1,4 +1,4 @@
-import { TASK_KINDS } from './control-task-policy.js';
+import { scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function taskId(batchId, name) {
   return `planner:${batchId}:${name}`;
@@ -303,7 +303,7 @@ export function createNextPlanningBatch({ store, projectId }) {
 }
 
 export function isPlannerTask(task) {
-  return task?.scope === 'control'
+  return scopeOfTask(task) === 'control'
     && typeof task.flowId === 'string'
     && task.flowId.startsWith('planner:');
 }

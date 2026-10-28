@@ -3,11 +3,12 @@ import { buildUnifiedTaskTree, validateUnifiedTaskTree } from './unified-task-tr
 import { buildExecutionGraph } from './execution-graph.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
 import { realpathSync, statSync } from 'node:fs';
+import { scopeOfTask } from './control-task-policy.js';
 
 export function preflightUnifiedTaskMigration({ artifactRoot, liveTasks }) {
   const preview = buildUnifiedTaskTree(artifactRoot);
   const validation = validateUnifiedTaskTree(preview);
-  const delivery = liveTasks.filter(t => t.scope === 'delivery');
+  const delivery = liveTasks.filter(t => scopeOfTask(t) === 'delivery');
   const liveById = new Map(delivery.map(t => [t.id,t]));
   const oldToNew = new Map(preview.tasks.filter(t => t.legacyIntegrationTaskId)
     .map(t => [t.legacyIntegrationTaskId,t.id]));
@@ -71,7 +72,7 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
     const get = db.prepare('SELECT * FROM v2_tasks WHERE id=? AND project_id=?');
     const remove = db.prepare('DELETE FROM v2_tasks WHERE id=? AND project_id=?');
     const insert = db.prepare('INSERT INTO v2_tasks(id,project_id,data_json,version,updated_at) VALUES (?,?,?,?,?)');
-    for (const task of liveTasks.filter(t=>t.scope==='delivery')) {
+    for (const task of liveTasks.filter(t=>scopeOfTask(t)==='delivery')) {
       const row=get.get(task.id,projectId);
       archive.run(row.id,row.project_id,row.data_json,row.version,row.updated_at,now);
       remove.run(task.id,projectId);
@@ -114,10 +115,10 @@ export function applyUnifiedTaskMigrationToCopy({ artifactRoot, store, projectId
       unifiedTaskCompilerVersion:1,
       deliveryEnabled:false,
       unifiedTaskMigrationCompletedAt:now,
-      unifiedTaskMigrationArchiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
+      unifiedTaskMigrationArchiveCount:liveTasks.filter(t=>scopeOfTask(t)==='delivery').length,
     });
     db.exec('COMMIT');
-    return {aggregateValidation,runtimeValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>t.scope==='delivery').length,
+    return {aggregateValidation,runtimeValidation,applied:true,projectId,archiveCount:liveTasks.filter(t=>scopeOfTask(t)==='delivery').length,
       resultingTasks:remaining.length,idMap:aliases,interfaceFixRequired:true,schedulerSwitchRequired:true};
   } catch(e) {db.exec('ROLLBACK');throw e;}
 }

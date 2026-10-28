@@ -1,3 +1,4 @@
+import { scopeOfTask } from './control-task-policy.js';
 /**
  * Recover a stale PM gate created while rebuilding the planning model.
  *
@@ -9,7 +10,7 @@ export function recoverPrematureMigrationApprovalGate(store, projectId) {
   if (store.getProject(projectId)?.planningModelMigration?.status !== 'REBUILDING') return [];
   const recovered = [];
   for (const task of store.listTasks(projectId)) {
-    if (task.state !== 'NEEDS_HUMAN' || task.scope !== 'control'
+    if (task.state !== 'NEEDS_HUMAN' || scopeOfTask(task) !== 'control'
       || task.stage !== 'pm' || task.input?.purpose !== 'PLANNER_PM_REVIEW'
       || task.input?.versionMigration !== true) continue;
     const result = [...(task.history ?? [])].reverse().find(item => item?.type === 'ROLE_RESULT');

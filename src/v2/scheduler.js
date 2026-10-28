@@ -6,7 +6,7 @@ import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -97,7 +97,7 @@ export class V2Scheduler {
       || this.store.hasActiveNodePlanningJobs(projectId) || resumedHumanReview;
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
-      task.stage === 'project_debugger' && task.scope === 'control' && Boolean(task.input?.blockedTaskId);
+      task.stage === 'project_debugger' && scopeOfTask(task) === 'control' && Boolean(task.input?.blockedTaskId);
     // Migration is a project-level exclusive mode. Neither Delivery nor
     // ordinary planning/iteration/diagnostic roles may execute, regardless
     // of deliveryEnabled, PM authorization, or task graph state.
@@ -109,7 +109,7 @@ export class V2Scheduler {
         ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(effectiveTaskKind(task)))
         : allTasks.filter(task =>
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
-            && (task.scope !== 'delivery' || deliveryEnabled)
+            && (scopeOfTask(task) !== 'delivery' || deliveryEnabled)
           );
     const candidates = [];
     // Workflow parents are orchestrators, never Pi role sessions.
@@ -205,7 +205,7 @@ export class V2Scheduler {
           taskId: task.id,
           role: task.stage,
           taskKind: effectiveTaskKind(task),
-          scope: task.scope,
+          scope: scopeOfTask(task),
           flowId: task.flowId ?? null,
           sessionPolicy: role.sessionPolicy ?? 'fresh',
           attemptId,

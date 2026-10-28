@@ -1,3 +1,4 @@
+import { scopeOfTask } from './control-task-policy.js';
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -151,7 +152,7 @@ export const PROJECT_STATE_RULES = Object.freeze([
 ]);
 
 export function deriveProjectExecutionState({ tasks, hasPlanning = false, migration = null }) {
-  const delivery = tasks.filter(task => task.scope === 'delivery');
+  const delivery = tasks.filter(task => scopeOfTask(task) === 'delivery');
   for (const rule of PROJECT_STATE_RULES) {
     if (rule.when({ tasks, delivery, hasPlanning, migration })) return rule.state;
   }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dashboardHtml } from './dashboard-page.js';
+import { scopeOfTask } from '../v2/control-task-policy.js';
 
 
 
@@ -212,7 +213,7 @@ function availableVersions(project     , db                                  ) {
       ? runtime.logicalNodes.length : activeFeatures.length,
     milestoneCount: Array.isArray(runtime.milestones) && runtime.milestones.length
       ? runtime.milestones.length : activeMilestones.length,
-    taskCount: db.tasks.filter((task     ) => task.scope === 'delivery').length,
+    taskCount: db.tasks.filter((task     ) => scopeOfTask(task) === 'delivery').length,
   });
 
   return [...historical.values()].sort((a, b) => a.version - b.version);
@@ -240,7 +241,7 @@ function projectVersionView(manager                , name        , version      
       deliveryPlanVersion: runtime.deliveryPlanVersion ?? null,
       deliveryPlanSummary: runtime.deliveryPlanSummary ?? null,
       deliveryRootTaskId: runtime.deliveryRootTaskId ?? null,
-      tasks: db.tasks.filter((task     ) => task.scope === 'delivery'),
+      tasks: db.tasks.filter((task     ) => scopeOfTask(task) === 'delivery'),
     };
   }
 
