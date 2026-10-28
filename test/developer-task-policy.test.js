@@ -12,13 +12,13 @@ import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool } from '../src/v2/resource-pool.js';
 
 test('developer requires actual milestone delivery work; milestone-labelled approval gates never qualify', () => {
-  assert.equal(developerTaskPolicyFailure({ scope:'delivery', stage:'developer', milestoneId:'V2.1' }), null);
-  assert.equal(developerTaskPolicyFailure({ scope:'control', stage:'developer', milestoneId:'V2.1' }), 'DEVELOPER_REQUIRES_DELIVERY_SCOPE');
-  assert.equal(developerTaskPolicyFailure({ scope:'delivery', stage:'developer', milestoneId:null }), 'DEVELOPER_REQUIRES_MILESTONE');
-  assert.equal(developerTaskPolicyFailure({ scope:'delivery', stage:'developer', milestoneId:'V2.GATE' }), 'DEVELOPER_CANNOT_EXECUTE_APPROVAL_GATE');
+  assert.equal(developerTaskPolicyFailure({ taskKind:'MILESTONE_TASK', stage:'developer', milestoneId:'V2.1' }), null);
+  assert.equal(developerTaskPolicyFailure({ taskKind:'PLANNING', stage:'developer', milestoneId:'V2.1' }), 'DEVELOPER_REQUIRES_DELIVERY_SCOPE');
+  assert.equal(developerTaskPolicyFailure({ taskKind:'MILESTONE_TASK', stage:'developer', milestoneId:null }), 'DEVELOPER_REQUIRES_MILESTONE');
+  assert.equal(developerTaskPolicyFailure({ taskKind:'MILESTONE_TASK', stage:'developer', milestoneId:'V2.GATE' }), 'DEVELOPER_CANNOT_EXECUTE_APPROVAL_GATE');
   assert.equal(isApprovalGateTask({milestoneId:'V2.GATE'}), true);
   assert.equal(isApprovalGateTask({taskKind:'approval_gate'}), true);
-  assert.equal(developerTaskPolicyFailure({scope:'delivery',stage:'tester',milestoneId:'V2.GATE'}),null);
+  assert.equal(developerTaskPolicyFailure({taskKind:'MILESTONE_TASK',stage:'tester',milestoneId:'V2.GATE'}),null);
 });
 test('delivery compiler rejects V2 approval gate rather than silently assigning developer', () => {
   const dir=mkdtempSync(join(tmpdir(),'ariad-dev-policy-'));

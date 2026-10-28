@@ -28,7 +28,7 @@ test('human decision target is context-driven but declared in the machine', () =
 });
 
 test('project state is derived by ordered declarative rules', () => {
-  const delivery = (state) => ({ scope: 'delivery', state });
+  const delivery = (state) => ({ taskKind: 'MILESTONE_TASK', state });
   assert.equal(
     deriveProjectExecutionState({ tasks: [delivery('READY')] }),
     'RUNNING',
@@ -42,7 +42,7 @@ test('project state is derived by ordered declarative rules', () => {
       tasks: [
         { ...delivery('SYSTEM_BLOCKED'), id: 'blocked' },
         {
-          scope: 'control',
+          taskKind: 'DIAGNOSTIC',
           stage: 'project_debugger',
           state: 'WORKING',
           input: { blockedTaskId: 'blocked' },
@@ -65,7 +65,7 @@ test('project state is derived by ordered declarative rules', () => {
   );
   assert.equal(
     deriveProjectExecutionState({
-      tasks: [{ scope: 'control', state: 'NEEDS_HUMAN' }],
+      tasks: [{ taskKind: 'PLANNING', state: 'NEEDS_HUMAN' }],
       hasPlanning: true,
       migration: { status: 'REBUILDING' },
     }),
@@ -73,7 +73,7 @@ test('project state is derived by ordered declarative rules', () => {
   );
   assert.equal(
     deriveProjectExecutionState({
-      tasks: [{ scope: 'delivery', state: 'READY' }],
+      tasks: [{ taskKind: 'MILESTONE_TASK', state: 'READY' }],
       migration: { status: 'REBUILDING' },
     }),
     'MIGRATING',

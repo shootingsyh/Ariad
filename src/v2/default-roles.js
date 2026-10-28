@@ -3,7 +3,7 @@ import { acceptInitialTaskTree } from './approved-task-tree.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { roleExecutorBinding } from './role-executor-binding.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
-import { effectiveTaskKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
@@ -1077,7 +1077,7 @@ export function createDefaultV2Roles({
   };
 
   const planResultTransition = (task, result) => {
-    if (effectiveTaskKind(task) !== TASK_KINDS.PLANNING) return null;
+    if (task.taskKind !== TASK_KINDS.PLANNING) return null;
     const body = planTransitionBodies[task.stage];
     if (!body) return null;
     const legacy = body({ task, result });

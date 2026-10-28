@@ -34,7 +34,7 @@ test('PM PLAN_ACCEPTED persists a NEW project initial tree without legacy plan w
  try{
   store.createProject({id:'P',mode:'NEW',deliveryEnabled:false,spec:'Build task tracker'});
   const roles=createDefaultV2Roles({store,workspace,artifactRoot,providerId:'fake',codeProviderId:'ariad-code'});
-  const task={id:'pm-approval',projectId:'P',scope:'control',stage:'pm',flowId:'planner:P:1',
+  const task={id:'pm-approval',projectId:'P',taskKind:'PLANNING',stage:'pm',flowId:'planner:P:1',
     input:{purpose:'PLANNER_PM_REVIEW'},history:[]};
   const result=roles.pm.transition({task,result:{outcome:'PLAN_ACCEPTED',result:{startDelivery:true,reason:'Plan validated'}}});
   assert.equal(result.state,'DONE');

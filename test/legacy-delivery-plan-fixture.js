@@ -29,7 +29,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
       const plannedStage = spec.revisionMode === 'regression'
         ? 'tester' : (spec.art?.required ? 'artist' : 'developer');
       const failure = developerTaskPolicyFailure({
-        ...spec, stage: plannedStage, scope: 'delivery',
+        ...spec, stage: plannedStage, taskKind: 'MILESTONE_TASK',
       });
       // Legacy v1/v2 task plans may have synthetic root tasks without milestone
       // ownership. Full v3 compiled plans require explicit milestone ownership.

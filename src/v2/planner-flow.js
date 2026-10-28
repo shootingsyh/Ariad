@@ -1,4 +1,4 @@
-import { scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { TASK_KINDS } from './control-task-policy.js';
 
 function taskId(batchId, name) {
   return `planner:${batchId}:${name}`;
@@ -303,7 +303,10 @@ export function createNextPlanningBatch({ store, projectId }) {
 }
 
 export function isPlannerTask(task) {
-  return scopeOfTask(task) === 'control'
+  // A planner task is a PLANNING-kind task belonging to a planner batch.
+  // Other PLANNING-kind tasks (debug flows, ad-hoc control flows) are
+  // ordinary control tasks for scheduling purposes.
+  return task?.taskKind === TASK_KINDS.PLANNING
     && typeof task.flowId === 'string'
     && task.flowId.startsWith('planner:');
 }

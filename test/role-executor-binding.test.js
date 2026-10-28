@@ -7,7 +7,7 @@ test('delivery stages belong to milestone executor', () => {
     developer: 'DEVELOP', test_engineer: 'TEST_ENGINEER', tester: 'TEST',
     reviewer: 'REVIEW', project_debugger: 'DEBUG',
   })) {
-    const binding = roleExecutorBinding({ scope: 'delivery', stage });
+    const binding = roleExecutorBinding({ taskKind: 'MILESTONE_TASK', stage });
     assert.equal(binding.machine.id, 'milestone-executor');
     assert.equal(binding.state, state);
   }

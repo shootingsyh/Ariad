@@ -1,5 +1,5 @@
 import { loadBoundaryContracts } from './interface-contracts.js';
-import { effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
+import { TASK_KINDS } from './control-task-policy.js';
 import { resolveAnchorStatically } from './interface-seal.js';
 
 function featureOwnerContracts(artifactRoot) {
@@ -57,7 +57,7 @@ export function reconcileMigratedDeliveryTasks({
   for (const task of store.listTasks(projectId, { scope: 'delivery' })) {
     if (task.state !== 'READY') continue;
 
-    if (effectiveTaskKind(task) === TASK_KINDS.INTEGRATION_TASK) {
+    if (task.taskKind === TASK_KINDS.INTEGRATION_TASK) {
       const updated = store.appendTaskHistory(task.id, task.version, {
         type: 'MIGRATION_RECONCILED',
         role: 'migration_reconciler',

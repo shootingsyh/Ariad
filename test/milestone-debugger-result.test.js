@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { milestoneResultTransition } from '../src/v2/milestone-result-executor.js';
 
 const task = (input = {}) => ({
-  taskKind: 'MILESTONE_TASK', scope: 'delivery',
+  taskKind: 'MILESTONE_TASK', taskKind: 'MILESTONE_TASK',
   stage: 'project_debugger', input,
 });
 test('debugger implementation repair returns to developer', () => {
@@ -29,8 +29,8 @@ test('unrecognized debugger diagnosis routes to PM', () => {
 });
 test('debugger routing targets have valid executor bindings', async () => {
   const { roleExecutorBinding } = await import('../src/v2/role-executor-binding.js');
-  assert.equal(roleExecutorBinding({ scope: 'delivery', stage: 'artist' }).state, 'ARTIST');
-  assert.equal(roleExecutorBinding({ scope: 'delivery', stage: 'pm' }).state, 'PM');
+  assert.equal(roleExecutorBinding({ taskKind: 'MILESTONE_TASK', stage: 'artist' }).state, 'ARTIST');
+  assert.equal(roleExecutorBinding({ taskKind: 'MILESTONE_TASK', stage: 'pm' }).state, 'PM');
 });
 test('side-effectful debugger cases stay on existing atomic routing path', () => {
   const routed = milestoneResultTransition(task({ blockedTaskId: 'T' }), { outcome: 'ASSET_ISSUE' });

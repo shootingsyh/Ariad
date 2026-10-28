@@ -21,18 +21,6 @@ export function isDeliveryKind(kind) {
 const VALID = new Set(Object.values(TASK_KINDS));
 const ADHOC_ISSUERS = new Set(['operator', 'user', 'pm']);
 const CONTROL_ROLES = new Set(['tech_lead','tech_lead_critic','plan_validator','pm','project_debugger']);
-export function effectiveTaskKind(task) {
-  const kind = task?.taskKind ?? task?.input?.taskKind;
-  // Legacy stored rows used the lowercase spellings; map them onto the
-  // canonical kinds. New writers stamp the canonical values directly.
-  if (kind === 'feature') return TASK_KINDS.FEATURE_TASK;
-  if (kind === 'integration') return TASK_KINDS.INTEGRATION_TASK;
-  if (kind != null) return kind;
-  // Historical tasks continue to use their original shape.
-  return task?.scope === 'control'
-    ? (task?.stage === 'project_debugger' ? TASK_KINDS.DIAGNOSTIC : TASK_KINDS.PLANNING)
-    : TASK_KINDS.MILESTONE_TASK;
-}
 export function controlTaskPolicyFailure(task) {
   const kind = task?.taskKind;
   if (!VALID.has(kind)) return 'UNKNOWN_TASK_KIND';
@@ -61,9 +49,9 @@ export function controlTaskPolicyFailure(task) {
 }
 
 export function scopeOfTask(task) {
-  return isDeliveryKind(effectiveTaskKind(task)) ? 'delivery' : 'control';
+  return isDeliveryKind(task?.taskKind) ? 'delivery' : 'control';
 }
 
 export function isAdhocAnalysis(task) {
-  return effectiveTaskKind(task) === TASK_KINDS.ADHOC_ANALYSIS;
+  return task?.taskKind === TASK_KINDS.ADHOC_ANALYSIS;
 }

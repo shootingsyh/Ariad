@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -58,12 +58,26 @@ function issueFingerprint(issue) {
 // rows restamp the kind from whatever legacy signals the row still carries
 // and strip the shadow copies (input.taskKind, input.executionMode,
 // executorType) so no consumer ever sees two sources of type truth.
+// The one place legacy type signals are still interpreted: stored rows and
+// admission specs may carry the kind in input, in the lowercase spellings,
+// or not at all (in which case the old scope/stage fallback applies). The
+// result is always the canonical taskKind; nothing downstream derives type.
+function legacyTaskKind(task) {
+  const kind = task?.taskKind ?? task?.input?.taskKind;
+  if (kind === 'feature') return TASK_KINDS.FEATURE_TASK;
+  if (kind === 'integration') return TASK_KINDS.INTEGRATION_TASK;
+  if (kind != null) return kind;
+  return task?.scope === 'control'
+    ? (task?.stage === 'project_debugger' ? TASK_KINDS.DIAGNOSTIC : TASK_KINDS.PLANNING)
+    : TASK_KINDS.MILESTONE_TASK;
+}
+
 function normalizeStoredTask(task) {
   if (!task || typeof task !== 'object') return task;
   const input = { ...(task.input ?? {}) };
   delete input.taskKind;
   delete input.executionMode;
-  const normalized = { ...task, input, taskKind: effectiveTaskKind(task) };
+  const normalized = { ...task, input, taskKind: legacyTaskKind(task) };
   delete normalized.executorType;
   delete normalized.scope;
   return normalized;
@@ -250,7 +264,7 @@ export class SQLiteV2Store {
     const issue = this.getIssue(issueId);
     if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
     if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
-    if (!task?.id || scopeOfTask(task) === 'control') throw new Error('delivery fix task id required');
+    if (!task?.id || (task.taskKind != null && !isDeliveryKind(task.taskKind))) throw new Error('delivery fix task id required');
     if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
     this.db.exec('BEGIN IMMEDIATE');
     try {

@@ -1,4 +1,4 @@
-import { effectiveTaskKind, isDeliveryKind, TASK_KINDS } from './control-task-policy.js';
+import { isDeliveryKind, TASK_KINDS } from './control-task-policy.js';
 import { milestoneMachine, subPlanMachine, adhocMachine, planMachine } from './role-executor-machines.js';
 
 // Boundary between persisted v2 role names and executor-owned DSL states.
@@ -21,7 +21,7 @@ const PLAN_STAGES = Object.freeze({
 });
 
 export function roleExecutorBinding(task) {
-  const kind = effectiveTaskKind(task);
+  const kind = task.taskKind;
   let machine, stages;
   if (isDeliveryKind(kind)) {
     machine = milestoneMachine; stages = MILESTONE_STAGES;

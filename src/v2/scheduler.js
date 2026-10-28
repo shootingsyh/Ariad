@@ -6,7 +6,7 @@ import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, effectiveTaskKind, isAdhocAnalysis, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, isAdhocAnalysis, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -106,7 +106,7 @@ export class V2Scheduler {
       : migrating
       ? allTasks.filter(task => isPlannerTask(task) && task.input?.versionMigration === true)
       : planningBlocked
-        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(effectiveTaskKind(task)))
+        ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(task.taskKind))
         : allTasks.filter(task =>
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
             && (scopeOfTask(task) !== 'delivery' || deliveryEnabled)
@@ -117,7 +117,7 @@ export class V2Scheduler {
 
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {
-        if (!graph.isRunnable(task) || effectiveTaskKind(task) === TASK_KINDS.WORKFLOW) continue;
+        if (!graph.isRunnable(task) || task.taskKind === TASK_KINDS.WORKFLOW) continue;
         candidates.push({
           task,
           graphKey: key,
@@ -204,7 +204,7 @@ export class V2Scheduler {
           projectId,
           taskId: task.id,
           role: task.stage,
-          taskKind: effectiveTaskKind(task),
+          taskKind: task.taskKind,
           scope: scopeOfTask(task),
           flowId: task.flowId ?? null,
           sessionPolicy: role.sessionPolicy ?? 'fresh',

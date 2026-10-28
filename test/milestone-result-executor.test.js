@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { milestoneResultTransition } from '../src/v2/milestone-result-executor.js';
 
-const task = (stage, extra = {}) => ({ scope: 'delivery', stage, history: [], ...extra });
+const task = (stage, extra = {}) => ({ taskKind: 'MILESTONE_TASK', stage, history: [], ...extra });
 test('developer passes to test engineer; failure cannot pass', () => {
   assert.equal(milestoneResultTransition(task('developer'), { outcome: 'PASS' }).stage, 'test_engineer');
   assert.equal(milestoneResultTransition(task('developer'), { outcome: 'NOT_PASS' }).stage, 'developer');
