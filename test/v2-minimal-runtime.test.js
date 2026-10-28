@@ -1704,13 +1704,11 @@ test('accepted takeover plan pauses at human review until a human decision is re
       type: 'HUMAN_DECISION',
       decision: 'accept',
     });
-    const second = definitions.pm.transition({
+    assert.throws(() => definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true } },
-    });
-    assert.equal(second.state, 'NEEDS_HUMAN');
-    assert.equal(second.transitionHistory.type, 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED');
-    assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'legacy delivery stays locked until the one-time offline migration');
+    }), /PM_PLAN_ARTIFACTS_MISSING/, 'no migration gate remains: without planner artifacts the approval fails loudly');
+    assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'delivery stays locked when no artifact plan exists');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1788,12 +1786,10 @@ test('later technical replans in an approved TAKEOVER project do not create anot
     assert.match(prompt, /one-time human takeover review has already been satisfied durably/);
     assert.match(prompt, /Do NOT request another takeover\/delivery authorization/);
 
-    const accepted = definitions.pm.transition({
+    assert.throws(() => definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true } },
-    });
-    assert.equal(accepted.state, 'NEEDS_HUMAN');
-    assert.equal(accepted.transitionHistory.type, 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED');
+    }), /PM_PLAN_ARTIFACTS_MISSING/, 'no human gate remains: without planner artifacts the approval fails loudly');
     assert.equal(store.getProject('P-take-replan').takeoverReviewRequired, false);
     assert.equal(store.getProject('P-take-replan').deliveryEnabled, true);
     store.close();

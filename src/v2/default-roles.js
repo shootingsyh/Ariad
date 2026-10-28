@@ -852,7 +852,7 @@ export function createDefaultV2Roles({
               },
             };
           }
-          // Preserve the one-time human takeover review before requiring offline migration.
+          // Preserve the one-time human takeover review.
           if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
             return { state: 'NEEDS_HUMAN', transitionHistory: {
               type: 'PM_HUMAN_DECISION', role: 'pm',
@@ -861,9 +861,14 @@ export function createDefaultV2Roles({
             } };
           }
           const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
-          const validated = rawArtifactPlan
-            ? validatePlannerArtifactPlan(rawArtifactPlan)
-            : validateTechLeadPlan(latestLegacyPlanInFlow(store, task, artifactRoot));
+          if (!rawArtifactPlan) {
+            // One flow, one plan format: PM approval consumes the planner
+            // artifact plan. An inline tech-lead plan in flow history is a
+            // planning input, never a tree source - there is no legacy
+            // fallback and no migration gate behind this error.
+            throw new Error('PM_PLAN_ARTIFACTS_MISSING: PM approval requires the planner artifact plan');
+          }
+          const validated = validatePlannerArtifactPlan(rawArtifactPlan);
           // Initial NEW project: persist the approved planner's tree nodes directly.
           // Never let a legacy replan rewrite an already approved Task Tree.
           const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
@@ -876,13 +881,12 @@ export function createDefaultV2Roles({
                 summary: String(error?.message ?? error), at: new Date().toISOString(),
               } };
             }
-          } else if (!rawArtifactPlan || existingDelivery.length) {
-            return { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'ONE_TIME_TASK_TREE_MIGRATION_REQUIRED', role: 'pm',
-              summary: 'Legacy delivery must be migrated offline; no changes applied.',
-              at: new Date().toISOString(),
-            } };
           } else {
+            // No legacy-format gate: a validated plan is accepted as the
+            // project's tree, whatever flow produced it. If delivery tasks
+            // already exist, acceptInitialTaskTree itself refuses
+            // (APPROVED_TASK_TREE_EXISTING_TASKS) - a loud failure, never a
+            // silent acceptance and never a human park.
             acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
           }
           // Canonical tree writes are complete; legacy plan writer is absent.
