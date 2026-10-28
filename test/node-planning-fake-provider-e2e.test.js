@@ -17,7 +17,7 @@ async function scenario(failOnce) {
   try {
     store.createProject({ id: 'P', deliveryEnabled: false });
     store.createNodePlanningWorkflow({ id: 'wf', projectId: 'P', phase: 'interface', reason: 'repair', scopeNodeId: 'root', nodes: [{ id: 'root', parentId: null, nodeType: 'feature' }, { id: 'leaf', parentId: 'root', nodeType: 'feature' }] });
-    store.createTask({ id: 'delivery', projectId: 'P', scope: 'delivery', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'delivery', projectId: 'P', scope: 'delivery', stage: 'developer' });
     const roles = new RoleRegistry();
     for (const role of ['tech_lead', 'plan_validator', 'tech_lead_critic', 'project_debugger', 'developer']) roles.register(role, { prepare: () => ({ provider: 'fake' }), transition: () => ({ state: 'DONE' }) });
     let sequence = 0;

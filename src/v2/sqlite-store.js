@@ -58,26 +58,17 @@ function issueFingerprint(issue) {
 // rows restamp the kind from whatever legacy signals the row still carries
 // and strip the shadow copies (input.taskKind, input.executionMode,
 // executorType) so no consumer ever sees two sources of type truth.
-// The one place legacy type signals are still interpreted: stored rows and
-// admission specs may carry the kind in input, in the lowercase spellings,
-// or not at all (in which case the old scope/stage fallback applies). The
-// result is always the canonical taskKind; nothing downstream derives type.
-function legacyTaskKind(task) {
-  const kind = task?.taskKind ?? task?.input?.taskKind;
-  if (kind === 'feature') return TASK_KINDS.FEATURE_TASK;
-  if (kind === 'integration') return TASK_KINDS.INTEGRATION_TASK;
-  if (kind != null) return kind;
-  return task?.scope === 'control'
-    ? (task?.stage === 'project_debugger' ? TASK_KINDS.DIAGNOSTIC : TASK_KINDS.PLANNING)
-    : TASK_KINDS.MILESTONE_TASK;
-}
-
+// Stored-shape hygiene only: shadow type fields from the pre-convergence
+// schema are stripped, and taskKind is trusted exactly as stored. Legacy
+// type signals are NOT interpreted anywhere in the runtime; existing
+// databases are canonicalized once, offline, by
+// scripts/migrate-task-kinds.mjs.
 function normalizeStoredTask(task) {
   if (!task || typeof task !== 'object') return task;
   const input = { ...(task.input ?? {}) };
   delete input.taskKind;
   delete input.executionMode;
-  const normalized = { ...task, input, taskKind: legacyTaskKind(task) };
+  const normalized = { ...task, input };
   delete normalized.executorType;
   delete normalized.scope;
   return normalized;
@@ -94,6 +85,9 @@ function normalizeTask(task) {
     execution: null,
     ...structuredClone(task),
   });
+  if (canonical.taskKind == null) {
+    throw new Error(`task requires a valid taskKind: ${canonical.id ?? '<unknown>'}`);
+  }
   const scope = scopeOfTask(canonical);
   if (scope === 'control' && (!canonical.flowId || typeof canonical.flowId !== 'string')) {
     throw new Error('control task requires flowId');
@@ -219,9 +213,8 @@ export class SQLiteV2Store {
   createTask(task) {
     if (!task?.id) throw new Error('task.id is required');
     if (!task?.projectId) throw new Error('task.projectId is required');
-    // Admission rule for explicitly declared planning tasks: they must be
-    // born inside a planner batch flow. (Derived kinds are not subject to
-    // this; it guards the declared type, not the normalized one.)
+    // Admission rule for planning tasks: they must be born inside a
+    // planner batch flow.
     if (task.taskKind === TASK_KINDS.PLANNING && !String(task.flowId ?? '').startsWith('planner:')) {
       throw new Error('PLANNING_REQUIRES_PLANNER_FLOW');
     }
@@ -276,7 +269,7 @@ export class SQLiteV2Store {
         if (!target || target.state !== 'READY' || target.execution) throw new Error(`insertion target must be idle READY: ${id}`);
       }
       const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
-      const fix = normalizeTask({ ...task, projectId, issueRefs: refs,
+      const fix = normalizeTask({ ...task, projectId, taskKind: task.taskKind ?? TASK_KINDS.MILESTONE_TASK, issueRefs: refs,
         input: { ...(task.input ?? {}), issueRefs: refs },
         history: [...(task.history ?? []), { type: 'TL_INSERT_FIX_TASK', issueId, at: new Date().toISOString() }] });
       if (fix.state !== 'READY' || fix.stage !== 'developer' || fix.execution) throw new Error('fix task must start READY/developer');

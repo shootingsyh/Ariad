@@ -45,7 +45,7 @@ test('ariad project migrate archives the old DB and creates a fresh migration re
       planningModelVersion: 1,
       storageVersion: 1,
     });
-    old.createTask({ id: 'old', projectId: 'demo', state: 'DONE' });
+    old.createTask({ taskKind: 'MILESTONE_TASK', id: 'old', projectId: 'demo', state: 'DONE' });
     old.close();
 
     const result = runAriadCli(['project', 'migrate', 'demo', '--projects-root', root]);

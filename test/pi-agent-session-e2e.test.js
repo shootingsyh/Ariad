@@ -284,7 +284,7 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
       ],
     });
 
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T1',
       projectId: 'P',
       stage: 'developer',
@@ -356,7 +356,7 @@ test('Pi host preserves Ariad PM/TL/Dev/Test/Review scheduling and replan lifecy
         },
       ],
     });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T2',
       projectId: 'P',
       stage: 'developer',

@@ -16,7 +16,7 @@ test('unified scheduler gates aggregate children and completes dev-test-review w
  const store=new SQLiteV2Store(join(dir,'state.db'));
  try {
   store.createProject({id:'p',spec:'fixture',deliveryEnabled:true,unifiedTaskCompilerVersion:1,deliveryPlanVersion:3});
-  const mk=(id,mode,deps,parent=null)=>({id,projectId:'p',scope:'delivery',stage:'developer',state:'READY',milestoneId:'A',parentId:parent,executionMode:mode,unifiedTaskSchemaVersion:1,dependsOn:deps,interfaceIds:['iface'],input:{interfaceIds:['iface'],milestoneId:'A'},history:[]});
+  const mk=(id,mode,deps,parent=null)=>({id,projectId:'p',taskKind:'MILESTONE_TASK',stage:'developer',state:'READY',milestoneId:'A',parentId:parent,executionMode:mode,unifiedTaskSchemaVersion:1,dependsOn:deps,interfaceIds:['iface'],input:{interfaceIds:['iface'],milestoneId:'A'},history:[]});
   store.createTask(mk('A','aggregate',['leaf']));
   store.createTask(mk('leaf','implementation',[],'A'));
   const roles=new RoleRegistry();
@@ -56,7 +56,7 @@ test('unified scheduler never dispatches delivery while locked',async()=>{
  const store=new SQLiteV2Store(join(dir,'state.db'));
  try {
   store.createProject({id:'locked',deliveryEnabled:false,unifiedTaskCompilerVersion:1});
-  store.createTask({id:'A',projectId:'locked',scope:'delivery',stage:'developer',state:'READY',milestoneId:'A',executionMode:'aggregate',unifiedTaskSchemaVersion:1,dependsOn:[]});
+  store.createTask({ taskKind: 'MILESTONE_TASK',id:'A',projectId:'locked',scope:'delivery',stage:'developer',state:'READY',milestoneId:'A',executionMode:'aggregate',unifiedTaskSchemaVersion:1,dependsOn:[]});
   const roles=new RoleRegistry();roles.register('developer',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
   const providers=new ProviderRegistry();let calls=0;
   providers.register({id:'fake',async start(){calls++;return {externalId:'x'};},async poll(){return {state:'RUNNING'};},async cancel(){}});

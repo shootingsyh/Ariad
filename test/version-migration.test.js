@@ -42,6 +42,7 @@ test('planning model migration archives the whole old DB and starts from a fresh
     planningModelVersion: 1,
   });
   old.createTask({
+    taskKind: 'MILESTONE_TASK',
     id: 'OLD-TASK',
     projectId: 'demo',
     state: 'DONE',

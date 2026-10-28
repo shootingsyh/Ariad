@@ -100,7 +100,7 @@ test('v2 drives one durable task through developer, tester, reviewer using task 
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P1', spec: 'build it', pmBinding: 'pm-session-1' });
-    store.createTask({ id: 'T1', projectId: 'P1', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T1', projectId: 'P1', stage: 'developer' });
 
     const roleRegistry = roles();
     const provider = fakeProvider();
@@ -160,9 +160,9 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P2' });
-    store.createTask({ id: 'A', projectId: 'P2', stage: 'developer' });
-    store.createTask({ id: 'B', projectId: 'P2', stage: 'developer' });
-    store.createTask({ id: 'C', projectId: 'P2', stage: 'developer', dependsOn: ['A', 'B'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'A', projectId: 'P2', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'B', projectId: 'P2', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'C', projectId: 'P2', stage: 'developer', dependsOn: ['A', 'B'] });
 
     const provider = fakeProvider();
     const providers = new ProviderRegistry();
@@ -337,7 +337,7 @@ test('supervisor accepts only explicit result-tool-unavailable compatibility res
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-compat' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-compat',
       projectId: 'P-compat',
       stage: 'tech_lead',
@@ -397,7 +397,7 @@ test('role-result-tool attempts cannot succeed from provider terminal completion
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-tool-only' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-tool-only',
       projectId: 'P-tool-only',
       stage: 'tester',
@@ -442,7 +442,7 @@ test('manual system recovery resets the consecutive system-failure window', asyn
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-recovery-window' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-recovery-window',
       projectId: 'P-recovery-window',
       stage: 'tester',
@@ -486,7 +486,7 @@ test('supervisor recovers an orphaned WORKING task that already has a sealed rol
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-role-tool' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-role-tool',
       projectId: 'P-role-tool',
       stage: 'tester',
@@ -546,7 +546,7 @@ test('supervisor re-checks durable role-tool result committed during provider po
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-role-tool-race' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-role-tool-race',
       projectId: 'P-role-tool-race',
       stage: 'tester',
@@ -604,7 +604,7 @@ test('retry count is derived from task history, not a durable counter', () => {
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P3' });
-    let task = store.createTask({ id: 'T3', projectId: 'P3', stage: 'developer' });
+    let task = store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T3', projectId: 'P3', stage: 'developer' });
     task = store.appendTaskHistory('T3', task.version, { type: 'ROLE_RESULT', role: 'developer', outcome: 'NOT_PASS' });
     task = store.appendTaskHistory('T3', task.version, { type: 'ROLE_RESULT', role: 'developer', outcome: 'PASS' });
     const attempts = task.history.filter(x => x.type === 'ROLE_RESULT' && x.role === 'developer').length;
@@ -620,7 +620,7 @@ test('supervisor recovers resource claims from durable WORKING tasks after resta
   try {
     const first = new SQLiteV2Store(file);
     first.createProject({ id: 'P4' });
-    first.createTask({
+    first.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T4',
       projectId: 'P4',
       stage: 'developer',
@@ -674,8 +674,8 @@ test('control tasks form independent ad-hoc graphs while delivery stays one grap
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P6' });
-    store.createTask({ id: 'D1', projectId: 'P6', stage: 'developer' });
-    store.createTask({ id: 'D2', projectId: 'P6', stage: 'developer', dependsOn: ['D1'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'D1', projectId: 'P6', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'D2', projectId: 'P6', stage: 'developer', dependsOn: ['D1'] });
     store.createControlFlow({
       projectId: 'P6',
       flowId: 'plan-1',
@@ -729,16 +729,16 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P10' });
 
-    store.createTask({ id: 'BACKEND', projectId: 'P10', stage: 'developer' });
-    store.createTask({ id: 'INTERFACE', projectId: 'P10', stage: 'developer', parentId: 'BACKEND' });
-    store.createTask({ id: 'CONNECTION', projectId: 'P10', stage: 'developer', parentId: 'BACKEND', dependsOn: ['INTERFACE'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'BACKEND', projectId: 'P10', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'INTERFACE', projectId: 'P10', stage: 'developer', parentId: 'BACKEND' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'CONNECTION', projectId: 'P10', stage: 'developer', parentId: 'BACKEND', dependsOn: ['INTERFACE'] });
 
-    store.createTask({ id: 'UI', projectId: 'P10', stage: 'developer' });
-    store.createTask({ id: 'DRAWING', projectId: 'P10', stage: 'developer', parentId: 'UI' });
-    store.createTask({ id: 'LIST-BACKEND', projectId: 'P10', stage: 'developer', parentId: 'UI', dependsOn: ['INTERFACE'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'UI', projectId: 'P10', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'DRAWING', projectId: 'P10', stage: 'developer', parentId: 'UI' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'LIST-BACKEND', projectId: 'P10', stage: 'developer', parentId: 'UI', dependsOn: ['INTERFACE'] });
 
-    store.createTask({ id: 'INIT', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
-    store.createTask({ id: 'LOGIN', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'INIT', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'LOGIN', projectId: 'P10', stage: 'developer', dependsOn: ['INTERFACE'] });
 
     const provider = fakeProvider();
     const providers = new ProviderRegistry();
@@ -1239,7 +1239,7 @@ test('scheduler drains planning batches before dispatching delivery work', async
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P11' });
-    store.createTask({ id: 'DELIVERY', projectId: 'P11', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'DELIVERY', projectId: 'P11', stage: 'developer' });
 
     store.enqueuePlanningRequest({
       id: 'REQ-1',
@@ -1357,9 +1357,9 @@ test('applyDeliveryPlan atomically preserves completed work and obsoletes remove
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P13' });
-    store.createTask({ id: 'KEEP', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
-    store.createTask({ id: 'REMOVE', projectId: 'P13', state: 'READY', stage: 'developer' });
-    store.createTask({ id: 'OLD-DONE', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'KEEP', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'REMOVE', projectId: 'P13', state: 'READY', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'OLD-DONE', projectId: 'P13', state: 'DONE', stage: 'reviewer', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
 
     legacyApplyDeliveryPlan(store,'P13', {
       version: 2,
@@ -1388,7 +1388,7 @@ test('scheduler runs afterPersist only after the transition is durable', async (
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-after' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-after',
       projectId: 'P-after',
       stage: 'reviewer',
@@ -1436,7 +1436,7 @@ test('scheduler persists a stable attempt identity before provider start', async
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P14' });
-    store.createTask({ id: 'T14', projectId: 'P14', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T14', projectId: 'P14', stage: 'developer' });
 
     let seen = null;
     const provider = {
@@ -1545,7 +1545,7 @@ test('default delivery roles are reuse-first but require fresh verification evid
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-reuse' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-reuse',
       projectId: 'P-reuse',
       history: [{
@@ -1577,7 +1577,7 @@ test('delivery scheduler remains gated until PM explicitly enables delivery', as
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-delivery-gate', deliveryEnabled: false });
-    store.createTask({ id: 'D1', projectId: 'P-delivery-gate', stage: 'developer', state: 'READY' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'D1', projectId: 'P-delivery-gate', stage: 'developer', state: 'READY' });
 
     const started = [];
     const providers = new ProviderRegistry();
@@ -1811,14 +1811,14 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
       sourcePath: '/tmp/existing-repo',
       deliveryEnabled: false,
     });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'OLD-DONE',
       projectId: 'P-legacy-take',
       scope: 'delivery',
       stage: 'reviewer',
       state: 'DONE',
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'planner:batch-1-1:pm-review',
       projectId: 'P-legacy-take',
       scope: 'control',
@@ -1831,7 +1831,7 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
         { type: 'DELIVERY_GATE', role: 'pm', enabled: true, reason: 'Human approved takeover.', at: '2026-09-25T14:03:00Z' },
       ],
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'planner:batch-4-4:pm-review',
       projectId: 'P-legacy-take',
       scope: 'control',
@@ -1872,7 +1872,7 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
       takeoverReviewRequired: false,
       deliveryEnabled: true,
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'PM-old-open',
       projectId: 'P-take-closed',
       scope: 'control',
@@ -1882,7 +1882,7 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
       input: { purpose: 'PLANNER_PM_REVIEW' },
       history: [{ type: 'DELIVERY_GATE', enabled: true, at: '2026-09-01T00:00:00Z' }],
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'PM-later-close',
       projectId: 'P-take-closed',
       scope: 'control',
@@ -1892,7 +1892,7 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
       input: { purpose: 'PLANNER_PM_REVIEW' },
       history: [{ type: 'DELIVERY_GATE', enabled: false, at: '2026-09-02T00:00:00Z' }],
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'PM-obsolete',
       projectId: 'P-take-closed',
       scope: 'control',
@@ -2120,7 +2120,7 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-restart-orphan' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-restart-orphan',
       projectId: 'P-restart-orphan',
       stage: 'developer',
@@ -2177,7 +2177,7 @@ test('restart-orphan unknown legacy provider requeues without consuming an attem
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-legacy-provider' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-legacy-provider',
       projectId: 'P-legacy-provider',
       stage: 'tech_lead',
@@ -2214,7 +2214,7 @@ test('unified Project Debugger routes a system-blocked oversized task to Tech Le
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-system-debug' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-blocked',
       projectId: 'P-system-debug',
       scope: 'delivery',
@@ -2222,7 +2222,7 @@ test('unified Project Debugger routes a system-blocked oversized task to Tech Le
       state: 'SYSTEM_BLOCKED',
       history: [{ type: 'SYSTEM_INTERRUPTION', failure: 'STALLED_AGENT_RUN' }],
     });
-    store.createTask({
+    store.createTask({ taskKind: 'DIAGNOSTIC',
       id: 'debug:T-blocked:1',
       projectId: 'P-system-debug',
       scope: 'control',
@@ -2285,14 +2285,14 @@ test('unified Project Debugger hands true runtime failures to a human without re
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-runtime-debug' });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'T-runtime',
       projectId: 'P-runtime-debug',
       scope: 'delivery',
       stage: 'tester',
       state: 'SYSTEM_BLOCKED',
     });
-    store.createTask({
+    store.createTask({ taskKind: 'DIAGNOSTIC',
       id: 'debug:T-runtime:1',
       projectId: 'P-runtime-debug',
       scope: 'control',
@@ -2337,7 +2337,7 @@ test('scheduler stops infinite role-start retries by entering SYSTEM_BLOCKED', a
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-start-failure' });
-    store.createTask({ id: 'T-start-failure', projectId: 'P-start-failure', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-start-failure', projectId: 'P-start-failure', stage: 'developer' });
 
     const roleRegistry = new RoleRegistry();
     roleRegistry.register('developer', {
@@ -2382,7 +2382,7 @@ test('PM is the only business role that may create a human-decision gate', () =>
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-routing' });
-    store.createTask({ id: 'T-routing', projectId: 'P-routing', stage: 'tester' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-routing', projectId: 'P-routing', stage: 'tester' });
     const planningRequests = [];
     const definitions = createDefaultV2Roles({
       store,
@@ -2480,8 +2480,8 @@ test('default LLM roles request the shared local-llm resource only for llamacpp 
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-model-resource' });
-    store.createTask({ id: 'T-local', projectId: 'P-model-resource', stage: 'developer' });
-    store.createTask({ id: 'T-remote', projectId: 'P-model-resource', stage: 'reviewer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-local', projectId: 'P-model-resource', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-remote', projectId: 'P-model-resource', stage: 'reviewer' });
     const definitions = createDefaultV2Roles({
       store,
       workspace: dir,
@@ -2517,9 +2517,9 @@ test('shared scoped resource pool serializes local LLM work across projects with
     storeA.createProject({ id: 'P-A' });
     storeB.createProject({ id: 'P-B' });
     storeC.createProject({ id: 'P-C' });
-    storeA.createTask({ id: 'T-A', projectId: 'P-A', stage: 'developer' });
-    storeB.createTask({ id: 'T-B', projectId: 'P-B', stage: 'developer' });
-    storeC.createTask({ id: 'T-C', projectId: 'P-C', stage: 'developer' });
+    storeA.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-A', projectId: 'P-A', stage: 'developer' });
+    storeB.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-B', projectId: 'P-B', stage: 'developer' });
+    storeC.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-C', projectId: 'P-C', stage: 'developer' });
 
     const starts = [];
     const provider = {
@@ -2583,11 +2583,11 @@ test('PM review resumed by HUMAN_DECISION runs after request is marked PLANNED',
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-reviewed', deliveryEnabled: false });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'D1', projectId: 'P-reviewed', scope: 'delivery', stage: 'developer',
       state: 'READY',
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'PM', projectId: 'P-reviewed', scope: 'control',
       flowId: 'planner:P-reviewed:batch-1-1', stage: 'pm', state: 'READY',
       input: { purpose: 'PLANNER_PM_REVIEW' },
@@ -2630,16 +2630,16 @@ test('migrating scheduler allows only migration control tasks even if delivery i
       deliveryEnabled: true, // Deliberate compromised PM/manifest state.
       planningModelMigration: { status: 'REBUILDING', fromVersion: 1, toVersion: 2 },
     });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'D1', projectId: 'P-exclusive-migrate',
       scope: 'delivery', stage: 'developer', state: 'READY',
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'C1', projectId: 'P-exclusive-migrate',
       scope: 'control', flowId: 'planner:P-exclusive-migrate:ordinary',
       stage: 'tech_lead', state: 'READY', input: { purpose: 'PLANNER_DECOMPOSE' },
     });
-    store.createTask({
+    store.createTask({ taskKind: 'PLANNING',
       id: 'M1', projectId: 'P-exclusive-migrate',
       scope: 'control', flowId: 'planner:P-exclusive-migrate:migration',
       stage: 'tech_lead', state: 'READY',
@@ -2705,7 +2705,7 @@ test('issue intake deduplicates sources and tracks triage assignment through pla
       request: { purpose: 'TRIAGE_AND_ASSIGN_ISSUE', issueId: first.id },
     });
     store.updateIssue(first.id, { state: 'TRIAGE_PENDING', planningRequestId: request.id });
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'repair-ch21',
       projectId: 'P-issue',
       stage: 'developer',
@@ -2823,8 +2823,8 @@ test('assigned issue resolves automatically only after every repair task is DONE
       description: 'Needs two bounded repairs.',
       blocking: true,
     });
-    store.createTask({ id: 'R1', projectId: 'P-resolve-issue', state: 'DONE' });
-    store.createTask({ id: 'R2', projectId: 'P-resolve-issue', state: 'READY' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'R1', projectId: 'P-resolve-issue', state: 'DONE' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'R2', projectId: 'P-resolve-issue', state: 'READY' });
     store.updateIssue(issue.id, { state: 'ASSIGNED', assignedTaskIds: ['R1', 'R2'] });
     assert.deepEqual(store.reconcileAssignedIssues('P-resolve-issue'), []);
     assert.equal(store.getIssue(issue.id).state, 'ASSIGNED');
@@ -2909,9 +2909,9 @@ test('TL inserts triaged fix into live delivery DAG without touching active role
   const store = new SQLiteV2Store(file);
   try {
     store.createProject({ id: 'P-insert' });
-    store.createTask({ id: 'done', projectId: 'P-insert', state: 'DONE' });
-    store.createTask({ id: 'active', projectId: 'P-insert', state: 'WORKING', dependsOn: ['done'] });
-    store.createTask({ id: 'next', projectId: 'P-insert', state: 'READY', dependsOn: ['active'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'done', projectId: 'P-insert', state: 'DONE' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'active', projectId: 'P-insert', state: 'WORKING', dependsOn: ['done'] });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'next', projectId: 'P-insert', state: 'READY', dependsOn: ['active'] });
     const issue = store.createIssue({ projectId: 'P-insert', title: 'Independent regression', description: 'Needs fix' });
     const before = store.getTask('active');
     assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tester', task: { id: 'fix' } }), /REQUIRES_TECH_LEAD/);
@@ -2937,7 +2937,7 @@ test('TL one-off legacy issue recovery preserves issue and refuses genuine repla
   const store = new SQLiteV2Store(file);
   try {
     store.createProject({ id: 'P-recover' });
-    store.createTask({ id: 'legacy', projectId: 'P-recover', stage: 'tester', state: 'WAITING_REPLAN' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'legacy', projectId: 'P-recover', stage: 'tester', state: 'WAITING_REPLAN' });
     const issue = store.createIssue({ projectId: 'P-recover', sourceTaskId: 'legacy', title: 'Unrelated defect', description: 'Reported from dev' });
     const task = store.getTask('legacy');
     store.appendTaskHistory(task.id, task.version, { type: 'DISCOVERED_BLOCKING_ISSUE', issueIds: [issue.id] });
@@ -2948,7 +2948,7 @@ test('TL one-off legacy issue recovery preserves issue and refuses genuine repla
     assert.equal(restored.history.at(-1).type, 'TL_LEGACY_ISSUE_BLOCK_RECOVERY');
     assert.equal(store.getIssue(issue.id).state, 'OPEN');
     assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'again' }), /not idle/);
-    store.createTask({ id: 'real', projectId: 'P-recover', state: 'WAITING_REPLAN' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'real', projectId: 'P-recover', state: 'WAITING_REPLAN' });
     assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'real', actor: 'tech_lead', reason: 'bad' }), /evidence missing/);
   } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -14,7 +14,7 @@ function fixture() {
   id:'srpg-fixture',deliveryEnabled:false,
   planningModelMigration:{status:'REBUILDING',fromVersion:1,toVersion:2},
  });
- const task=store.createTask({
+ const task=store.createTask({ taskKind: 'PLANNING',
   id:'planner:batch-26-26:pm-review',
   projectId:'srpg-fixture',scope:'control',
   flowId:'planner:srpg-fixture:batch-26-26',

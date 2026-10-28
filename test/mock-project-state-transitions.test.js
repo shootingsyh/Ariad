@@ -28,7 +28,7 @@ function createMockProject(prefix = 'ariad-mock-state-') {
     workspace: project.workspace,
     deliveryEnabled: true,
   });
-  store.createTask({
+  store.createTask({ taskKind: 'MILESTONE_TASK',
     id: 'T-mock',
     projectId: project.id,
     stage: 'developer',

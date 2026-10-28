@@ -40,7 +40,7 @@ test('scheduler fails closed without starting approval gate or ad-hoc developer 
   let calls=0;
   try{
     store.createProject({id:'P-runtime',deliveryEnabled:true,deliveryPlanVersion:1});
-    store.createTask({id:'admin',projectId:'P-runtime',scope:'delivery',stage:'developer',milestoneId:'V2.GATE'});
+    store.createTask({ taskKind: 'MILESTONE_TASK',id:'admin',projectId:'P-runtime',scope:'delivery',stage:'developer',milestoneId:'V2.GATE'});
     const roles=new RoleRegistry();
     roles.register('developer',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
     const providers=new ProviderRegistry();

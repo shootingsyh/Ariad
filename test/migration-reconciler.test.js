@@ -79,15 +79,15 @@ test('migration reconciler adopts resolvable feature work and sends uncertain wo
     });
     store.createTask({
       id: 'existing', projectId: 'demo', stage: 'developer', state: 'READY',
-      taskKind: 'feature', ownerFeatureId: 'entry', logicalRefs: ['entry'], interfaceIds: ['new-game'],
+      taskKind: 'FEATURE_TASK', ownerFeatureId: 'entry', logicalRefs: ['entry'], interfaceIds: ['new-game'],
     });
     store.createTask({
       id: 'missing', projectId: 'demo', stage: 'developer', state: 'READY',
-      taskKind: 'feature', ownerFeatureId: 'entry', logicalRefs: ['entry'], interfaceIds: ['continue-game'],
+      taskKind: 'FEATURE_TASK', ownerFeatureId: 'entry', logicalRefs: ['entry'], interfaceIds: ['continue-game'],
     });
     store.createTask({
       id: 'integration', projectId: 'demo', stage: 'developer', state: 'READY',
-      taskKind: 'integration', ownerMilestoneId: 'M1', interfaceIds: [],
+      taskKind: 'INTEGRATION_TASK', ownerMilestoneId: 'M1', interfaceIds: [],
     });
 
     const results = reconcileMigratedDeliveryTasks({

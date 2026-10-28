@@ -55,7 +55,7 @@ test('AriadService owns reconcile and pause/resume without OpenClaw', async () =
     workspace: project.workspace,
     deliveryEnabled: true,
   });
-  seed.createTask({
+  seed.createTask({ taskKind: 'MILESTONE_TASK',
     id: 'T-service',
     projectId: project.id,
     stage: 'developer',

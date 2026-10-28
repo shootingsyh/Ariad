@@ -74,7 +74,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
           verification: structuredClone(spec.verification ?? []),
           interfaceIds: [...(spec.interfaceIds ?? [])],
           issueRefs: [...(spec.issueRefs ?? [])],
-          taskKind: spec.taskKind ?? null,
+          taskKind: spec.taskKind ?? 'MILESTONE_TASK',
           ownerFeatureId: spec.ownerFeatureId ?? null,
           ownerMilestoneId: spec.ownerMilestoneId ?? null,
           art: spec.art == null ? null : structuredClone(spec.art),
@@ -89,7 +89,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
             verification: structuredClone(spec.verification ?? []),
             interfaceIds: [...(spec.interfaceIds ?? [])],
             issueRefs: [...(spec.issueRefs ?? [])],
-            taskKind: spec.taskKind ?? null,
+            taskKind: spec.taskKind ?? 'MILESTONE_TASK',
             ownerFeatureId: spec.ownerFeatureId ?? null,
             ownerMilestoneId: spec.ownerMilestoneId ?? null,
             art: spec.art == null ? null : structuredClone(spec.art),
@@ -104,7 +104,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
           store.createTask({
             id: spec.id,
             projectId,
-            scope: 'delivery',
+            taskKind: 'MILESTONE_TASK',
             stage: spec.revisionMode === 'regression'
               ? 'tester'
               : (spec.art?.required ? 'artist' : 'developer'),

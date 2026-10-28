@@ -49,7 +49,7 @@ test('scheduler dispatches authorized adhoc TL under closed Delivery, never deve
   try {
     store.createProject({id:'P',deliveryEnabled:false,deliveryPlanVersion:3});
     store.createAdhocAnalysis({projectId:'P',id:'diagnose',requestedBy:'operator',instruction:'Investigate'});
-    store.createTask({id:'D',projectId:'P',scope:'delivery',stage:'developer',milestoneId:'V2.1'});
+    store.createTask({ taskKind: 'MILESTONE_TASK',id:'D',projectId:'P',scope:'delivery',stage:'developer',milestoneId:'V2.1'});
     const called=[];
     const roles=new RoleRegistry();
     roles.register('tech_lead',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
@@ -75,8 +75,8 @@ test('STOPPED scheduling dispatches only ad-hoc TL; planning and delivery remain
   try {
     store.createProject({ id: 'P', deliveryEnabled: true, deliveryPlanVersion: 3 });
     store.createAdhocAnalysis({ projectId: 'P', id: 'inspect', requestedBy: 'operator', instruction: 'Inspect' });
-    store.createTask({ id: 'D', projectId: 'P', stage: 'developer', milestoneId: 'M1' });
-    store.createTask({ id: 'C', projectId: 'P', scope: 'control',
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'D', projectId: 'P', stage: 'developer', milestoneId: 'M1' });
+    store.createTask({ taskKind: 'PLANNING', id: 'C', projectId: 'P', scope: 'control',
       flowId: 'planner:P:unrelated', stage: 'tech_lead', state: 'READY' });
     store.enqueuePlanningRequest({ id: 'new-plan', projectId: 'P', request: { purpose: 'PLANNER_DECOMPOSE' } });
     const calls = [];
@@ -174,7 +174,7 @@ test('offline E2E: STOPPED project completes ad-hoc TL with durable result, no d
     });
     const db = new SQLiteV2Store(project.stateDb);
     try {
-      db.createTask({ id: 'D-untouched', projectId: project.id, scope: 'delivery',
+      db.createTask({ taskKind: 'MILESTONE_TASK', id: 'D-untouched', projectId: project.id, scope: 'delivery',
         stage: 'developer', milestoneId: 'M1' });
     } finally { db.close(); }
     for (let i = 0; i < 4; i++) await service.reconcileProject(manager.status(project.id));
@@ -280,9 +280,9 @@ test('STOPPED scheduler cannot advance unrelated results or dispatch developer e
   let launches = 0;
   try {
     store.createProject({ id: 'NEG', deliveryEnabled: true, deliveryPlanVersion: 3 });
-    store.createTask({ id: 'developer-ready', projectId: 'NEG', scope: 'delivery',
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'developer-ready', projectId: 'NEG', scope: 'delivery',
       stage: 'developer', milestoneId: 'M1' });
-    store.createTask({ id: 'delivery-result', projectId: 'NEG', scope: 'delivery',
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'delivery-result', projectId: 'NEG', scope: 'delivery',
       stage: 'tester', milestoneId: 'M1', state: 'RESULT_READY',
       history: [{ type: 'ROLE_RESULT', role: 'tester', outcome: 'PASS' }] });
     const roles = new RoleRegistry();
@@ -320,7 +320,7 @@ test('restart recovery audits only stopped ad-hoc tasks, without touching suspen
       provider: 'fake', externalId: 'missing-session',
       attemptId: 'attempt-old', resources: [], role: 'developer',
     };
-    store.createTask({
+    store.createTask({ taskKind: 'MILESTONE_TASK',
       id: 'suspended-dev', projectId: 'R', scope: 'delivery',
       stage: 'developer', milestoneId: 'M1', state: 'WORKING',
       execution: working,

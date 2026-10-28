@@ -6,7 +6,7 @@ import { scopeOfTask } from './control-task-policy.js';
  */
 export function isApprovalGateTask(task) {
   const milestone = String(task?.milestoneId ?? task?.input?.milestoneId ?? '');
-  const kind = String(task?.taskKind ?? task?.input?.taskKind ?? '');
+  const kind = String(task?.taskKind ?? '');
   return kind === 'approval_gate'
     || kind === 'human_gate'
     || /(?:^|[.])GATE$/i.test(milestone);

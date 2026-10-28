@@ -79,7 +79,7 @@ test('V2 scheduler and supervisor can use pydantic-v2 with provider-terminal com
 
   try {
     store.createProject({ id: 'P2', spec: 'standalone runtime' });
-    store.createTask({ id: 'T2', projectId: 'P2', stage: 'developer' });
+    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T2', projectId: 'P2', stage: 'developer' });
 
     const roles = new RoleRegistry();
     for (const stage of ['developer', 'test_engineer', 'tester', 'reviewer']) {
@@ -292,7 +292,7 @@ test('standalone project runtime drives default developer tester reviewer roles 
     workspace: project.workspace,
     deliveryEnabled: true,
   });
-  seed.createTask({
+  seed.createTask({ taskKind: 'MILESTONE_TASK',
     id: 'T-default-pipeline',
     projectId: project.id,
     stage: 'developer',

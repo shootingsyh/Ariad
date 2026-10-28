@@ -7,11 +7,11 @@ import { persistRoleExecutorTransition } from '../src/v2/role-executor-persisten
 function fixture() {
   const store = new SQLiteV2Store(':memory:');
   store.createProject({ id: 'P' });
-  store.createTask({
+  store.createTask({ taskKind: 'MILESTONE_TASK',
     id: 'blocked', projectId: 'P', scope: 'delivery', stage: 'project_debugger',
     state: 'SYSTEM_BLOCKED', history: [],
   });
-  store.createTask({
+  store.createTask({ taskKind: 'MILESTONE_TASK',
     id: 'debug', projectId: 'P', scope: 'delivery', stage: 'project_debugger',
     state: 'RESULT_READY', input: { blockedTaskId: 'blocked' },
     history: [{ type: 'ROLE_RESULT', role: 'project_debugger', outcome: 'WRONG_IMPLEMENTATION_APPROACH' }],
@@ -47,7 +47,7 @@ test('stale debugger version rolls back blocked-task update', () => {
 test('debugger cannot update another project through blocked route', () => {
   const store = fixture();
   store.createProject({ id: 'Q' });
-  store.createTask({ id: 'foreign', projectId: 'Q', scope: 'delivery', stage: 'developer', state: 'SYSTEM_BLOCKED' });
+  store.createTask({ taskKind: 'MILESTONE_TASK', id: 'foreign', projectId: 'Q', scope: 'delivery', stage: 'developer', state: 'SYSTEM_BLOCKED' });
   const task = store.getTask('debug');
   assert.throws(() => store.applyExecutorBlockedRoute({
     taskId: task.id, expectedVersion: task.version, patch: { state: 'DONE' },
@@ -119,7 +119,7 @@ test('recovered blocked task cannot be overwritten by stale debugger', async () 
 
 test('frontier guided retry persists request and skips finalize together', async () => {
   const store = fixture();
-  store.createTask({ id: 'planner:B:frontier-finalize', projectId: 'P', scope: 'control', flowId: 'planner:B',
+  store.createTask({ taskKind: 'PLANNING', id: 'planner:B:frontier-finalize', projectId: 'P', scope: 'control', flowId: 'planner:B',
     stage: 'pm', state: 'READY' });
   store.createTask({ id: 'frontier', projectId: 'P', scope: 'control', flowId: 'planner:B',
     taskKind: 'DIAGNOSTIC', stage: 'project_debugger', state: 'RESULT_READY',
