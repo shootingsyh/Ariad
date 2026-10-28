@@ -7,6 +7,7 @@ import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
+import { createAriadConfigService, probeLocalEndpoint } from './config-service.js';
 
 function usage() {
   return [
@@ -18,6 +19,11 @@ function usage() {
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
     '  ariad config local-endpoint <url> [--projects-root <path>]',
+    '  ariad config show',
+    '  ariad config probe <base-url>',
+    '  ariad config set-roles <json>',
+    '  ariad config add-provider <json>',
+    '  ariad config remove-provider <id>',
     '  ariad project {create|takeover} <name> --goal <text> --role-models <json> [--source-path <dir>]',
     '  ariad project adopt <name> --source-path <dir> [--role-models <json>]',
     '  ariad project status <name> [--projects-root <path>]',
@@ -43,6 +49,8 @@ function parse(argv) {
   let port = null;
   let issue = null;
   let interfaceId = null;
+  let providerSpec = null;
+  let providerId = null;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
@@ -50,6 +58,16 @@ function parse(argv) {
     issue = JSON.parse(arguments_.shift());
   }
   if (scope === 'config' && action === 'local-endpoint') endpoint = arguments_.shift() ?? null;
+  if (scope === 'config' && action === 'probe') endpoint = arguments_.shift() ?? null;
+  if (scope === 'config' && action === 'set-roles') {
+    if (!arguments_.length) throw new Error('config set-roles requires JSON');
+    roleModels = JSON.parse(arguments_.shift());
+  }
+  if (scope === 'config' && action === 'add-provider') {
+    if (!arguments_.length) throw new Error('config add-provider requires JSON');
+    providerSpec = JSON.parse(arguments_.shift());
+  }
+  if (scope === 'config' && action === 'remove-provider') providerId = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'set-role-models') {
     if (!arguments_.length) throw new Error('set-role-models requires JSON');
     roleModels = JSON.parse(arguments_.shift());
@@ -90,12 +108,12 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId };
 }
 
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId } = parse(argv);
   const root = resolve(process.env.ARIAD_PROJECTS_ROOT || projectsRoot || defaultProjectsRoot(homedir()));
   if (scope === 'daemon') {
     if (action === 'start') {
@@ -130,6 +148,32 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     if (!['start', 'stop', 'status'].includes(action)) throw new Error(usage());
     if (action === 'start') await ensureAriadDaemon(root);
     return daemonRequest(root, { action: 'dashboard_' + action, ...(port != null ? { port } : {}) });
+  }
+  if (scope === 'config' && action === 'show') {
+    const service = createAriadConfigService();
+    const snapshot = await service.snapshot();
+    const roleValidation = snapshot.roleDefaults
+      ? await service.validateRoleModels(snapshot.roleDefaults)
+      : null;
+    return { config: snapshot, roleValidation };
+  }
+  if (scope === 'config' && action === 'probe') {
+    if (!endpoint || !/^https?:\/\//.test(endpoint)) throw new Error('config probe requires an HTTP(S) base URL');
+    return probeLocalEndpoint(endpoint);
+  }
+  if (scope === 'config' && action === 'set-roles') {
+    const service = createAriadConfigService();
+    const saved = service.setRoleDefaults(roleModels);
+    const validation = await service.validateRoleModels(saved);
+    return { saved: true, roleModels: saved, validation };
+  }
+  if (scope === 'config' && action === 'add-provider') {
+    if (!providerSpec?.id) throw new Error('config add-provider requires JSON with an id');
+    return createAriadConfigService().upsertCustomProvider(providerSpec.id, providerSpec);
+  }
+  if (scope === 'config' && action === 'remove-provider') {
+    if (!providerId) throw new Error('config remove-provider requires a provider id');
+    return createAriadConfigService().removeCustomProvider(providerId);
   }
   if (scope === 'config' && action === 'local-endpoint') {
     if (!endpoint || !/^https?:\/\//.test(endpoint)) throw new Error('local-endpoint requires an HTTP(S) URL');

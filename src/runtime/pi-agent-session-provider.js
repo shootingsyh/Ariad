@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   DefaultResourceLoader,
@@ -21,6 +21,7 @@ import {
   ariadPiPaths,
   resolveAriadPiModelRef,
 } from './pi-runtime-config.js';
+import { globalPiModelsPath, readPiModelsConfig } from './config-service.js';
 
 const RESULT_TOOL = 'ariad_role_result';
 const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'artist', 'reviewer', 'ux_reviewer']);
@@ -366,6 +367,21 @@ export function ensureLocalPiModelsConfig(path, roleModels) {
   if (!local) return false;
   let current = { providers: {} };
   if (existsSync(path)) current = JSON.parse(readFileSync(path, 'utf8'));
+  // The user's global Pi configuration (maintained by the config UI /
+  // CLI navigation layer) flows into every workspace: its providers are
+  // the base, the workspace file's own entries override, and generated
+  // llamacpp definitions fill the remaining gaps.
+  const globalPath = globalPiModelsPath();
+  if (resolve(path) !== resolve(globalPath)) {
+    const globalConfig = readPiModelsConfig(globalPath);
+    if (globalConfig?.providers) {
+      current = {
+        ...globalConfig,
+        ...current,
+        providers: { ...(globalConfig.providers ?? {}), ...(current.providers ?? {}) },
+      };
+    }
+  }
   const prior = current.providers?.llamacpp;
   const models = new Map((prior?.models ?? []).map(model => [model.id, model]));
   for (const model of local.models) models.set(model.id, model);
