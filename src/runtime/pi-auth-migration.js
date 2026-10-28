@@ -1,7 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
 function readJson(path) {
   try {
@@ -46,26 +45,6 @@ function importCodexCredential() {
   };
 }
 
-function importOpenClawMetaCredential() {
-  const stateDb = join(homedir(), '.openclaw', 'state', 'openclaw.sqlite');
-  if (!existsSync(stateDb)) return null;
-  let db;
-  try {
-    db = new DatabaseSync(stateDb, { readOnly: true });
-    const row = db.prepare(
-      "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'"
-    ).get();
-    const profiles = row?.value_json ? JSON.parse(row.value_json)?.profiles : null;
-    const meta = profiles?.['meta:default'];
-    if (meta?.type !== 'api_key' || !meta.key) return null;
-    return { type: 'api_key', key: meta.key };
-  } catch {
-    return null;
-  } finally {
-    try { db?.close(); } catch {}
-  }
-}
-
 export function migrateLegacyPiAuth(authPath, { providers = [] } = {}) {
   const requested = new Set(providers);
   const current = readJson(authPath) ?? {};
@@ -76,14 +55,6 @@ export function migrateLegacyPiAuth(authPath, { providers = [] } = {}) {
     if (credential) {
       current['openai-codex'] = credential;
       added.push('openai-codex');
-    }
-  }
-
-  if (requested.has('meta') && !current.meta && !process.env.META_API_KEY) {
-    const credential = importOpenClawMetaCredential();
-    if (credential) {
-      current.meta = credential;
-      added.push('meta');
     }
   }
 

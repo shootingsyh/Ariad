@@ -85,16 +85,13 @@ test('ariad setup prepares global Pi provider auth without exposing credentials'
 });
 
 
-test('standalone project root is default for new installs while legacy OpenClaw root remains discoverable', () => {
+test('standalone project root is always the default', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-project-root-'));
   try {
     assert.equal(defaultProjectsRoot(home), path.join(home, '.ariad', 'projects'));
     const legacy = path.join(home, '.openclaw', 'ariad', 'projects');
     fs.mkdirSync(legacy, { recursive: true });
-    assert.equal(defaultProjectsRoot(home), legacy);
-    const standalone = path.join(home, '.ariad', 'projects');
-    fs.mkdirSync(standalone, { recursive: true });
-    assert.equal(defaultProjectsRoot(home), standalone);
+    assert.equal(defaultProjectsRoot(home), path.join(home, '.ariad', 'projects'));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

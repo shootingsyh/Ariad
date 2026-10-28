@@ -11,7 +11,7 @@ function readAuth(path) {
 export function setupPiProviders({ authPath = ariadPiAuthPath() } = {}) {
   const runtimeDependencies = requireRuntimeDependencies();
   const migration = migrateLegacyPiAuth(authPath, {
-    providers: ['openai-codex', 'meta'],
+    providers: ['openai-codex'],
   });
   const auth = existsSync(authPath) ? readAuth(authPath) : {};
   const providers = {
