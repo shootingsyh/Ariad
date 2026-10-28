@@ -37,6 +37,10 @@ test('classifyDaemonState implements the watchdog matrix', () => {
   assert.equal(classifyDaemonState({ ...base, ping: null, pidAlive: true, heartbeatAgeMs: 1000 }), 'busy');
   assert.equal(classifyDaemonState({ ...base, ping: null, pidAlive: true, heartbeatAgeMs: 60000 }), 'hung');
   assert.equal(classifyDaemonState({ ...base, ping: null, pidAlive: true, heartbeatAgeMs: null }), 'hung');
+  // Defaults match the one-minute beat: a 60s-old heartbeat is normal,
+  // three missed beats (180s) is hung.
+  assert.equal(classifyDaemonState({ ping: null, pidAlive: true, heartbeatAgeMs: 60000, localBuildId: 'B' }), 'busy');
+  assert.equal(classifyDaemonState({ ping: null, pidAlive: true, heartbeatAgeMs: 200000, localBuildId: 'B' }), 'hung');
 });
 
 test('daemonLiveness reads pid and heartbeat files', () => {
@@ -50,6 +54,12 @@ test('daemonLiveness reads pid and heartbeat files', () => {
     assert.equal(live.pid, process.pid);
     assert.equal(live.pidAlive, true);
     assert.ok(live.heartbeatAgeMs >= 2000 && live.heartbeatAgeMs < 5000, `age ${live.heartbeatAgeMs}`);
+    // A heartbeat written by a previous incarnation (pid mismatch with
+    // the pid file) is a leftover: it must not feed the watchdog.
+    fs.writeFileSync(paths.heartbeat, JSON.stringify({ pid: process.pid + 999, buildId: 'B', at: new Date().toISOString() }) + '\n');
+    const mismatched = daemonLiveness(root);
+    assert.equal(mismatched.heartbeat, null);
+    assert.equal(mismatched.heartbeatAgeMs, null);
     const empty = daemonLiveness(path.join(root, 'nope'));
     assert.equal(empty.pid, null);
     assert.equal(empty.pidAlive, false);
@@ -106,6 +116,28 @@ test('watchdog: a frozen daemon with a stale heartbeat is killed and replaced', 
     const second = await daemonRequest(root, { action: 'ping' });
     assert.notEqual(second.pid, first.pid, 'hung daemon was replaced');
     assert.throws(() => process.kill(first.pid, 0), 'old pid is gone');
+  } finally {
+    try { await daemonRequest(root, { action: 'daemon_shutdown' }); } catch {}
+    await new Promise(done => setTimeout(done, 300));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pid and heartbeat files of a dead incarnation are swept before respawn', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-sweep-'));
+  try {
+    const paths = daemonPaths(root);
+    fs.mkdirSync(paths.dir, { recursive: true });
+    const { spawnSync } = await import('node:child_process');
+    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
+    fs.writeFileSync(paths.pid, deadPid + '\n');
+    fs.writeFileSync(paths.heartbeat, JSON.stringify({ pid: deadPid, buildId: 'ancient', at: new Date().toISOString() }) + '\n');
+    await ensureAriadDaemon(root);
+    const ping = await daemonRequest(root, { action: 'ping' });
+    assert.notEqual(ping.pid, deadPid);
+    const heartbeat = JSON.parse(fs.readFileSync(paths.heartbeat, 'utf8'));
+    assert.equal(heartbeat.pid, ping.pid, 'the stale heartbeat was replaced by the new incarnation');
+    assert.equal(heartbeat.buildId, ping.buildId);
   } finally {
     try { await daemonRequest(root, { action: 'daemon_shutdown' }); } catch {}
     await new Promise(done => setTimeout(done, 300));

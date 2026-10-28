@@ -31,6 +31,7 @@ export function daemonLiveness(root, { now = Date.now() } = {}) {
   try { pid = Number.parseInt(readFileSync(paths.pid, 'utf8').trim(), 10) || null; } catch {}
   let heartbeat = null;
   try { heartbeat = JSON.parse(readFileSync(paths.heartbeat, 'utf8')); } catch {}
+  if (heartbeat && heartbeat.pid !== pid) heartbeat = null;
   const heartbeatAt = heartbeat?.at ? Date.parse(heartbeat.at) : NaN;
   return {
     pid,
@@ -47,7 +48,7 @@ export function daemonLiveness(root, { now = Date.now() } = {}) {
  * heartbeat -> hung (kill and respawn; a second live daemon must never
  * share one projects root).
  */
-export function classifyDaemonState({ ping, pidAlive: alive, heartbeatAgeMs, localBuildId, hungAfterMs = 30000 }) {
+export function classifyDaemonState({ ping, pidAlive: alive, heartbeatAgeMs, localBuildId, hungAfterMs = 180000 }) {
   if (ping) return ping.buildId === localBuildId ? 'use' : 'stale';
   if (!alive) return 'spawn';
   if (heartbeatAgeMs != null && heartbeatAgeMs <= hungAfterMs) return 'busy';
@@ -88,7 +89,7 @@ export function daemonRequest(root, input, { timeoutMs = 20000 } = {}) {
   });
 }
 
-export async function ensureAriadDaemon(root, { timeoutMs = 8000, buildId = ariadBuildId(), hungAfterMs = 30000 } = {}) {
+export async function ensureAriadDaemon(root, { timeoutMs = 8000, buildId = ariadBuildId(), hungAfterMs = 180000 } = {}) {
   const paths = daemonPaths(root);
   const attemptPing = async ms => {
     try { return await daemonRequest(root, { action: 'ping' }, { timeoutMs: ms }); } catch { return null; }
@@ -125,6 +126,10 @@ export async function ensureAriadDaemon(root, { timeoutMs = 8000, buildId = aria
     }
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) { if (!(await attemptPing(400))) break; await sleep(150); }
+  }
+  if (!daemonLiveness(root).pidAlive) {
+    try { unlinkSync(paths.pid); } catch {}
+    try { unlinkSync(paths.heartbeat); } catch {}
   }
   mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
   const fd = openSync(paths.log, 'a', 0o600);
@@ -280,7 +285,7 @@ export async function serveAriad(root) {
     } catch {}
   };
   writeHeartbeat();
-  const heartbeatTimer = setInterval(writeHeartbeat, 5000);
+  const heartbeatTimer = setInterval(writeHeartbeat, 60000);
   heartbeatTimer.unref();
   await service.start();
   if (readConfig().dashboard?.enabled === true) {
