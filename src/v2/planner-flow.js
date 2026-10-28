@@ -1,3 +1,5 @@
+import { TASK_KINDS } from './control-task-policy.js';
+
 function taskId(batchId, name) {
   return `planner:${batchId}:${name}`;
 }
@@ -291,7 +293,12 @@ export function createNextPlanningBatch({ store, projectId }) {
     projectId,
     batchId,
     requestIds: pending.map(item => item.id),
-    tasks: plannerFlowTasks(batchId, requestSnapshot),
+    tasks: plannerFlowTasks(batchId, requestSnapshot).map(task => ({
+      ...task,
+      taskKind: task.input?.purpose === 'PLANNER_FRONTIER_DEBUG'
+        ? TASK_KINDS.DIAGNOSTIC
+        : TASK_KINDS.PLANNING,
+    })),
   });
 }
 

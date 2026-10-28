@@ -7,16 +7,26 @@ export const TASK_KINDS = Object.freeze({
   PLANNING: 'PLANNING',
   REVIEW_GATE: 'REVIEW_GATE',
   DIAGNOSTIC: 'DIAGNOSTIC',
+  FEATURE_TASK: 'FEATURE_TASK',
+  INTEGRATION_TASK: 'INTEGRATION_TASK',
 });
+
+export const DELIVERY_KINDS = Object.freeze([
+  TASK_KINDS.MILESTONE_TASK, TASK_KINDS.FEATURE_TASK, TASK_KINDS.INTEGRATION_TASK,
+]);
+export function isDeliveryKind(kind) {
+  return DELIVERY_KINDS.includes(kind);
+}
 
 const VALID = new Set(Object.values(TASK_KINDS));
 const ADHOC_ISSUERS = new Set(['operator', 'user', 'pm']);
 const CONTROL_ROLES = new Set(['tech_lead','tech_lead_critic','plan_validator','pm','project_debugger']);
 export function effectiveTaskKind(task) {
   const kind = task?.taskKind ?? task?.input?.taskKind;
-  // Existing compiled delivery ownership uses feature/integration as taskKind.
-  // These are valid milestone implementation subtypes, not control task kinds.
-  if (kind === 'feature' || kind === 'integration') return TASK_KINDS.MILESTONE_TASK;
+  // Legacy stored rows used the lowercase spellings; map them onto the
+  // canonical kinds. New writers stamp the canonical values directly.
+  if (kind === 'feature') return TASK_KINDS.FEATURE_TASK;
+  if (kind === 'integration') return TASK_KINDS.INTEGRATION_TASK;
   if (kind != null) return kind;
   // Historical tasks continue to use their original shape.
   return task?.scope === 'control'
@@ -27,10 +37,10 @@ export function controlTaskPolicyFailure(task) {
   const kind = effectiveTaskKind(task);
   if (!VALID.has(kind)) return 'UNKNOWN_TASK_KIND';
   if (task.scope === 'delivery') {
-    return kind === TASK_KINDS.MILESTONE_TASK ? null : 'NON_DELIVERY_TASK_IN_DELIVERY';
+    return isDeliveryKind(kind) ? null : 'NON_DELIVERY_TASK_IN_DELIVERY';
   }
   if (task.scope !== 'control') return 'INVALID_TASK_SCOPE';
-  if (kind === TASK_KINDS.MILESTONE_TASK) return 'MILESTONE_TASK_REQUIRES_DELIVERY';
+  if (isDeliveryKind(kind)) return 'MILESTONE_TASK_REQUIRES_DELIVERY';
   if (kind === TASK_KINDS.WORKFLOW) {
     if (task.executorType !== 'node-planning') return 'WORKFLOW_REQUIRES_EXECUTOR';
     if (!String(task.flowId ?? '').startsWith('workflow:')) return 'WORKFLOW_REQUIRES_WORKFLOW_FLOW';

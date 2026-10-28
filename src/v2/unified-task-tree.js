@@ -31,7 +31,7 @@ export function buildUnifiedTaskTree(artifactRoot) {
       interfaceOwner: { graph: 'milestone', nodeId: node.id },
       legacyIntegrationTaskId: ownIntegration?.id ?? null,
       verification: ownIntegration?.verification ?? [],
-      taskKind: 'integration', ownerMilestoneId: node.id, milestoneId: node.id,
+      taskKind: 'INTEGRATION_TASK', ownerMilestoneId: node.id, milestoneId: node.id,
     });
   }
   const promoted = new Map(hierarchy.items.flatMap(node => {

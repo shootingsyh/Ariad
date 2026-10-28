@@ -762,7 +762,7 @@ export function buildOwnedExecutionTasks(artifactRoot) {
       ...(base.issueRefs?.length ? { issueRefs: structuredClone(base.issueRefs) } : {}),
       logicalRefs: [base.featureId],
       dependsOn: [],
-      taskKind: 'feature',
+      taskKind: 'FEATURE_TASK',
       ownerFeatureId: base.featureId,
     });
   }
@@ -779,7 +779,7 @@ export function buildOwnedExecutionTasks(artifactRoot) {
       ...(base.issueRefs?.length ? { issueRefs: structuredClone(base.issueRefs) } : {}),
       logicalRefs: [],
       dependsOn: [],
-      taskKind: 'integration',
+      taskKind: 'INTEGRATION_TASK',
       ownerMilestoneId: base.milestoneId,
     });
   }

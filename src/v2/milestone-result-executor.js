@@ -1,4 +1,4 @@
-import { effectiveTaskKind, TASK_KINDS } from './control-task-policy.js';
+import { effectiveTaskKind, isDeliveryKind, TASK_KINDS } from './control-task-policy.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
 import { acceptanceCriterionIds } from './acceptance.js';
 
@@ -44,7 +44,7 @@ export function testPlanValidationIssues(task, result) {
 export function milestoneResultTransition(task, result, { uxReviewEnabled = false } = {}) {
   const kind = effectiveTaskKind(task);
   const diagnostic = kind === TASK_KINDS.DIAGNOSTIC && task.stage === 'project_debugger';
-  if (kind !== TASK_KINDS.MILESTONE_TASK && !diagnostic) return null;
+  if (!isDeliveryKind(kind) && !diagnostic) return null;
   // Planner-frontier diagnostics have a distinct control protocol.
 
   if (diagnostic && task.input?.purpose === 'PLANNER_FRONTIER_DEBUG') {

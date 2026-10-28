@@ -166,7 +166,7 @@ test('canonical task compiler preserves feature ownership and applies only addit
         issueRefs: ['issue:P:entry-1'],
         logicalRefs: ['entry'],
         dependsOn: ['asset-ready'],
-        taskKind: 'feature',
+        taskKind: 'FEATURE_TASK',
         ownerFeatureId: 'entry',
         milestoneRefs: ['M1'],
       },
@@ -180,7 +180,7 @@ test('canonical task compiler preserves feature ownership and applies only addit
         interfaceIds: [],
         logicalRefs: [],
         dependsOn: [],
-        taskKind: 'integration',
+        taskKind: 'INTEGRATION_TASK',
         ownerMilestoneId: 'M1',
       },
     ]);
