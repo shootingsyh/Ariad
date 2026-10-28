@@ -125,37 +125,12 @@ export class V2Supervisor {
       }
 
       if (status?.state === 'COMPLETED' && execution.completionProtocol === 'role_result_tool') {
-        // Do not redo completed role work just because the model omitted its
-        // mandatory final result-tool call. Ask the same session to submit the
-        // already-completed result once; the provider keeps that recovery run
-        // stable across supervisor audits.
-        if (typeof provider.recoverRoleResult === 'function') {
-          let recovery;
-          try {
-            recovery = await provider.recoverRoleResult(
-              { externalId: execution.externalId, taskId: task.id },
-              { attemptId: execution.attemptId, role: task.stage },
-            );
-          } catch (error) {
-            recovery = { state: 'FAILED', failure: error?.message ?? String(error) };
-          }
-          if (recovery?.state === 'RUNNING' || recovery?.state === 'QUEUED') continue;
-
-          current = this.store.getTask(task.id);
-          const recoveredResult = submittedRoleToolResult(current, execution.attemptId);
-          if (recoveredResult) {
-            this.#acceptSubmittedResult(current, recoveredResult);
-            continue;
-          }
-
-          if (recovery?.state === 'FAILED') {
-            status = { state: 'FAILED', failure: recovery.failure ?? 'ROLE_RESULT_RECOVERY_FAILED' };
-          }
-        }
-
-        const failure = status?.state === 'FAILED'
-          ? status.failure ?? 'ROLE_RESULT_RECOVERY_FAILED'
-          : 'MISSING_ROLE_RESULT_TOOL';
+        // No supervisor-side rescue branch: a session that finished its
+        // work without submitting is recovered inside the provider, which
+        // owns the session (same-session resume prompt). By the time a run
+        // reports COMPLETED with no submitted result here, that rescue has
+        // already had its chance; what remains is a missing result.
+        const failure = 'MISSING_ROLE_RESULT_TOOL';
         const incident = await this.#incident(task, failure);
         incidents.push(incident);
         this.store.appendTaskHistory(task.id, current.version, {

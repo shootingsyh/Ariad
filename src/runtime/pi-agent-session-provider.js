@@ -598,7 +598,27 @@ export class PiAgentSessionProvider {
         let result;
         try {
           await run.session.prompt(prompt);
-          result = checkTerminalResult(run);
+          try {
+            result = checkTerminalResult(run);
+          } catch (error) {
+            if (!String(error?.message ?? '').startsWith('ARIAD_ROLE_RESULT_MISSING') || record.state === 'CANCELLED') throw error;
+            // The session ended without submitting. The work may be fully
+            // done in the workspace with only the mandatory result-tool
+            // call missing — the provider owns this seam (the supervisor
+            // only ever sees run states), so the SAME session is prompted
+            // once to submit its completed result before the attempt is
+            // failed. The submission lands through the same tool and the
+            // same validation as an on-time one.
+            await run.session.prompt('You ended your turn without submitting your role result. If the assigned role work is complete, submit it now by calling ' + RESULT_TOOL + ' exactly once with the full structured result; do not redo the work and do not reply with prose instead. If the work is not actually complete, complete it first and then submit.');
+            result = checkTerminalResult(run);
+            result = {
+              ...result,
+              keyPoints: [
+                ...(result.keyPoints ?? []),
+                'ARIAD_RESULT_RECOVERED: session submitted after a same-session resume prompt',
+              ],
+            };
+          }
         } catch (error) {
           const fallbackSpec = isCodexQuotaExhaustion(error) ? codexQuotaFallbackSpec(spec) : null;
           if (!fallbackSpec || record.state === 'CANCELLED') throw error;
