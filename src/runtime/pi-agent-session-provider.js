@@ -84,6 +84,11 @@ const anchorSchema = Type.Object({
   symbol: Type.Optional(Type.String({ minLength: 1 })),
   startLine: Type.Optional(Type.Integer({ minimum: 1 })),
   endLine: Type.Optional(Type.Integer({ minimum: 1 })),
+  // Tool-issued anchors (ariad_anchor_lookup) carry the hash pin and VALID
+  // status they were resolved with; the schema must accept that canonical
+  // shape verbatim.
+  fileHash: Type.Optional(Type.String({ minLength: 1 })),
+  status: Type.Optional(Type.String({ minLength: 1 })),
 }, { additionalProperties: false });
 
 const discoveredIssueSchema = Type.Object({
@@ -119,10 +124,10 @@ export function piRoleResultToolSchema(role) {
   if (role === 'developer') {
     result = Type.Optional(openResult({
       discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
-      interfaceRealizations: Type.Optional(Type.Array(Type.Object({
+      interfaceRealizations: Type.Array(Type.Object({
         interfaceId: Type.String({ minLength: 1 }),
         anchors: Type.Array(anchorSchema),
-      }, { additionalProperties: false }))),
+      }, { additionalProperties: false })),
     }));
   } else if (role === 'test_engineer') {
     result = Type.Object({
@@ -161,20 +166,20 @@ export function piRoleResultToolSchema(role) {
         evidence: Type.Array(Type.Any()),
         reason: Type.String({ minLength: 1 }),
       }, { additionalProperties: false })),
-      interfaceVerifications: Type.Optional(Type.Array(Type.Object({
+      interfaceVerifications: Type.Array(Type.Object({
         interfaceId: Type.String({ minLength: 1 }),
         evidence: Type.Array(Type.Any()),
         anchors: Type.Optional(Type.Array(anchorSchema)),
-      }, { additionalProperties: false }))),
+      }, { additionalProperties: false })),
     }, { additionalProperties: true });
   } else if (role === 'reviewer') {
     result = Type.Optional(openResult({
       discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
-      interfaceReviews: Type.Optional(Type.Array(Type.Object({
+      interfaceReviews: Type.Array(Type.Object({
         interfaceId: Type.String({ minLength: 1 }),
         status: Type.Literal('APPROVED'),
         reason: Type.String({ minLength: 1 }),
-      }, { additionalProperties: false }))),
+      }, { additionalProperties: false })),
     }));
   } else if (role === 'tech_lead') {
     const stage = Type.Union([Type.Literal('RUN'), Type.Literal('SKIP')]);
@@ -235,10 +240,13 @@ export function piRoleResultToolSchema(role) {
 
 const deliveryDeclaredResultSchema = Type.Object({
   discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
-  interfaceRealizations: Type.Optional(Type.Array(Type.Object({
+  // Seal slots are REQUIRED in every delivery result (empty array when
+  // the role owns no interfaces of that kind): omitting them silently
+  // was the dominant seal failure mode, so the schema refuses it.
+  interfaceRealizations: Type.Array(Type.Object({
     interfaceId: Type.String({ minLength: 1 }),
     anchors: Type.Array(anchorSchema),
-  }, { additionalProperties: false }))),
+  }, { additionalProperties: false })),
   criteria: Type.Optional(Type.Array(Type.Object({
     criterionId: Type.String({ minLength: 1 }),
     status: Type.Union([
@@ -257,16 +265,16 @@ const deliveryDeclaredResultSchema = Type.Object({
     evidence: Type.Array(Type.Any()),
     reason: Type.String({ minLength: 1 }),
   }, { additionalProperties: false }))),
-  interfaceVerifications: Type.Optional(Type.Array(Type.Object({
+  interfaceVerifications: Type.Array(Type.Object({
     interfaceId: Type.String({ minLength: 1 }),
     evidence: Type.Array(Type.Any()),
     anchors: Type.Optional(Type.Array(anchorSchema)),
-  }, { additionalProperties: false }))),
-  interfaceReviews: Type.Optional(Type.Array(Type.Object({
+  }, { additionalProperties: false })),
+  interfaceReviews: Type.Array(Type.Object({
     interfaceId: Type.String({ minLength: 1 }),
     status: Type.Literal('APPROVED'),
     reason: Type.String({ minLength: 1 }),
-  }, { additionalProperties: false }))),
+  }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
 export function piDeclaredRoleResultToolSchema(role) {

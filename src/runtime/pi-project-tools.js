@@ -5,6 +5,7 @@ import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { queryInterfaces } from '../v2/interface-query.js';
+import { issueAnchor } from '../v2/interface-seal.js';
 import { sessionHistory } from './session-history.js';
 
 function textResult(value) {
@@ -17,7 +18,7 @@ function textResult(value) {
 export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_code_search',
   'ariad_interface_search',
-  'ariad_interface_contract',
+  'ariad_interface_contract', 'ariad_anchor_lookup',
   'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search',
   'ariad_memory_write',
@@ -107,6 +108,38 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
       return textResult(queryInterfaces(join(workspace, '.ariad', 'artifacts'), { interfaceId: params.interfaceId ?? null }));
     },
   });
+
+  addTool('ariad_anchor_lookup',
+    'Get ready-to-submit interface seal anchors, resolved and hash-pinned against the live workspace. Pass a symbol (optionally with its file), or a file with startLine/endLine for a range anchor. Paste the returned anchors verbatim into result.interfaceRealizations / result.interfaceVerifications; never hand-write seal anchors from memory.',
+    Type.Object({
+      symbol: Type.Optional(Type.String({ minLength: 1 })),
+      file: Type.Optional(Type.String({ minLength: 1 })),
+      startLine: Type.Optional(Type.Integer({ minimum: 1 })),
+      endLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    }, { additionalProperties: false }),
+    async (params) => {
+      const anchors = [];
+      const unresolved = [];
+      const attempt = (anchor) => {
+        const issued = issueAnchor({ workspace, anchor });
+        if (issued.ok) anchors.push(issued.anchor);
+        else unresolved.push({ ...anchor, reason: issued.reason });
+      };
+      if (params.file) resolveFile(params.file);
+      if (params.file && Number.isInteger(params.startLine) && Number.isInteger(params.endLine)) {
+        attempt({ kind: 'range', file: params.file, startLine: params.startLine, endLine: params.endLine });
+      } else if (params.symbol && params.file) {
+        attempt({ kind: 'symbol', file: params.file, symbol: params.symbol });
+      } else if (params.symbol) {
+        const hits = codeSearch(workspace, params.symbol, { limit: 20, mode: 'symbol' });
+        const files = [...new Set(hits.map(hit => hit.file).filter(Boolean))].slice(0, 20);
+        if (!files.length) unresolved.push({ kind: 'symbol', symbol: params.symbol, reason: 'NO_CANDIDATE_FILES' });
+        for (const file of files) attempt({ kind: 'symbol', file, symbol: params.symbol });
+      } else {
+        throw new Error('ariad_anchor_lookup requires a symbol, or a file with startLine and endLine');
+      }
+      return { anchors, unresolved };
+    });
 
   pi.registerTool({
     name: 'ariad_memory_search',

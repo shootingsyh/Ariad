@@ -42,8 +42,9 @@ function localResolveSymbol(workspace, anchor) {
 
   const patterns = [
     new RegExp(`^\\s*func\\s+${escapeRegExp(leaf)}\\s*\\(`),
-    new RegExp(`^\\s*(?:class|class_name)\\s+${escapeRegExp(leaf)}\\b`),
-    new RegExp(`^\\s*(?:const|var|let)\\s+${escapeRegExp(leaf)}\\b`),
+    new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?function\\s+${escapeRegExp(leaf)}\\s*\\(`),
+    new RegExp(`^\\s*(?:export\\s+)?(?:class|class_name)\\s+${escapeRegExp(leaf)}\\b`),
+    new RegExp(`^\\s*(?:export\\s+)?(?:const|var|let)\\s+${escapeRegExp(leaf)}\\b`),
   ];
   const index = lines.findIndex(line => patterns.some(pattern => pattern.test(line)));
   if (index < 0) return null;
@@ -57,7 +58,7 @@ function localResolveSymbol(workspace, anchor) {
       continue;
     }
     const nextIndent = line.match(/^\s*/)?.[0]?.length ?? 0;
-    if (nextIndent <= indent && /^\s*(func|class|class_name|const|var|let)\b/.test(line)) break;
+    if (nextIndent <= indent && /^\s*(?:export\s+)?(?:default\s+)?(func|function|class|class_name|const|var|let)\b/.test(line)) break;
     end = i;
   }
 
@@ -497,6 +498,29 @@ export async function sealRoleInterfaces({
   return { required: false, ok: true, reason: 'ROLE_HAS_NO_INTERFACE_SEAL' };
 }
 
+
+/** Resolve an anchor against the current workspace and, when it checks
+ * out, return it in canonical sealed form ({kind, file, symbol?,
+ * startLine, endLine, fileHash, status: 'VALID'}) ready to paste into a
+ * role result. This is the issuing half of the seal: validateAnchor
+ * accepts a hash-pinned VALID anchor for exactly the content that was
+ * resolved here, and fully revalidates if the file changes afterwards. */
+export function issueAnchor({ workspace, anchor }) {
+  const resolved = resolveAnchorStatically({ workspace, anchor });
+  if (!resolved.ok) return { ok: false, reason: resolved.reason, fileHash: resolved.fileHash ?? null };
+  return {
+    ok: true,
+    anchor: {
+      kind: anchor.kind,
+      file: anchor.file,
+      ...(anchor.kind === 'symbol' ? { symbol: anchor.symbol } : {}),
+      startLine: resolved.range.startLine,
+      endLine: resolved.range.endLine,
+      fileHash: resolved.fileHash,
+      status: 'VALID',
+    },
+  };
+}
 
 export function resolveAnchorStatically({ workspace, anchor, maxLines = 120 }) {
   const absolute = resolve(workspace, anchor.file);

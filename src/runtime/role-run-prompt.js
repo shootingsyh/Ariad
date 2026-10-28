@@ -165,7 +165,7 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
       '',
       legacyDeveloperSeal ? 'INTERFACE SEAL FEEDBACK' : 'ROLE SEAL FEEDBACK',
       legacyDeveloperSeal
-        ? 'The previous implementation could not be sealed. Preserve completed implementation work and do not redo unrelated work. Repair only the failed interface realization(s). Identify or create the concrete implementation and return result.interfaceRealizations with resolvable symbol/range anchors.'
+        ? 'The previous implementation could not be sealed. Preserve completed implementation work and do not redo unrelated work. Repair only the failed interface realization(s). Identify or create the concrete implementation and return the REQUIRED result.interfaceRealizations, obtaining every anchor with the ariad_anchor_lookup tool instead of writing anchors from memory.'
         : 'Ariad could not accept the previous role completion. Preserve completed work, do not redo unrelated work, and address only the listed seal failures. Follow the current role instructions for the exact structured evidence or bindings required before submitting the role result again.',
       JSON.stringify(latestRoleSealFailure, null, 2),
     );
