@@ -182,7 +182,10 @@ export async function serveAriad(root) {
     manager, provider,
     reconcileWakePath: join(paths.dir, 'reconcile.wake'),
     safetyIntervalMs: 10000,
-    memoryCurator: { async tick() { return { state: 'DISABLED' }; }, async close() {} },
+    // Memory curator intentionally NOT overridden: AriadService's default
+    // constructs the real daily curator for the Pi provider (closed loop:
+    // it distills session history into the project memory store, and the
+    // task-context artifact injects bound memories back into role runs).
     logger: { warn: (...args) => console.error(...args), error: (...args) => console.error(...args) },
   });
   const control = createAriadControlTools({ manager, service });
