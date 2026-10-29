@@ -225,6 +225,15 @@ async function runWizardSession(root) {
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
   const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId } = parse(argv);
+  // Install-level role defaults (ariad config guide / assistant /
+  // dashboard) are the create fallback: an operator who configured
+  // defaults should not have to repeat them on every create. Explicit
+  // --role-models always wins; takeover/adopt keep their own semantics.
+  let effectiveRoleModels = roleModels;
+  if (scope === 'project' && action === 'create' && effectiveRoleModels == null) {
+    const snapshot = await createAriadConfigService().snapshot();
+    if (snapshot.roleDefaults) effectiveRoleModels = snapshot.roleDefaults;
+  }
   const root = resolve(process.env.ARIAD_PROJECTS_ROOT || projectsRoot || defaultProjectsRoot(homedir()));
   if (scope === 'daemon') {
     if (action === 'start') {
@@ -320,18 +329,18 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     const id = 'operator-' + Date.now().toString(36);
     return daemonRequest(root, { action: 'operator_analyze', name, id, instruction: analysisInstruction });
   }
-  if (scope === 'project' && ['create', 'takeover', 'adopt'].includes(action) && roleModels != null) {
+  if (scope === 'project' && ['create', 'takeover', 'adopt'].includes(action) && effectiveRoleModels != null) {
     // Fail fast at the operator surface: resolve every supplied ref
     // against Pi before the project exists. Refs under providers Pi does
     // not know at all pass through unjudged (session extensions may
     // register them later); a known provider with a wrong model is a
     // typo and stops the create here.
     const config = createAriadConfigService();
-    const validation = await config.validateRoleModels(roleModels);
+    const validation = await config.validateRoleModels(effectiveRoleModels);
     const failures = [];
     for (const [role, result] of Object.entries(validation.roles)) {
       if (!result.ok && await config.providerKnown(result.provider)) {
-        failures.push(`${role}: ${roleModels[role]} (${result.reason ?? 'unresolvable'})`);
+        failures.push(`${role}: ${effectiveRoleModels[role]} (${result.reason ?? 'unresolvable'})`);
       }
     }
     if (failures.length) {
@@ -347,7 +356,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       name,
       auditSource: 'cli',
       requestId: `${process.pid}-${Date.now()}`,
-      ...(roleModels != null ? { roleModels } : {}),
+      ...(effectiveRoleModels != null ? { roleModels: effectiveRoleModels } : {}),
       ...(features != null ? { features } : {}),
       ...(action === 'set-ux-review' ? { uxReview: { enabled: goal === 'true' } } : {}),
       ...(goal != null ? { goal } : {}),
