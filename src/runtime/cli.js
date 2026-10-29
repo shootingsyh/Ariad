@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
 import { createAriadConfigService, probeLocalEndpoint } from './config-service.js';
+import { runConfigWizard } from './config-wizard.js';
+import { createInterface } from 'node:readline/promises';
 
 function usage() {
   return [
@@ -19,6 +21,7 @@ function usage() {
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
     '  ariad config local-endpoint <url> [--projects-root <path>]',
+    '  ariad config guide   (interactive; ariad setup does the same on a TTY)',
     '  ariad config show',
     '  ariad config probe <base-url>',
     '  ariad config set-roles <json>',
@@ -112,6 +115,62 @@ function parse(argv) {
 }
 
 
+function createTerminalIo() {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  const io = {
+    print: line => { process.stdout.write(String(line) + '\n'); },
+    async input(prompt, { default: def } = {}) {
+      const answer = (await rl.question(def ? `${prompt} [${def}]: ` : `${prompt}: `)).trim();
+      return answer || def || '';
+    },
+    async secret(prompt) {
+      process.stdout.write(`${prompt}: `);
+      const original = rl._writeToOutput;
+      rl._writeToOutput = () => {};
+      try {
+        return (await rl.question('')).trim();
+      } finally {
+        rl._writeToOutput = original;
+        process.stdout.write('\n');
+      }
+    },
+    async choose(title, options) {
+      io.print(title);
+      options.forEach((option, index) => io.print(`  ${index + 1}. ${option.label}${option.hint ? ` (${option.hint})` : ''}`));
+      for (;;) {
+        const answer = await io.input('输入序号');
+        const n = Number.parseInt(answer, 10);
+        if (Number.isInteger(n) && n >= 1 && n <= options.length) return n - 1;
+        io.print(`请输入 1-${options.length}`);
+      }
+    },
+    async confirm(prompt, { default: def = false } = {}) {
+      const answer = await io.input(`${prompt} (${def ? 'Y/n' : 'y/N'})`);
+      if (!answer) return def;
+      return /^y(es)?$/i.test(answer);
+    },
+    close: () => rl.close(),
+  };
+  return io;
+}
+
+async function runWizardSession(root) {
+  const io = createTerminalIo();
+  try {
+    let localBaseUrlDefault = process.env.ARIAD_LLAMACPP_BASE_URL || 'http://127.0.0.1:18080/v1';
+    try {
+      const paths = daemonPaths(root);
+      if (existsSync(paths.config)) {
+        const daemonConfig = JSON.parse(readFileSync(paths.config, 'utf8'));
+        if (typeof daemonConfig.localModelBaseUrl === 'string') localBaseUrlDefault = daemonConfig.localModelBaseUrl;
+      }
+    } catch { /* default stands */ }
+    return await runConfigWizard({ service: createAriadConfigService(), io, localBaseUrlDefault });
+  } finally {
+    io.close();
+  }
+}
+
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
   const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId } = parse(argv);
   const root = resolve(process.env.ARIAD_PROJECTS_ROOT || projectsRoot || defaultProjectsRoot(homedir()));
@@ -148,6 +207,15 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     if (!['start', 'stop', 'status'].includes(action)) throw new Error(usage());
     if (action === 'start') await ensureAriadDaemon(root);
     return daemonRequest(root, { action: 'dashboard_' + action, ...(port != null ? { port } : {}) });
+  }
+  if (scope === 'config' && action === 'guide') {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error('config guide 需要交互式终端；非交互请用 ariad config show / set-roles / add-provider');
+    }
+    return runWizardSession(root);
+  }
+  if (scope === 'setup' && process.stdin.isTTY && process.stdout.isTTY) {
+    return runWizardSession(root);
   }
   if (scope === 'config' && action === 'show') {
     const service = createAriadConfigService();

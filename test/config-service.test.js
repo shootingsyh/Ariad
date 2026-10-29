@@ -137,3 +137,23 @@ test('malformed global models.json fails loudly with its path', () => {
   writeFileSync(path, '{not json');
   assert.throws(() => readPiModelsConfig(path), /PI_MODELS_CONFIG_INVALID/);
 });
+
+
+test('saveApiKey writes a Pi api_key credential, preserves OAuth, refuses to clobber it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-auth-'));
+  const authPath = join(dir, 'auth.json');
+  writeFileSync(authPath, JSON.stringify({ 'openai-codex': { type: 'oauth', access: 'tok', refresh: 'ref', expires: 1 } }));
+  const service = createAriadConfigService({
+    modelsPath: join(dir, 'models.json'),
+    authPath,
+    installConfigPath: join(dir, 'ariad-config.json'),
+  });
+  const saved = service.saveApiKey('anthropic', 'sk-ant-xyz');
+  assert.deepEqual(saved, { saved: true, providerId: 'anthropic' });
+  assert.equal(JSON.stringify(saved).includes('sk-ant-xyz'), false);
+  const auth = JSON.parse(readFileSync(authPath, 'utf8'));
+  assert.deepEqual(auth.anthropic, { type: 'api_key', key: 'sk-ant-xyz' });
+  assert.equal(auth['openai-codex'].type, 'oauth', 'existing OAuth entry is preserved');
+  assert.throws(() => service.saveApiKey('openai-codex', 'sk-new'), /ARIAD_AUTH_OAUTH_EXISTS/);
+  assert.throws(() => service.saveApiKey('anthropic', '  '), /CONFIG_API_KEY_REQUIRED/);
+});

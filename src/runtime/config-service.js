@@ -77,6 +77,37 @@ export function removePiProvider(config, providerId) {
   return { config: { ...(config ?? {}), providers }, removed };
 }
 
+const PROVIDER_KEY_ENVS = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GEMINI_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  meta: 'META_API_KEY',
+};
+
+/**
+ * Store an API key in Pi's auth.json as {type:'api_key', key}. The key is
+ * write-only here: no function in this module ever returns it. Refuses to
+ * overwrite an OAuth credential (a subscription login) unless forced -
+ * clobbering one by pasting a key would be a nasty surprise.
+ */
+export function saveApiKeyCredential(authPath, providerId, key, { force = false } = {}) {
+  if (!providerId || typeof providerId !== 'string') throw new Error('CONFIG_PROVIDER_ID_REQUIRED');
+  if (!key || typeof key !== 'string' || !key.trim()) throw new Error('CONFIG_API_KEY_REQUIRED');
+  let auth = {};
+  if (existsSync(authPath)) {
+    try { auth = JSON.parse(readFileSync(authPath, 'utf8')); }
+    catch (error) { throw new Error(`PI_AUTH_INVALID: ${authPath}: ${error.message}`); }
+  }
+  const existing = auth[providerId];
+  if (existing?.type === 'oauth' && !force) {
+    throw new Error(`ARIAD_AUTH_OAUTH_EXISTS: ${providerId} already has an OAuth login; refusing to overwrite it with an API key`);
+  }
+  auth[providerId] = { type: 'api_key', key: key.trim() };
+  writeJsonFile(authPath, auth);
+  return { saved: true, providerId };
+}
+
 /** Probe an OpenAI-compatible endpoint the way a local server is used:
  * GET <base>/models. Never throws; reachability is data, not an error. */
 export async function probeLocalEndpoint(baseUrl, { timeoutMs = 3000, fetchImpl = fetch } = {}) {
@@ -206,6 +237,63 @@ export function createAriadConfigService({
       const { config, removed } = removePiProvider(current, providerId);
       if (removed) writePiModelsConfig(config, modelsPath);
       return { removed, providerId };
+    },
+
+    configuredProviders() {
+      const found = new Map();
+      let auth = {};
+      if (existsSync(authPath)) {
+        try { auth = JSON.parse(readFileSync(authPath, 'utf8')); } catch { auth = {}; }
+      }
+      for (const providerId of Object.keys(auth ?? {})) {
+        found.set(providerId, { id: providerId, source: 'pi-auth' });
+      }
+      for (const [providerId, envName] of Object.entries(PROVIDER_KEY_ENVS)) {
+        if (process.env[envName] && !found.has(providerId)) {
+          found.set(providerId, { id: providerId, source: `env:${envName}` });
+        }
+      }
+      for (const provider of customProviders()) {
+        if (!found.has(provider.id)) found.set(provider.id, { id: provider.id, source: 'models.json' });
+      }
+      return [...found.values()];
+    },
+
+    saveApiKey(providerId, key, options) {
+      return saveApiKeyCredential(authPath, providerId, key, options);
+    },
+
+    async listProviderModels(providerId) {
+      const models = (await runtime()).getModels(providerId) ?? [];
+      const total = model => (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
+      return models
+        .map(model => ({
+          id: model.id,
+          contextWindow: model.contextWindow ?? null,
+          maxTokens: model.maxTokens ?? null,
+          cost: model.cost ?? null,
+        }))
+        .sort((a, b) => total(b) - total(a));
+    },
+
+    /** One tiny live completion to prove a ref actually answers. Opt-in:
+     * it spends a real (minimal) API call, so callers ask first. */
+    async testModelRef(ref) {
+      const target = resolveAriadPiModelRef(ref);
+      const rt = await runtime();
+      const model = rt.getModel(target.provider, target.model);
+      if (!model) return { ref, ok: false, reason: 'MODEL_NOT_FOUND_IN_PI_CATALOG_OR_MODELS_JSON' };
+      try {
+        const reply = await rt.completeSimple(model, {
+          messages: [{ role: 'user', content: 'Reply with the single word: ok', timestamp: Date.now() }],
+        }, { maxTokens: 16 });
+        if (reply?.stopReason === 'error') {
+          return { ref, ok: false, reason: String(reply.errorMessage ?? 'provider error') };
+        }
+        return { ref, ok: true };
+      } catch (error) {
+        return { ref, ok: false, reason: String(error?.message ?? error) };
+      }
     },
 
     async snapshot() {
