@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { ProjectMemoryStore } from './project-memory.js';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAutomatedRegression } from './automated-regression.js';
@@ -128,6 +129,64 @@ function uniqueReferencedFeatures(boundary) {
     .map(stripBinding);
 }
 
+function workspaceFromArtifactRoot(artifactRoot) {
+  if (!artifactRoot) return null;
+  const artifactsDir = resolve(artifactRoot);
+  const ariDir = dirname(artifactsDir);
+  const workspace = dirname(ariDir);
+  if (basename(artifactsDir) !== 'artifacts' || basename(ariDir) !== '.ariad' || basename(workspace) !== 'workspace') return null;
+  return workspace;
+}
+
+const MEMORY_INJECTION_MAX_ENTRIES = 10;
+const MEMORY_INJECTION_MAX_BYTES = 4096;
+
+/**
+ * Memories bound to this task's interfaces, owning features, or the task
+ * itself - the consumption half of the memory loop (the daily curator is
+ * the production half). Read-only: when the project has no memory store
+ * yet, nothing is injected and no store is created as a side effect.
+ * Capped so the section can never bloat the artifact.
+ */
+function collectBoundMemories(task, artifactRoot) {
+  const workspace = workspaceFromArtifactRoot(artifactRoot);
+  if (!workspace || !task) return [];
+  if (!existsSync(join(workspace, '.ariad', 'memory.db'))) return [];
+  let store = null;
+  try {
+    store = new ProjectMemoryStore(workspace);
+    const byId = new Map();
+    const addBound = (artifactType, artifactId) => {
+      if (!artifactId) return;
+      for (const memory of store.search({ artifactType, artifactId, limit: 50 })) {
+        if (!byId.has(memory.id)) byId.set(memory.id, memory);
+      }
+    };
+    for (const interfaceId of task.interfaceIds ?? task.input?.interfaceIds ?? []) addBound('interface', interfaceId);
+    for (const featureRef of task.logicalRefs ?? task.input?.logicalRefs ?? []) addBound('feature', featureRef);
+    addBound('task', task.id);
+    const picked = [];
+    let bytes = 0;
+    for (const memory of byId.values()) {
+      const entry = {
+        kind: memory.kind,
+        text: memory.text,
+        // node:sqlite rows carry a null prototype; the artifact is plain data.
+        bindings: (memory.bindings ?? []).map(binding => ({ type: binding.type, id: binding.id })),
+      };
+      const size = JSON.stringify(entry).length;
+      if (picked.length >= MEMORY_INJECTION_MAX_ENTRIES || bytes + size > MEMORY_INJECTION_MAX_BYTES) break;
+      picked.push(entry);
+      bytes += size;
+    }
+    return picked;
+  } catch {
+    return [];
+  } finally {
+    store?.close();
+  }
+}
+
 function interfaceLookupField(artifactRoot) {
   if (!artifactRoot) return null;
   const artifactsDir = resolve(artifactRoot);
@@ -246,6 +305,7 @@ export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot =
       milestones: clone(boundaryContext.milestones ?? []),
     } : null,
     interfaceLookup: interfaceLookupField(artifactRoot),
+    memories: collectBoundMemories(task, artifactRoot),
     dependencies: boundaryContext ? {
       parentExpectations: clone(boundaryContext.parentExpectations ?? []),
       milestoneUses: clone(boundaryContext.milestoneUses ?? []),
