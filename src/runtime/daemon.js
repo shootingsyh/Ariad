@@ -235,6 +235,12 @@ export async function serveAriad(root) {
     return dashboardStatus();
   }
   const server = createServer(conn => {
+    // A client that disconnects before its response is written must never
+    // take the daemon down: without an 'error' listener, the EPIPE raised
+    // by conn.end() on a dead socket is an unhandled 'error' event and
+    // Node exits. (Reproduced live 2026-10-29: two daemon starts died
+    // within seconds when the requesting CLI went away mid-response.)
+    conn.on('error', () => {});
     let data = '';
     conn.on('data', chunk => {
       data += chunk.toString();
