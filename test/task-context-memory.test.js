@@ -60,3 +60,19 @@ test('injection is capped by count and by serialized size', () => {
   assert.ok(JSON.stringify(artifact.memories).length <= 4096, `byte cap: got ${JSON.stringify(artifact.memories).length}`);
   assert.ok(artifact.memories.length >= 5, 'the cap still admits a useful number of memories');
 });
+
+test('project isolation: memories never cross into another project, even for the same interface id', () => {
+  const a = makeWorkspace();
+  const b = makeWorkspace();
+  const storeA = new ProjectMemoryStore(a.workspace);
+  storeA.remember({ text: 'Project A secret lesson about iface-1.', kind: 'lesson', bindings: [{ type: 'interface', id: 'iface-1' }] });
+  storeA.close();
+
+  const artifactA = buildTaskContextArtifact({ task: TASK, boundaryContext: null, artifactRoot: a.artifactRoot });
+  const artifactB = buildTaskContextArtifact({ task: TASK, boundaryContext: null, artifactRoot: b.artifactRoot });
+
+  assert.equal(artifactA.memories.length, 1);
+  assert.ok(artifactA.memories[0].text.includes('Project A'));
+  assert.deepEqual(artifactB.memories, []);
+  assert.equal(existsSync(join(b.workspace, '.ariad', 'memory.db')), false);
+});
