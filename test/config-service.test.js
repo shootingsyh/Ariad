@@ -172,3 +172,37 @@ test('providerKnown separates catalog/custom providers from unknown namespaces',
   service.upsertCustomProvider('mycloud', { baseUrl: 'http://127.0.0.1:9/v1', models: [] });
   assert.equal(await service.providerKnown('mycloud'), true, 'custom models.json provider');
 });
+
+
+test('loopback providers get the placeholder key Pi requires; runtime refreshes after writes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-cfg2-'));
+  const modelsPath = join(dir, 'models.json');
+  let factoryCalls = 0;
+  const service = createAriadConfigService({
+    modelsPath,
+    authPath: join(dir, 'auth.json'),
+    installConfigPath: join(dir, 'ariad-config.json'),
+    runtimeFactory: async () => {
+      factoryCalls += 1;
+      return {
+        getModel: () => ({ contextWindow: 8192, maxTokens: 1024, cost: { input: 0, output: 0 } }),
+        getProvider: () => undefined,
+        getModels: () => [],
+      };
+    },
+  });
+  service.upsertCustomProvider('local', { baseUrl: 'http://127.0.0.1:18080/v1', models: [{ id: 'm' }] });
+  const written = JSON.parse(readFileSync(modelsPath, 'utf8'));
+  assert.equal(written.providers.local.apiKey, 'local', 'Pi will not call a credential-less provider');
+  service.upsertCustomProvider('cloud', { baseUrl: 'https://api.example.com/v1', models: [{ id: 'm' }] });
+  const written2 = JSON.parse(readFileSync(modelsPath, 'utf8'));
+  assert.equal('apiKey' in written2.providers.cloud, false, 'no placeholder invented for remote providers');
+
+  await service.validateRoleModels({ pm: 'x/y' });
+  const afterFirst = factoryCalls;
+  await service.validateRoleModels({ pm: 'x/y' });
+  assert.equal(factoryCalls, afterFirst, 'runtime is cached between reads');
+  service.upsertCustomProvider('other', { baseUrl: 'https://api.other.com/v1', models: [{ id: 'm' }] });
+  await service.validateRoleModels({ pm: 'x/y' });
+  assert.equal(factoryCalls, afterFirst + 1, 'a models.json write invalidates the cached runtime');
+});

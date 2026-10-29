@@ -10,6 +10,7 @@ import { ariadBuildId } from './build-id.js';
 import { createAriadConfigService, probeLocalEndpoint } from './config-service.js';
 import { runConfigWizard } from './config-wizard.js';
 import { installProjectSlot } from './plugin-slots.js';
+import { attemptIgnition } from './bootstrap.js';
 import { createInterface } from 'node:readline/promises';
 
 function usage() {
@@ -23,6 +24,7 @@ function usage() {
     '  ariad dashboard {start|stop|status} [--port 18793]',
     '  ariad config local-endpoint <url> [--projects-root <path>]',
     '  ariad config guide   (interactive; ariad setup does the same on a TTY)',
+    '  ariad config bootstrap   (find a model that answers, or a structured ignition-failure report)',
     '  ariad config show',
     '  ariad config probe <base-url>',
     '  ariad config set-roles <json>',
@@ -165,18 +167,27 @@ function createTerminalIo() {
   return io;
 }
 
+function localBaseUrlDefault(root) {
+  let value = 'http://127.0.0.1:18080/v1';
+  try {
+    const paths = daemonPaths(root);
+    if (existsSync(paths.config)) {
+      const daemonConfig = JSON.parse(readFileSync(paths.config, 'utf8'));
+      if (typeof daemonConfig.localModelBaseUrl === 'string') value = daemonConfig.localModelBaseUrl;
+    }
+  } catch { /* built-in default stands */ }
+  // An explicit env override wins over the persisted daemon config.
+  return process.env.ARIAD_LLAMACPP_BASE_URL || value;
+}
+
 async function runWizardSession(root) {
   const io = createTerminalIo();
   try {
-    let localBaseUrlDefault = process.env.ARIAD_LLAMACPP_BASE_URL || 'http://127.0.0.1:18080/v1';
-    try {
-      const paths = daemonPaths(root);
-      if (existsSync(paths.config)) {
-        const daemonConfig = JSON.parse(readFileSync(paths.config, 'utf8'));
-        if (typeof daemonConfig.localModelBaseUrl === 'string') localBaseUrlDefault = daemonConfig.localModelBaseUrl;
-      }
-    } catch { /* default stands */ }
-    return await runConfigWizard({ service: createAriadConfigService(), io, localBaseUrlDefault });
+    return await runConfigWizard({
+      service: createAriadConfigService(),
+      io,
+      localBaseUrlDefault: localBaseUrlDefault(root),
+    });
   } finally {
     io.close();
   }
@@ -235,6 +246,12 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       ? await service.validateRoleModels(snapshot.roleDefaults)
       : null;
     return { config: snapshot, roleValidation };
+  }
+  if (scope === 'config' && action === 'bootstrap') {
+    return attemptIgnition({
+      configService: createAriadConfigService(),
+      localBaseUrl: localBaseUrlDefault(root),
+    });
   }
   if (scope === 'config' && action === 'probe') {
     if (!endpoint || !/^https?:\/\//.test(endpoint)) throw new Error('config probe requires an HTTP(S) base URL');

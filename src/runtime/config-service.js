@@ -130,6 +130,7 @@ export function createAriadConfigService({
   runtimeFactory = null,
 } = {}) {
   let runtimePromise = null;
+  const invalidateRuntime = () => { runtimePromise = null; };
   const runtime = () => {
     runtimePromise ??= runtimeFactory
       ? runtimeFactory({ authPath, modelsPath })
@@ -221,21 +222,32 @@ export function createAriadConfigService({
           ...(model.input != null ? { input: model.input } : {}),
         };
       });
+      // Loopback endpoints (llama.cpp / Ollama / LM Studio) usually need
+      // no key, but Pi refuses to call a provider holding no credential
+      // at all - register the conventional placeholder so they just work.
+      let placeholderKey;
+      if (!provider.apiKey && typeof provider.baseUrl === 'string') {
+        try {
+          const host = new URL(provider.baseUrl).hostname;
+          if (host === 'localhost' || host === '127.0.0.1' || host === '::1') placeholderKey = 'local';
+        } catch { /* unparsable baseUrl: validation reports it later */ }
+      }
       const entry = {
         baseUrl: provider.baseUrl,
         api: provider.api ?? 'openai-completions',
-        ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+        ...(provider.apiKey ? { apiKey: provider.apiKey } : (placeholderKey ? { apiKey: placeholderKey } : {})),
         models,
       };
       const current = readPiModelsConfig(modelsPath) ?? { providers: {} };
       writePiModelsConfig(upsertPiProvider(current, providerId, entry), modelsPath);
+      invalidateRuntime();
       return { saved: true, provider: summarizeProvider(providerId, entry) };
     },
 
     removeCustomProvider(providerId) {
       const current = readPiModelsConfig(modelsPath) ?? { providers: {} };
       const { config, removed } = removePiProvider(current, providerId);
-      if (removed) writePiModelsConfig(config, modelsPath);
+      if (removed) { writePiModelsConfig(config, modelsPath); invalidateRuntime(); }
       return { removed, providerId };
     },
 
@@ -260,7 +272,9 @@ export function createAriadConfigService({
     },
 
     saveApiKey(providerId, key, options) {
-      return saveApiKeyCredential(authPath, providerId, key, options);
+      const result = saveApiKeyCredential(authPath, providerId, key, options);
+      invalidateRuntime();
+      return result;
     },
 
     /** Whether Pi knows this provider at all (built-in catalog, an

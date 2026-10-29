@@ -166,8 +166,11 @@ export function buildAriadPiModelsConfig(roleModels = {}, {
 }
 
 export function ariadPiAuthPath() {
+  // Follow Pi's agent dir like every other config path does: a relocated
+  // PI_CODING_AGENT_DIR must move the auth store too, or keys saved here
+  // land where Pi never looks.
   return process.env.ARIAD_PI_AUTH_PATH
-    || join(homedir(), '.pi', 'agent', 'auth.json');
+    || join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'auth.json');
 }
 
 export function ariadPiPaths(workspace) {
