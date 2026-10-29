@@ -9,6 +9,7 @@ import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from '.
 import { ariadBuildId } from './build-id.js';
 import { createAriadConfigService, probeLocalEndpoint } from './config-service.js';
 import { runConfigWizard } from './config-wizard.js';
+import { installProjectSlot } from './plugin-slots.js';
 import { createInterface } from 'node:readline/promises';
 
 function usage() {
@@ -27,7 +28,9 @@ function usage() {
     '  ariad config set-roles <json>',
     '  ariad config add-provider <json>',
     '  ariad config remove-provider <id>',
-    '  ariad project {create|takeover} <name> --goal <text> --role-models <json> [--source-path <dir>]',
+    '  ariad project {create|takeover} <name> --goal <text> --role-models <json> [--source-path <dir>] [--features <json>]',
+    '  ariad project slots <name>',
+    '  ariad project slots-install <name> <slot-id>',
     '  ariad project adopt <name> --source-path <dir> [--role-models <json>]',
     '  ariad project status <name> [--projects-root <path>]',
     '',
@@ -54,6 +57,8 @@ function parse(argv) {
   let interfaceId = null;
   let providerSpec = null;
   let providerId = null;
+  let features = null;
+  let slotId = null;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
@@ -71,6 +76,7 @@ function parse(argv) {
     providerSpec = JSON.parse(arguments_.shift());
   }
   if (scope === 'config' && action === 'remove-provider') providerId = arguments_.shift() ?? null;
+  if (scope === 'project' && action === 'slots-install') slotId = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'set-role-models') {
     if (!arguments_.length) throw new Error('set-role-models requires JSON');
     roleModels = JSON.parse(arguments_.shift());
@@ -94,6 +100,11 @@ function parse(argv) {
       goal = rest[++i];
       continue;
     }
+    if (rest[i] === '--features') {
+      if (!rest[i + 1]) throw new Error('--features requires JSON');
+      features = JSON.parse(rest[++i]);
+      continue;
+    }
     if (rest[i] === '--source-path') {
       if (!rest[i + 1]) throw new Error('--source-path requires a directory');
       sourcePath = resolve(rest[++i]);
@@ -111,7 +122,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId };
 }
 
 
@@ -172,7 +183,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId } = parse(argv);
   const root = resolve(process.env.ARIAD_PROJECTS_ROOT || projectsRoot || defaultProjectsRoot(homedir()));
   if (scope === 'daemon') {
     if (action === 'start') {
@@ -266,6 +277,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       auditSource: 'cli',
       requestId: `${process.pid}-${Date.now()}`,
       ...(roleModels != null ? { roleModels } : {}),
+      ...(features != null ? { features } : {}),
       ...(action === 'set-ux-review' ? { uxReview: { enabled: goal === 'true' } } : {}),
       ...(goal != null ? { goal } : {}),
       ...(sourcePath != null ? { sourcePath } : {}),
@@ -277,7 +289,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
 }
 
 export function runAriadCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot } = parse(argv);
+  const { scope, action, name, projectsRoot, slotId } = parse(argv);
 
   if (scope === 'setup') {
     return {
@@ -286,11 +298,23 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     };
   }
 
-  if (scope !== 'project' || !name || action !== 'status') {
+  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install'].includes(action)) {
     throw new Error(usage());
   }
 
   const manager = new AriadProjectManager({ projectsRoot });
+
+  if (action === 'slots') {
+    return { action, ...manager.projectSlots(name) };
+  }
+
+  if (action === 'slots-install') {
+    if (!slotId) throw new Error('slots-install requires a slot id (see: ariad project slots <name>)');
+    const project = manager.status(name);
+    return installProjectSlot({ workspace: project.workspace, manifest: project }, slotId)
+      .then(result => ({ action, project: name, ...result }));
+  }
+
   const project = manager.status(name);
 
   if (action === 'status') {

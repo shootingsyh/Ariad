@@ -29,13 +29,19 @@ export function normalizeRoleModels(value = {}) {
   return result;
 }
 
-export function missingRoleModels(roleModels = {}) {
-  return ARIAD_MODEL_ROLES.filter(role => !String(roleModels?.[role] ?? '').trim());
+export function missingRoleModels(roleModels = {}, roles = ARIAD_MODEL_ROLES) {
+  return roles.filter(role => !String(roleModels?.[role] ?? '').trim());
 }
 
-export function requireCompleteRoleModels(roleModels = {}) {
+export function requireCompleteRoleModels(roleModels = {}, { roles = ARIAD_MODEL_ROLES } = {}) {
   const normalized = normalizeRoleModels(roleModels);
-  const missing = missingRoleModels(normalized);
+  const missing = missingRoleModels(normalized, roles);
   if (missing.length) throw new Error(`Ariad role models are required before start; missing: ${missing.join(', ')}`);
   return normalized;
+}
+
+/** Roles a project actually requires models for. A project that opted
+ * out of the artist feature at startup does not owe an artist model. */
+export function requiredModelRoles({ artistEnabled = true } = {}) {
+  return ARIAD_MODEL_ROLES.filter(role => artistEnabled || role !== 'artist');
 }

@@ -6,7 +6,7 @@ import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { isAdhocAnalysis } from '../v2/control-task-policy.js';
-import { requireCompleteRoleModels } from './role-models.js';
+import { requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
 import { PROJECT_CONTROL_MACHINE, deriveProjectExecutionState } from '../v2/state-machine.js';
@@ -161,7 +161,9 @@ export class AriadService {
 
   async ensureRunning(name, audit = {}) {
     const current = this.manager.status(name);
-    requireCompleteRoleModels(current.roleModels ?? {});
+    requireCompleteRoleModels(current.roleModels ?? {}, {
+      roles: requiredModelRoles({ artistEnabled: current.features?.artist?.enabled !== false }),
+    });
     requireRuntimeDependencies();
     this.codeCapabilities.set(current.id, inspectProjectCodeCapabilities(current.workspace));
     const project = this.manager.setDesiredState(
@@ -204,7 +206,9 @@ export class AriadService {
 
   async ensureResumed(name, audit = {}) {
     const current = this.manager.status(name);
-    requireCompleteRoleModels(current.roleModels ?? {});
+    requireCompleteRoleModels(current.roleModels ?? {}, {
+      roles: requiredModelRoles({ artistEnabled: current.features?.artist?.enabled !== false }),
+    });
     requireRuntimeDependencies();
     this.codeCapabilities.set(current.id, inspectProjectCodeCapabilities(current.workspace));
     this.manager.setDesiredState(

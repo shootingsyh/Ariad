@@ -52,9 +52,9 @@ export class AriadControlTools {
     return this.manager.setRoleModels(name, normalized);
   }
 
-  create({ name, goal = null, roleModels, mode = 'NEW', sourcePath = null } = {}) {
+  create({ name, goal = null, roleModels, mode = 'NEW', sourcePath = null, features = null } = {}) {
     if (!name) throw new Error('project name is required');
-    const project = this.manager.create(name, { goal, roleModels, mode, sourcePath });
+    const project = this.manager.create(name, { goal, roleModels, mode, sourcePath, features });
     return this.service.status(project.id);
   }
 
@@ -63,10 +63,10 @@ export class AriadControlTools {
     return this.create({ name, sourcePath, goal, roleModels, mode: 'TAKEOVER' });
   }
 
-  adopt({ name, sourcePath, roleModels = null } = {}) {
+  adopt({ name, sourcePath, roleModels = null, features = null } = {}) {
     if (!name) throw new Error('project name is required');
     if (!sourcePath) throw new Error('sourcePath is required for adopt');
-    return this.manager.adopt(name, sourcePath, { roleModels });
+    return this.manager.adopt(name, sourcePath, { roleModels, features });
   }
 
   start(name, audit = {}) {

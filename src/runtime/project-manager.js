@@ -1,7 +1,8 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync, cpSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { normalizeRoleModels, requireCompleteRoleModels } from './role-models.js';
+import { normalizeRoleModels, requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
+import { artistEnabled, inspectProjectSlots } from './plugin-slots.js';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -125,10 +126,13 @@ export class AriadProjectManager {
     return { ...base, adopted: false };
   }
 
-  create(name, { goal = null, mode = null, sourcePath = null, roleModels = null, frontdeskBinding = null, projectAgent = undefined } = {}) {
+  create(name, { goal = null, mode = null, sourcePath = null, roleModels = null, frontdeskBinding = null, projectAgent = undefined, features = null } = {}) {
     const effectiveMode = mode ?? (sourcePath ? 'TAKEOVER' : 'NEW');
     if (!['NEW', 'TAKEOVER'].includes(effectiveMode)) throw new Error(`invalid project mode: ${effectiveMode}`);
-    const completeRoleModels = requireCompleteRoleModels(roleModels ?? {});
+    const artistOn = features?.artist?.enabled !== false;
+    const completeRoleModels = requireCompleteRoleModels(roleModels ?? {}, {
+      roles: requiredModelRoles({ artistEnabled: artistOn }),
+    });
     const base = this.paths(name);
     if (existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef)) {
       throw new Error(`Ariad project already exists: ${base.id}`);
@@ -175,16 +179,18 @@ export class AriadProjectManager {
       projectVersion: 0,
       activeVersion: 1,
       roleModels: completeRoleModels,
+      features: { artist: { enabled: artistOn } },
       roleModelRefVersion: ROLE_MODEL_REF_VERSION,
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {
       writeJson(base.adoptedRef, { id: base.id, workspace: adoptedWorkspace });
     }
-    return this.status(base.id);
+    const created = this.status(base.id);
+    return { ...created, slots: inspectProjectSlots({ workspace: created.workspace, manifest: created }) };
   }
 
-  adopt(name, sourcePath, { roleModels = null } = {}) {
+  adopt(name, sourcePath, { roleModels = null, features = null } = {}) {
     const base = this.paths(name);
     const exists = existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef);
     if (!exists) {
@@ -192,14 +198,16 @@ export class AriadProjectManager {
       return this.create(name, {
         mode: 'TAKEOVER',
         sourcePath,
-        roleModels: requireCompleteRoleModels(roleModels ?? {}),
+        roleModels,
+        features,
       });
     }
 
     const current = this.status(base.id);
+    const adoptRoles = requiredModelRoles({ artistEnabled: artistEnabled(current) });
     const effectiveRoleModels = roleModels == null
-      ? requireCompleteRoleModels(current.roleModels ?? {})
-      : requireCompleteRoleModels(roleModels);
+      ? requireCompleteRoleModels(current.roleModels ?? {}, { roles: adoptRoles })
+      : requireCompleteRoleModels(roleModels, { roles: adoptRoles });
     if (current.adopted) {
       return roleModels == null ? current : this.writeManifest(base.id, { roleModels: effectiveRoleModels });
     }
@@ -276,12 +284,22 @@ export class AriadProjectManager {
       frontdeskBinding,
       roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
       uxReview: manifest.uxReview?.enabled === true ? { enabled: true } : { enabled: false },
+      features: { artist: { enabled: manifest.features?.artist?.enabled !== false } },
       executionState: manifest.executionState ?? 'IDLE',
       projectVersion: Number.isInteger(manifest.projectVersion) ? manifest.projectVersion : 0,
       activeVersion: Number.isInteger(manifest.activeVersion)
         ? manifest.activeVersion
         : (Number.isInteger(manifest.projectVersion) ? manifest.projectVersion + 1 : 1),
       root: p.root,
+    };
+  }
+
+  projectSlots(name) {
+    const project = this.status(name);
+    return {
+      project: project.id,
+      workspace: project.workspace,
+      ...inspectProjectSlots({ workspace: project.workspace, manifest: project }),
     };
   }
 
