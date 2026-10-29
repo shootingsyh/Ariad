@@ -1,3 +1,5 @@
+import { slimTaskArtifactForPrompt } from './task-context-artifact.js';
+
 function compactHistory(history = []) {
   const takeoverNotes = history
     .filter(entry => entry?.type === 'TAKEOVER_NOTE')
@@ -103,7 +105,7 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
   if (context.taskArtifact) {
     const sections = [
       'ARIAD TASK ARTIFACT',
-      JSON.stringify(context.taskArtifact, null, 2),
+      JSON.stringify(slimTaskArtifactForPrompt(context.taskArtifact), null, 2),
       '',
       'ACTIVE ROLE PROTOCOL',
       context.roleProtocol || fallbackPrompt || '',
@@ -115,7 +117,7 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
       String(context.taskArtifactPath ?? ''),
       '',
       'EXECUTION DISCIPLINE',
-      'The serialized task artifact above is the single canonical task context. Do not reconstruct another task context. Stable contracts are earlier; later role slots contain accumulated evidence. Read source files on demand from anchors instead of expecting source snippets inline.',
+      'The serialized task artifact above is the single canonical task context. Do not reconstruct another task context. Stable contracts are earlier; later role slots contain accumulated evidence. Read source files on demand from anchors instead of expecting source snippets inline. Large artifacts are indexed for prompt size: sealed bindings appear as (file, symbol, line) indexes, referenced interfaces and milestones as id/title stubs, and passed regression tests as a count. The full canonical artifact is the file at TASK ARTIFACT PATH - read it, or resolve contracts with the ariad_interface_contract tool, when you need full detail.',
     ];
     return sections.filter(part => part !== '').join('\n\n');
   }

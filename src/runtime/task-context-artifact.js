@@ -143,6 +143,78 @@ function interfaceLookupField(artifactRoot) {
   };
 }
 
+/**
+ * Prompt-render slimming. The canonical artifact on disk stays complete
+ * (the seal revalidates bindings from it, and TASK ARTIFACT PATH points
+ * models at it), but the copy serialized into a role prompt does not
+ * need seal bookkeeping: bindings collapse to a (file, symbol, line)
+ * index, referenced-feature interfaces and milestones collapse to
+ * id/title stubs (full contracts resolve through the interface tool),
+ * and passed regression tests collapse to a count - failures keep
+ * their full evidence. Small artifacts pass through untouched.
+ */
+export const PROMPT_SLIM_THRESHOLD_BYTES = 24 * 1024;
+
+function slimAnchorEntry(entry) {
+  const anchor = entry?.anchor ?? entry;
+  if (!anchor || typeof anchor !== 'object') return entry;
+  return {
+    ...(anchor.kind ? { kind: anchor.kind } : {}),
+    file: anchor.file ?? null,
+    ...(anchor.symbol ? { symbol: anchor.symbol } : {}),
+    ...(anchor.startLine != null ? { startLine: anchor.startLine } : {}),
+  };
+}
+
+function slimBindings(bindings) {
+  if (!Array.isArray(bindings)) return bindings;
+  return bindings.map(binding => ({
+    ...(binding?.featureId ? { featureId: binding.featureId } : {}),
+    ...(binding?.interfaceId ? { interfaceId: binding.interfaceId } : {}),
+    anchors: Array.isArray(binding?.anchors) ? binding.anchors.map(slimAnchorEntry) : [],
+  }));
+}
+
+function stubEntry(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  return {
+    id: entry.id ?? null,
+    ...(entry.title ? { title: entry.title } : {}),
+    ...(entry.name && !entry.title ? { name: entry.name } : {}),
+  };
+}
+
+export function slimTaskArtifactForPrompt(artifact) {
+  if (!artifact || typeof artifact !== 'object') return artifact;
+  let serialized;
+  try { serialized = JSON.stringify(artifact); } catch { return artifact; }
+  if (serialized.length <= PROMPT_SLIM_THRESHOLD_BYTES) return artifact;
+  const slim = structuredClone(artifact);
+  for (const slot of ['developer', 'tester', 'reviewer', 'artist']) {
+    const roleSlot = slim[slot];
+    if (!roleSlot || typeof roleSlot !== 'object') continue;
+    if (roleSlot.interfaceRealizations) roleSlot.interfaceRealizations = slimBindings(roleSlot.interfaceRealizations);
+    if (roleSlot.interfaceVerifications) roleSlot.interfaceVerifications = slimBindings(roleSlot.interfaceVerifications);
+    if (roleSlot.interfaceReviews) roleSlot.interfaceReviews = slimBindings(roleSlot.interfaceReviews);
+  }
+  if (slim.contracts && typeof slim.contracts === 'object') {
+    if (Array.isArray(slim.contracts.referencedFeatureInterfaces)) {
+      slim.contracts.referencedFeatureInterfaces = slim.contracts.referencedFeatureInterfaces.map(stubEntry);
+    }
+    if (Array.isArray(slim.contracts.milestones)) {
+      slim.contracts.milestones = slim.contracts.milestones.map(stubEntry);
+    }
+  }
+  const regression = slim.automatedRegression;
+  if (regression && Array.isArray(regression.tests)) {
+    const failures = regression.tests.filter(entry => entry?.status && entry.status !== 'PASS');
+    regression.testSummary = { total: regression.tests.length, failed: failures.length };
+    regression.failures = failures;
+    delete regression.tests;
+  }
+  return slim;
+}
+
 export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot = null }) {
   const history = task?.history ?? [];
   const developerResult = latestRoleResult(history, 'developer');
