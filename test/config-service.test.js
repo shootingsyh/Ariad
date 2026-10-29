@@ -157,3 +157,18 @@ test('saveApiKey writes a Pi api_key credential, preserves OAuth, refuses to clo
   assert.throws(() => service.saveApiKey('openai-codex', 'sk-new'), /ARIAD_AUTH_OAUTH_EXISTS/);
   assert.throws(() => service.saveApiKey('anthropic', '  '), /CONFIG_API_KEY_REQUIRED/);
 });
+
+
+test('providerKnown separates catalog/custom providers from unknown namespaces', async () => {
+  const { service } = tempService({
+    runtimeFactory: async () => ({
+      getModel: () => undefined,
+      getProvider: id => (id === 'anthropic' ? { id } : undefined),
+      getModels: () => [],
+    }),
+  });
+  assert.equal(await service.providerKnown('anthropic'), true, 'built-in catalog provider');
+  assert.equal(await service.providerKnown('not-a-provider'), false, 'unknown namespace');
+  service.upsertCustomProvider('mycloud', { baseUrl: 'http://127.0.0.1:9/v1', models: [] });
+  assert.equal(await service.providerKnown('mycloud'), true, 'custom models.json provider');
+});

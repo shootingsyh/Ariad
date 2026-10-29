@@ -3,6 +3,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dashboardHtml } from './dashboard-page.js';
+import { createAriadConfigService } from './config-service.js';
+import { installProjectSlot } from './plugin-slots.js';
 import { scopeOfTask } from '../v2/control-task-policy.js';
 
 
@@ -262,6 +264,24 @@ function projectVersionView(manager                , name        , version      
   };
 }
 
+function readJsonBody(req) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > 1048576) { rejectPromise(new Error('request body too large')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim();
+      if (!text) { resolvePromise({}); return; }
+      try { resolvePromise(JSON.parse(text)); } catch { rejectPromise(new Error('request body must be JSON')); }
+    });
+    req.on('error', rejectPromise);
+  });
+}
+
 export class AriadDashboardService {
                    manager                ;
                    host        ;
@@ -284,6 +304,75 @@ export class AriadDashboardService {
     this.host = host;
     this.port = port;
     this.logger = logger;
+    this.configServiceOverride = null;
+  }
+
+  configService() {
+    return this.configServiceOverride ?? (this._configService ??= createAriadConfigService());
+  }
+
+  async configState() {
+    const config = this.configService();
+    const snapshot = await config.snapshot();
+    const providerIds = new Set([
+      ...config.configuredProviders().map(provider => provider.id),
+      ...snapshot.customProviders.map(provider => provider.id),
+    ]);
+    const modelsByProvider = {};
+    for (const providerId of providerIds) {
+      try {
+        modelsByProvider[providerId] = (await config.listProviderModels(providerId)).slice(0, 50);
+      } catch {
+        modelsByProvider[providerId] = [];
+      }
+    }
+    const roleValidation = snapshot.roleDefaults
+      ? await config.validateRoleModels(snapshot.roleDefaults).catch(() => null)
+      : null;
+    return { ...snapshot, modelsByProvider, roleValidation };
+  }
+
+  /** The dashboard is a local page that opens directly (no login gate);
+   * writes exist only under the config and slot-install routes. Every
+   * other POST keeps the historical read-only 405. API keys pass through
+   * to the credential store and are never echoed back. */
+  async handleWrite(req, res, url) {
+    try {
+      const body = await readJsonBody(req);
+      const config = this.configService();
+      if (url.pathname === '/api/config/api-key') {
+        json(res, 200, config.saveApiKey(body.providerId, body.key));
+        return;
+      }
+      if (url.pathname === '/api/config/role-defaults') {
+        const saved = config.setRoleDefaults(body.roleModels ?? {});
+        const validation = await config.validateRoleModels(saved);
+        json(res, 200, { saved: true, roleModels: saved, validation });
+        return;
+      }
+      if (url.pathname === '/api/config/providers') {
+        json(res, 200, config.upsertCustomProvider(body.id, body));
+        return;
+      }
+      if (url.pathname === '/api/config/providers/remove') {
+        json(res, 200, config.removeCustomProvider(body.id));
+        return;
+      }
+      if (url.pathname === '/api/config/probe') {
+        json(res, 200, await config.probeLocalEndpoint(body.baseUrl));
+        return;
+      }
+      const slotInstall = url.pathname.match(/^\/api\/projects\/([^/]+)\/slots\/install$/);
+      if (slotInstall) {
+        const project = this.manager.status(decodeURIComponent(slotInstall[1]));
+        const result = await installProjectSlot({ workspace: project.workspace, manifest: project }, body.slotId);
+        json(res, 200, { ...result, slots: this.manager.projectSlots(project.id) });
+        return;
+      }
+      json(res, 405, { error: 'read-only dashboard' });
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   async start() {
@@ -291,6 +380,10 @@ export class AriadDashboardService {
     this.server = createServer((req, res) => {
       try {
         const url = new URL(req.url ?? '/', 'http://localhost');
+        if (req.method === 'POST') {
+          this.handleWrite(req, res, url);
+          return;
+        }
         if (req.method !== 'GET') {
           json(res, 405, { error: 'read-only dashboard' });
           return;
@@ -319,6 +412,10 @@ export class AriadDashboardService {
             json(res, 404, { error: 'project id is required' });
             return;
           }
+          if (parts.length === 2 && parts[1] === 'slots') {
+            json(res, 200, this.manager.projectSlots(id));
+            return;
+          }
           if (parts.length === 2 && parts[1] === 'versions') {
             const project = this.manager.status(id);
             json(res, 200, availableVersions(project, readProjectDb(project)));
@@ -338,6 +435,12 @@ export class AriadDashboardService {
             return;
           }
           json(res, 404, { error: 'not found' });
+          return;
+        }
+        if (url.pathname === '/api/config') {
+          this.configState()
+            .then(state => json(res, 200, state))
+            .catch(error => json(res, 500, { error: error instanceof Error ? error.message : String(error) }));
           return;
         }
         if (url.pathname === '/' || url.pathname === '/index.html') {

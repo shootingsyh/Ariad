@@ -267,6 +267,24 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     const id = 'operator-' + Date.now().toString(36);
     return daemonRequest(root, { action: 'operator_analyze', name, id, instruction: analysisInstruction });
   }
+  if (scope === 'project' && ['create', 'takeover', 'adopt'].includes(action) && roleModels != null) {
+    // Fail fast at the operator surface: resolve every supplied ref
+    // against Pi before the project exists. Refs under providers Pi does
+    // not know at all pass through unjudged (session extensions may
+    // register them later); a known provider with a wrong model is a
+    // typo and stops the create here.
+    const config = createAriadConfigService();
+    const validation = await config.validateRoleModels(roleModels);
+    const failures = [];
+    for (const [role, result] of Object.entries(validation.roles)) {
+      if (!result.ok && await config.providerKnown(result.provider)) {
+        failures.push(`${role}: ${roleModels[role]} (${result.reason ?? 'unresolvable'})`);
+      }
+    }
+    if (failures.length) {
+      throw new Error(`ROLE_MODEL_VALIDATION_FAILED: ${failures.join('; ')} - fix the model refs (ariad config guide) and retry; project was not created`);
+    }
+  }
   if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
     if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'create', 'takeover', 'adopt', 'issue-open'].includes(action)) await ensureAriadDaemon(root);

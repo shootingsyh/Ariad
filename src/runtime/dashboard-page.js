@@ -30,6 +30,11 @@ a{color:inherit}
 .top-actions{margin-left:auto;display:flex;gap:8px}
 .btn{border:1px solid var(--line);background:#151d26;border-radius:10px;padding:8px 11px;cursor:pointer}
 .btn:hover{border-color:#3d4e61;background:#1a2430}
+.field{margin:10px 0}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;background:#0d1319;border:1px solid var(--line);border-radius:9px;padding:8px 10px;color:var(--text)}
+.slot-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(40,52,66,.5)}
+.chip{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
 .shell{max-width:1700px;margin:auto;padding:20px 22px 48px}
 .project-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}
 .card{background:linear-gradient(180deg,rgba(22,29,38,.96),rgba(17,23,31,.96));border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.12)}
@@ -125,11 +130,39 @@ a{color:inherit}
       <div class="top-actions">
         <button class="btn secondary hidden" id="allProjectsBtn">All projects</button>
         <button class="btn" id="refreshBtn">Refresh</button>
+        <button class="btn" id="configBtn">配置</button>
       </div>
     </div>
   </div>
   <main class="shell">
     <section id="projectList"><div id="projects" class="project-grid"></div></section>
+    <section id="configView" class="hidden">
+      <div class="grid2">
+        <div class="card" style="padding:16px">
+          <h3 style="margin-top:0">Providers</h3>
+          <div id="cfgProviders" class="small"></div>
+          <div class="field"><label>API key — 选择 provider 后粘贴（存入本机 Pi 凭证，不回显）</label><select id="cfgKeyProvider"></select></div>
+          <div class="field"><input type="password" id="cfgKeyValue" placeholder="sk-..." autocomplete="off"></div>
+          <button class="btn" id="cfgKeySave">保存 key</button> <span id="cfgKeyMsg" class="small muted"></span>
+        </div>
+        <div class="card" style="padding:16px">
+          <h3 style="margin-top:0">角色模型（安装级默认）</h3>
+          <div id="cfgRoles"></div>
+          <button class="btn" id="cfgRolesSave">保存并验证</button> <span id="cfgRolesMsg" class="small muted"></span>
+          <datalist id="cfgModelList"></datalist>
+        </div>
+        <div class="card" style="padding:16px">
+          <h3 style="margin-top:0">自定义 / 本地端点</h3>
+          <div id="cfgCustom"></div>
+          <div class="field"><label>Provider ID</label><input id="cfgProvId" placeholder="local"></div>
+          <div class="field"><label>Base URL</label><input id="cfgProvUrl" placeholder="http://127.0.0.1:18080/v1"></div>
+          <div class="field"><label>API key（可选）</label><input type="password" id="cfgProvKey" autocomplete="off"></div>
+          <div class="field"><label>模型 ID（每行一个）</label><textarea id="cfgProvModels" rows="3"></textarea></div>
+          <button class="btn" id="cfgProbe">探活并填入模型</button>
+          <button class="btn" id="cfgProvSave">保存 provider</button> <span id="cfgProvMsg" class="small muted"></span>
+        </div>
+      </div>
+    </section>
     <section id="projectExplorer" class="hidden">
       <div class="project-head">
         <div>
@@ -140,6 +173,7 @@ a{color:inherit}
         <div id="projectState"></div>
       </div>
       <div id="versions" class="version-bar"></div>
+      <div id="projectSlots" style="margin:10px 0"></div>
       <div class="view-tabs">
         <button class="tab active" data-view="feature">Feature Tree</button>
         <button class="tab" data-view="milestone">Milestone Tree</button>
@@ -186,6 +220,7 @@ a{color:inherit}
     document.getElementById('projectMeta').textContent=base.project.id+' · '+(base.project.mode||'NEW');
     document.getElementById('projectGoal').textContent=base.project.goal||'No goal';
     document.getElementById('projectState').innerHTML=badge(base.project.executionState);
+    loadSlots(id);
     state.versions=await getJson('/api/projects/'+encodeURIComponent(id)+'/versions');
     renderVersions();
     var preferred=state.versions.find(function(v){return v.current})||state.versions[state.versions.length-1];
@@ -315,9 +350,69 @@ a{color:inherit}
     else await loadProjects();
   }
   document.getElementById('refreshBtn').onclick=function(){refresh().catch(console.error)};
-  document.getElementById('allProjectsBtn').onclick=function(){state.projectId=null;state.data=null;document.getElementById('projectExplorer').classList.add('hidden');document.getElementById('projectList').classList.remove('hidden');document.getElementById('allProjectsBtn').classList.add('hidden');loadProjects().catch(console.error)};
+  document.getElementById('allProjectsBtn').onclick=function(){state.projectId=null;state.data=null;document.getElementById('projectExplorer').classList.add('hidden');document.getElementById('configView').classList.add('hidden');document.getElementById('projectList').classList.remove('hidden');document.getElementById('allProjectsBtn').classList.add('hidden');loadProjects().catch(console.error)};
   document.getElementById('closeDetail').onclick=function(){document.getElementById('detail').classList.remove('open')};
   Array.from(document.querySelectorAll('.tab')).forEach(function(t){t.onclick=function(){setView(t.getAttribute('data-view'))}});
+  async function postJson(url,body){var r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})});var t=await r.json().catch(function(){return{}});if(!r.ok)throw new Error(t.error||('HTTP '+r.status));return t}
+  var CFG_KEY_PROVIDERS=[['openai','OpenAI'],['anthropic','Anthropic (Claude)'],['google','Google (Gemini)'],['deepseek','DeepSeek'],['meta','Meta']];
+  var CFG_ROLES=['tech_lead','tech_lead_critic','pm','project_debugger','developer','tester','reviewer','artist'];
+  var cfgState=null;
+  function costLabel(m){return m&&m.cost?(' $'+m.cost.input+'/$'+m.cost.output):''}
+  async function loadConfig(){
+    cfgState=await getJson('/api/config');
+    var prov=document.getElementById('cfgProviders');
+    var lines=[];
+    Object.keys(cfgState.readiness.providers||{}).forEach(function(id){var p=cfgState.readiness.providers[id];lines.push('<div>'+(p.ready?'✓':'·')+' '+esc(id)+' <span class="muted">'+esc(p.source)+'</span></div>')});
+    (cfgState.customProviders||[]).forEach(function(p){lines.push('<div>✓ '+esc(p.id)+' <span class="muted">custom · '+esc(p.baseUrl||'')+'</span></div>')});
+    prov.innerHTML=lines.join('')||'<div class="muted">none</div>';
+    var sel=document.getElementById('cfgKeyProvider');
+    sel.innerHTML=CFG_KEY_PROVIDERS.map(function(p){return '<option value="'+p[0]+'">'+p[1]+'</option>'}).join('');
+    var dl=document.getElementById('cfgModelList');var opts=[];
+    Object.keys(cfgState.modelsByProvider||{}).forEach(function(pid){(cfgState.modelsByProvider[pid]||[]).forEach(function(m){opts.push('<option value="'+esc(pid)+'/'+esc(m.id)+'">'+esc(costLabel(m))+'</option>')})});
+    dl.innerHTML=opts.join('');
+    var roles=document.getElementById('cfgRoles');
+    var defaults=cfgState.roleDefaults||{};
+    var validationRoles=(cfgState.roleValidation&&cfgState.roleValidation.roles)||{};
+    roles.innerHTML=CFG_ROLES.map(function(role){
+      var v=validationRoles[role];
+      var mark=v?(v.ok?' <span style="color:var(--good)">ok</span>':' <span style="color:var(--bad)">'+esc(v.reason||'invalid')+'</span>'):'';
+      return '<div class="field"><label>'+role+mark+'</label><input list="cfgModelList" id="cfgRole-'+role+'" value="'+esc(defaults[role]||'')+'" placeholder="provider/model"></div>';
+    }).join('');
+    var custom=document.getElementById('cfgCustom');
+    custom.innerHTML=(cfgState.customProviders||[]).map(function(p){
+      return '<div class="slot-row"><div style="flex:1"><b>'+esc(p.id)+'</b> <span class="muted small">'+esc(p.baseUrl||'')+' · '+(p.models||[]).length+' models'+(p.hasApiKey?' · key stored':'')+'</span></div><button class="btn" data-remove-provider="'+esc(p.id)+'">删除</button></div>';
+    }).join('')||'<div class="muted small">暂无自定义 provider</div>';
+    Array.from(custom.querySelectorAll('[data-remove-provider]')).forEach(function(b){b.onclick=async function(){await postJson('/api/config/providers/remove',{id:b.getAttribute('data-remove-provider')});await loadConfig()}});
+  }
+  function showConfig(){
+    document.getElementById('projectList').classList.add('hidden');
+    document.getElementById('projectExplorer').classList.add('hidden');
+    document.getElementById('configView').classList.remove('hidden');
+    document.getElementById('allProjectsBtn').classList.remove('hidden');
+    loadConfig().catch(function(e){document.getElementById('cfgProviders').textContent=e.message});
+  }
+  async function loadSlots(id){
+    var box=document.getElementById('projectSlots');
+    try{
+      var data=await getJson('/api/projects/'+encodeURIComponent(id)+'/slots');
+      box.innerHTML='<div class="card" style="padding:12px 16px"><div class="small muted" style="margin-bottom:4px">插件槽 · 语言: '+esc((data.languages||[]).join(', ')||'无')+'</div>'+(data.slots||[]).map(function(s){
+        var chip=(s.state==='installed'||s.state==='ready')?'<span class="chip" style="color:var(--good)">'+esc(s.state)+'</span>':(s.state==='disabled'?'<span class="chip">'+esc(s.state)+'</span>':'<span class="chip" style="color:var(--warn)">'+esc(s.state)+'</span>');
+        var extra=s.kind==='lsp'?esc(s.server||'未安装')+' · '+esc(s.runtimeTier):esc(s.modelRef||'');
+        var btn=(s.kind==='lsp'&&s.state==='missing'&&s.install&&s.install.kind==='command')?'<button class="btn" data-install-slot="'+esc(s.slotId)+'">安装</button>':'';
+        return '<div class="slot-row"><div style="flex:1"><b>'+esc(s.label)+'</b> <span class="muted small">'+extra+'</span></div>'+chip+btn+'</div>';
+      }).join('')+'</div>';
+      Array.from(box.querySelectorAll('[data-install-slot]')).forEach(function(b){b.onclick=async function(){
+        b.textContent='安装中...';b.disabled=true;
+        try{await postJson('/api/projects/'+encodeURIComponent(id)+'/slots/install',{slotId:b.getAttribute('data-install-slot')})}catch(e){alert(e.message)}
+        loadSlots(id);
+      }});
+    }catch(e){box.innerHTML=''}
+  }
+  document.getElementById('configBtn').onclick=function(){showConfig()};
+  document.getElementById('cfgKeySave').onclick=async function(){var msg=document.getElementById('cfgKeyMsg');try{await postJson('/api/config/api-key',{providerId:document.getElementById('cfgKeyProvider').value,key:document.getElementById('cfgKeyValue').value});document.getElementById('cfgKeyValue').value='';msg.textContent='已保存';await loadConfig()}catch(e){msg.textContent=e.message}};
+  document.getElementById('cfgRolesSave').onclick=async function(){var msg=document.getElementById('cfgRolesMsg');var roleModels={};CFG_ROLES.forEach(function(r){var v=document.getElementById('cfgRole-'+r).value.trim();if(v)roleModels[r]=v});try{var r=await postJson('/api/config/role-defaults',{roleModels:roleModels});msg.textContent='已保存';await loadConfig()}catch(e){msg.textContent=e.message}};
+  document.getElementById('cfgProbe').onclick=async function(){var msg=document.getElementById('cfgProvMsg');try{var r=await postJson('/api/config/probe',{baseUrl:document.getElementById('cfgProvUrl').value});if(r.reachable){document.getElementById('cfgProvModels').value=(r.models||[]).join('\n');msg.textContent='连通: '+(r.models||[]).length+' 个模型'}else msg.textContent='连不上: '+(r.error||'')}catch(e){msg.textContent=e.message}};
+  document.getElementById('cfgProvSave').onclick=async function(){var msg=document.getElementById('cfgProvMsg');var models=document.getElementById('cfgProvModels').value.split('\n').map(function(s){return s.trim()}).filter(Boolean).map(function(id){return{id:id}});try{await postJson('/api/config/providers',{id:document.getElementById('cfgProvId').value.trim(),baseUrl:document.getElementById('cfgProvUrl').value.trim(),apiKey:document.getElementById('cfgProvKey').value||undefined,models:models});msg.textContent='已保存';await loadConfig()}catch(e){msg.textContent=e.message}};
   loadProjects().catch(function(e){document.getElementById('projects').innerHTML='<div class="card empty">'+esc(e.message)+'</div>'});
 })();
 </script>

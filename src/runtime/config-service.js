@@ -263,6 +263,16 @@ export function createAriadConfigService({
       return saveApiKeyCredential(authPath, providerId, key, options);
     },
 
+    /** Whether Pi knows this provider at all (built-in catalog, an
+     * extension registration, or a custom models.json entry). Refs under
+     * unknown providers cannot be judged at configuration time - Pi may
+     * gain them from session extensions - while a known provider with an
+     * unknown model is a plain typo. */
+    async providerKnown(providerId) {
+      if (customProviders().some(provider => provider.id === providerId)) return true;
+      return Boolean((await runtime()).getProvider(providerId));
+    },
+
     async listProviderModels(providerId) {
       const models = (await runtime()).getModels(providerId) ?? [];
       const total = model => (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
