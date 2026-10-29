@@ -18,27 +18,6 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-const ROLE_MODEL_REF_VERSION = 2;
-
-function migrateLegacyRoleModelRefs(manifest) {
-  if ((manifest.roleModelRefVersion ?? 1) >= ROLE_MODEL_REF_VERSION) return { manifest, changed: false };
-  const roleModels = { ...(manifest.roleModels ?? {}) };
-  for (const [role, ref] of Object.entries(roleModels)) {
-    const value = String(ref ?? '').trim();
-    if (value.startsWith('openai/')) {
-      roleModels[role] = `openai-codex/${value.slice('openai/'.length)}`;
-    }
-  }
-  return {
-    manifest: {
-      ...manifest,
-      roleModels,
-      roleModelRefVersion: ROLE_MODEL_REF_VERSION,
-    },
-    changed: true,
-  };
-}
-
 function ensureAriadGitignore(ariadDir) {
   const file = join(ariadDir, '.gitignore');
   if (!existsSync(file)) {
@@ -82,8 +61,6 @@ export class AriadProjectManager {
       manifest: join(ariad, 'project.json'),
       db: join(ariad, 'state.db'),
       adoptedRef: join(root, 'project-ref.json'),
-      legacyManifest: join(root, 'project.json'),
-      legacyAriad: join(root, '.ariad'),
     };
   }
 
@@ -105,27 +82,6 @@ export class AriadProjectManager {
     return { ...p, adopted: false };
   }
 
-  migrateLegacyLayout(name) {
-    const base = this.paths(name);
-    if (existsSync(base.adoptedRef)) return this.resolveProjectPaths(name);
-    if (existsSync(base.manifest) || !existsSync(base.legacyManifest)) return { ...base, adopted: false };
-    mkdirSync(base.workspace, { recursive: true });
-    if (existsSync(base.legacyAriad) && !existsSync(base.ariad)) {
-      renameSync(base.legacyAriad, base.ariad);
-    } else {
-      mkdirSync(base.ariad, { recursive: true });
-    }
-    const legacy = readJson(base.legacyManifest);
-    ensureAriadGitignore(base.ariad);
-    if (!existsSync(base.manifest)) renameSync(base.legacyManifest, base.manifest);
-    writeJson(base.manifest, {
-      ...legacy,
-      workspace: base.workspace,
-      stateDb: base.db,
-    });
-    return { ...base, adopted: false };
-  }
-
   create(name, { goal = null, mode = null, sourcePath = null, roleModels = null, frontdeskBinding = null, projectAgent = undefined, features = null } = {}) {
     const effectiveMode = mode ?? (sourcePath ? 'TAKEOVER' : 'NEW');
     if (!['NEW', 'TAKEOVER'].includes(effectiveMode)) throw new Error(`invalid project mode: ${effectiveMode}`);
@@ -134,7 +90,7 @@ export class AriadProjectManager {
       roles: requiredModelRoles({ artistEnabled: artistOn }),
     });
     const base = this.paths(name);
-    if (existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef)) {
+    if (existsSync(base.manifest) || existsSync(base.adoptedRef)) {
       throw new Error(`Ariad project already exists: ${base.id}`);
     }
 
@@ -180,7 +136,6 @@ export class AriadProjectManager {
       activeVersion: 1,
       roleModels: completeRoleModels,
       features: { artist: { enabled: artistOn } },
-      roleModelRefVersion: ROLE_MODEL_REF_VERSION,
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {
@@ -192,7 +147,7 @@ export class AriadProjectManager {
 
   adopt(name, sourcePath, { roleModels = null, features = null } = {}) {
     const base = this.paths(name);
-    const exists = existsSync(base.manifest) || existsSync(base.legacyManifest) || existsSync(base.adoptedRef);
+    const exists = existsSync(base.manifest) || existsSync(base.adoptedRef);
     if (!exists) {
       if (!sourcePath) throw new Error('sourcePath is required for adoption');
       return this.create(name, {
@@ -249,8 +204,6 @@ export class AriadProjectManager {
     // After the external durable state is complete, remove the generated workspace
     // so there is only one Ariad state location.
     if (existsSync(oldWorkspace)) rmSync(oldWorkspace, { recursive: true, force: true });
-    if (existsSync(base.legacyManifest)) rmSync(base.legacyManifest, { force: true });
-    if (existsSync(base.legacyAriad)) rmSync(base.legacyAriad, { recursive: true, force: true });
     return this.status(base.id);
   }
 
@@ -260,24 +213,18 @@ export class AriadProjectManager {
       .filter((entry) => {
         if (!entry.isDirectory()) return false;
         const p = this.paths(entry.name);
-        return existsSync(p.manifest) || existsSync(p.legacyManifest) || existsSync(p.adoptedRef);
+        return existsSync(p.manifest) || existsSync(p.adoptedRef);
       })
       .map((entry) => this.status(entry.name));
   }
 
   status(name) {
-    const p = this.migrateLegacyLayout(name);
+    const p = this.resolveProjectPaths(name);
     if (!existsSync(p.manifest)) throw new Error(`unknown Ariad project: ${p.id}`);
-    let manifest = readJson(p.manifest);
-    const migrated = migrateLegacyRoleModelRefs(manifest);
-    if (migrated.changed) {
-      manifest = migrated.manifest;
-      writeJson(p.manifest, manifest);
-    }
-    const frontdeskBinding = manifest.frontdeskBinding ?? manifest.projectAgent ?? null;
-    const { projectAgent: _legacyProjectAgent, ...rest } = manifest;
+    const manifest = readJson(p.manifest);
+    const frontdeskBinding = manifest.frontdeskBinding ?? null;
     return {
-      ...rest,
+      ...manifest,
       mode: manifest.mode ?? 'NEW',
       sourcePath: manifest.sourcePath ?? null,
       adopted: manifest.adopted ?? p.adopted ?? false,
