@@ -320,6 +320,25 @@ export function createAriadConfigService({
       }
     },
 
+    /** One text completion through a configured ref - the guided
+     * assistant's transport. Throws on an unresolvable ref or a
+     * provider error so the caller can degrade cleanly. */
+    async chatComplete(ref, systemPrompt, prompt, { maxTokens = 1024 } = {}) {
+      const target = resolveAriadPiModelRef(ref);
+      const rt = await runtime();
+      const model = rt.getModel(target.provider, target.model);
+      if (!model) throw new Error(`MODEL_NOT_FOUND_IN_PI_CATALOG_OR_MODELS_JSON: ${ref}`);
+      const reply = await rt.completeSimple(model, {
+        ...(systemPrompt ? { systemPrompt } : {}),
+        messages: [{ role: 'user', content: String(prompt ?? ''), timestamp: Date.now() }],
+      }, { maxTokens });
+      if (reply?.stopReason === 'error') throw new Error(String(reply.errorMessage ?? 'provider error'));
+      return (reply?.content ?? [])
+        .filter(block => block?.type === 'text')
+        .map(block => block.text)
+        .join('');
+    },
+
     async snapshot() {
       return {
         paths: { modelsPath, authPath, installConfigPath },

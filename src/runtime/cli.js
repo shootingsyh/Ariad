@@ -11,6 +11,7 @@ import { createAriadConfigService, probeLocalEndpoint } from './config-service.j
 import { runConfigWizard } from './config-wizard.js';
 import { installProjectSlot } from './plugin-slots.js';
 import { attemptIgnition } from './bootstrap.js';
+import { runConfigAssistant, ASSISTANT_SYSTEM_PROMPT } from './config-assistant.js';
 import { createInterface } from 'node:readline/promises';
 
 function usage() {
@@ -25,6 +26,7 @@ function usage() {
     '  ariad config local-endpoint <url> [--projects-root <path>]',
     '  ariad config guide   (interactive; ariad setup does the same on a TTY)',
     '  ariad config bootstrap   (find a model that answers, or a structured ignition-failure report)',
+    '  ariad config assistant   (interactive: the ignited model guides configuration; every change needs your confirmation)',
     '  ariad config show',
     '  ariad config probe <base-url>',
     '  ariad config set-roles <json>',
@@ -180,6 +182,34 @@ function localBaseUrlDefault(root) {
   return process.env.ARIAD_LLAMACPP_BASE_URL || value;
 }
 
+async function runAssistantSession(root) {
+  const service = createAriadConfigService();
+  const report = await attemptIgnition({
+    configService: service,
+    localBaseUrl: localBaseUrlDefault(root),
+  });
+  if (!report.ignited) {
+    return {
+      ignited: null,
+      attempts: report.attempts,
+      fallback: report.fallback,
+      hint: '点火失败不是死路：按 fallback 的下一步操作，或直接用无模型路径 ariad config guide / dashboard 配置页。',
+    };
+  }
+  const io = createTerminalIo();
+  try {
+    const result = await runConfigAssistant({
+      service,
+      io,
+      igniterRef: report.ignited.ref,
+      complete: prompt => service.chatComplete(report.ignited.ref, ASSISTANT_SYSTEM_PROMPT, prompt),
+    });
+    return { ignited: report.ignited, ...result };
+  } finally {
+    io.close();
+  }
+}
+
 async function runWizardSession(root) {
   const io = createTerminalIo();
   try {
@@ -229,6 +259,12 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     if (!['start', 'stop', 'status'].includes(action)) throw new Error(usage());
     if (action === 'start') await ensureAriadDaemon(root);
     return daemonRequest(root, { action: 'dashboard_' + action, ...(port != null ? { port } : {}) });
+  }
+  if (scope === 'config' && action === 'assistant') {
+    if (!process.stdin.isTTY) {
+      throw new Error('config assistant 需要交互式终端；非交互请用 ariad config guide 之外的命令式配置（show / set-roles / add-provider）或先跑 ariad config bootstrap 看点火状态');
+    }
+    return runAssistantSession(root);
   }
   if (scope === 'config' && action === 'guide') {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
