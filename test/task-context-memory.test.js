@@ -76,3 +76,14 @@ test('project isolation: memories never cross into another project, even for the
   assert.deepEqual(artifactB.memories, []);
   assert.equal(existsSync(join(b.workspace, '.ariad', 'memory.db')), false);
 });
+
+test('milestone-bound memories are injected via the task owner milestone', () => {
+  const { workspace, artifactRoot } = makeWorkspace();
+  const store = new ProjectMemoryStore(workspace);
+  store.remember({ text: 'Milestone-wide gate rule.', kind: 'constraint', bindings: [{ type: 'milestone', id: 'V2.1' }] });
+  store.close();
+  const task = { id: 'T9', title: 't', history: [], input: { ownerMilestoneId: 'V2.1' } };
+  const artifact = buildTaskContextArtifact({ task, boundaryContext: null, artifactRoot });
+  assert.equal(artifact.memories.length, 1);
+  assert.ok(artifact.memories[0].text.includes('Milestone-wide'));
+});

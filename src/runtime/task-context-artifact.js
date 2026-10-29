@@ -164,6 +164,7 @@ function collectBoundMemories(task, artifactRoot) {
     };
     for (const interfaceId of task.interfaceIds ?? task.input?.interfaceIds ?? []) addBound('interface', interfaceId);
     for (const featureRef of task.logicalRefs ?? task.input?.logicalRefs ?? []) addBound('feature', featureRef);
+    addBound('milestone', task.input?.ownerMilestoneId ?? task.input?.milestoneId ?? task.milestoneId);
     addBound('task', task.id);
     const picked = [];
     let bytes = 0;
