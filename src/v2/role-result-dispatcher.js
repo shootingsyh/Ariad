@@ -64,9 +64,17 @@ export class RoleResultDispatcher {
       if (!result) throw new Error(`task ${task.id} is RESULT_READY without a role result`);
       const role = this.roles.get(task.stage);
       const entry = table[task.taskKind];
-      const next = (entry ? entry(task, result, role) : null)
-        ?? await fallbackTransition(role, task, result);
-      await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
+      try {
+        const next = (entry ? entry(task, result, role) : null)
+          ?? await fallbackTransition(role, task, result);
+        await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
+      } catch (error) {
+        // A transition that must wait for in-flight delivery execution is
+        // deferred, not failed: the task stays RESULT_READY with its result
+        // intact and a later tick retries the same transition.
+        if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') continue;
+        throw error;
+      }
     }
   }
 }

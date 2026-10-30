@@ -47,11 +47,21 @@ export function verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId}
 }
 
 // Runtime loading gate for projects explicitly prepared on an isolated copy.
-// It never invokes the legacy planner and never writes the database.
+// It never invokes the legacy planner and never writes the database. The
+// human delivery gate (project.deliveryEnabled) belongs to the scheduler's
+// dispatch filter; this read-only load instead requires the factual
+// precondition it actually depends on: no delivery execution in flight.
+// Tick-loop callers (the PM acceptance) treat UNIFIED_TASK_DELIVERY_IN_FLIGHT
+// as "retry on a later tick", never as a failure.
 export function loadPreparedUnifiedTaskTree({artifactRoot,store,projectId}) {
   const project=store.getProject(projectId);
   if(project?.unifiedTaskCompilerVersion!==1) throw new Error('UNIFIED_TASK_COMPILER_NOT_PREPARED');
-  if(project.deliveryEnabled!==false) throw new Error('UNIFIED_TASK_DELIVERY_NOT_LOCKED');
+  const inFlight=store.listTasks(projectId,{scope:'delivery'}).filter(task=>task.state==='WORKING');
+  if(inFlight.length){
+    const error=new Error(`UNIFIED_TASK_DELIVERY_IN_FLIGHT: ${inFlight.map(task=>task.id).join(',')}`);
+    error.code='UNIFIED_TASK_DELIVERY_IN_FLIGHT';
+    throw error;
+  }
   const compatibility=verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId});
   if(!compatibility.ok) throw new Error('UNIFIED_TASK_COMPILER_STORE_DRIFT: '+JSON.stringify(compatibility.issues));
   const compiled=compileUnifiedTaskTree(artifactRoot);

@@ -30,16 +30,17 @@ test('compiler/store verifier flags missing and incompatible migrated tasks',asy
  assert.equal(mismatch.issues[0].code,'DEPENDENCY_DRIFT');
 });
 
-test('prepared unified loader refuses unprepared, unlocked, or drifted projects',async()=>{
+test('prepared unified loader refuses unprepared, in-flight, or drifted projects',async()=>{
  const {loadPreparedUnifiedTaskTree}=await import('../src/v2/unified-task-compiler.js');
  const compiled=compileUnifiedTaskTree(root);
- let project={unifiedTaskCompilerVersion:1,deliveryEnabled:false,unifiedTaskHistoricalExceptions:[]};
+ let project={unifiedTaskCompilerVersion:1,deliveryEnabled:true,unifiedTaskHistoricalExceptions:[]};
  let rows=compiled.tasks.map(t=>({...t}));
  const store={getProject:()=>project,listTasks:()=>rows};
+ // The human delivery gate is the scheduler's dispatch concern; the loader
+ // ignores it and loads while no delivery execution is in flight.
  assert.equal(loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}).tasks.length,78);
- project={...project,deliveryEnabled:true};
- assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/DELIVERY_NOT_LOCKED/);
- project={...project,deliveryEnabled:false};
+ rows=rows.map((t,i)=>i===0?{...t,state:'WORKING'}:t);
+ assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/DELIVERY_IN_FLIGHT/);
  rows=rows.slice(1);
  assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/STORE_DRIFT/);
 });

@@ -58,3 +58,32 @@ test('dispatcher preserves the adhocOnly filter', async () => {
   const executor = new RoleResultDispatcher({ store, roles });
   await executor.advanceResults('P', { adhocOnly: true });
 });
+
+test('dispatcher defers a transition waiting on in-flight delivery', async () => {
+  const task = {
+    id: 'PM', projectId: 'P', version: 2, scope: 'control',
+    taskKind: 'PLANNING', stage: 'pm', state: 'RESULT_READY',
+    history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED' }],
+  };
+  let updates = 0;
+  const store = { listTasks: () => [task], updateTask: () => { updates += 1; } };
+  const roles = { get: () => ({ transition: () => {
+    const error = new Error('UNIFIED_TASK_DELIVERY_IN_FLIGHT: T1');
+    error.code = 'UNIFIED_TASK_DELIVERY_IN_FLIGHT';
+    throw error;
+  } }) };
+  await new RoleResultDispatcher({ store, roles }).advanceResults('P');
+  assert.equal(updates, 0);
+  assert.equal(task.state, 'RESULT_READY');
+});
+
+test('dispatcher still propagates other transition errors', async () => {
+  const task = {
+    id: 'PM', projectId: 'P', version: 2, scope: 'control',
+    taskKind: 'PLANNING', stage: 'pm', state: 'RESULT_READY',
+    history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED' }],
+  };
+  const store = { listTasks: () => [task], updateTask: () => {} };
+  const roles = { get: () => ({ transition: () => { throw new Error('BOOM'); } }) };
+  await assert.rejects(new RoleResultDispatcher({ store, roles }).advanceResults('P'), /BOOM/);
+});
