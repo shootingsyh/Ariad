@@ -76,10 +76,23 @@ export function loadPreparedUnifiedTaskTree({artifactRoot,store,projectId}) {
 // unfinished tasks take the approved spec, dropped unfinished tasks are
 // obsoleted, and accepted or in-flight work is never rewritten. Mirrors the
 // conservatism of the legacy task-tree reconciler. All writes are atomic.
+// The gate signature is exactly the field set verifyUnifiedCompilerAgainstStore
+// checks: structure, not prose. Stored DONE aggregates were written at
+// migration time from an earlier spec text, so their title/intent/acceptance
+// prose legitimately differs from today's artifact text; demanding prose
+// equality would false-block every later PM acceptance (batch-55: V2.1/V2.3
+// aggregates differ only in prose, yet were reported as REVISE_COMPLETED_TASK).
+// Prose refreshes are applied to unfinished tasks only; DONE/blocked work is
+// never rewritten either way, so tolerating prose drift there costs nothing.
+const unifiedGateSignature = task => JSON.stringify([
+  task.parentId ?? null, task.executionMode ?? null,
+  task.dependsOn ?? [], task.interfaceIds ?? [],
+]);
 const unifiedSpecSignature = task => JSON.stringify([
-  task.parentId ?? null, task.executionMode ?? null, task.title ?? null, task.intent ?? null,
+  unifiedGateSignature(task),
+  task.title ?? null, task.intent ?? null,
   task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
-  task.testStrategy ?? null, task.dependsOn ?? [], task.interfaceIds ?? [],
+  task.testStrategy ?? null,
 ]);
 
 export function reconcileUnifiedTaskTree({artifactRoot,store,projectId}) {
@@ -103,10 +116,17 @@ export function reconcileUnifiedTaskTree({artifactRoot,store,projectId}) {
     const task=current.get(spec.id);
     if(!task){creates.push(spec);continue;}
     if(unifiedSpecSignature(task)===unifiedSpecSignature(spec)) continue;
-    if(task.state==='DONE') issues.push({id:task.id,reason:'REVISE_COMPLETED_TASK'});
-    else if(task.state==='WORKING'||task.state==='RESULT_READY'||task.execution) inFlightChanged.push(task.id);
-    else if(task.state==='NEEDS_HUMAN'||task.state==='SYSTEM_BLOCKED') issues.push({id:task.id,reason:'REVISE_BLOCKED_TASK'});
-    else updates.push(spec);
+    // Structural drift (the gate fields) is a genuine revision of accepted
+    // work; prose-only drift is tolerated and never rewrites DONE/blocked
+    // tasks, and never touches in-flight ones.
+    if(unifiedGateSignature(task)!==unifiedGateSignature(spec)){
+      if(task.state==='DONE') issues.push({id:task.id,reason:'REVISE_COMPLETED_TASK'});
+      else if(task.state==='WORKING'||task.state==='RESULT_READY'||task.execution) inFlightChanged.push(task.id);
+      else if(task.state==='NEEDS_HUMAN'||task.state==='SYSTEM_BLOCKED') issues.push({id:task.id,reason:'REVISE_BLOCKED_TASK'});
+      else updates.push(spec);
+    } else if(['READY','WAITING_REPLAN'].includes(task.state)) {
+      updates.push(spec);
+    }
   }
   for(const task of existing){
     if(wanted.has(task.id)||task.state==='OBSOLETE'||task.state==='SKIPPED') continue;

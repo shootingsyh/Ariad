@@ -57,7 +57,7 @@ test('PM PLAN_ACCEPTED persists a NEW project initial tree without legacy plan w
 
 import { compileUnifiedTaskTree } from '../src/v2/unified-task-compiler.js';
 
-function unifiedFixture(dir, { withFix = false, implementIntent = 'Working app' } = {}) {
+function unifiedFixture(dir, { withFix = false, implementIntent = 'Working app', implementDependsOnFix = false } = {}) {
   const workspace = join(dir, 'workspace');
   const artifactRoot = join(workspace, '.ariad', 'artifacts');
   const planner = join(artifactRoot, 'planner');
@@ -81,7 +81,7 @@ function unifiedFixture(dir, { withFix = false, implementIntent = 'Working app' 
     id: 'M1', title: 'Full delivery', goal: 'Working app', parentId: null, dependsOn: [], logicalRefs: ['project'],
     acceptanceCriteria: ['Functional app'], testStrategy: 'Run app tests', tasks: docEntries,
   });
-  const taskLinks = [{ taskId: 'implement', addDependsOn: [], addVerification: [] }];
+  const taskLinks = [{ taskId: 'implement', addDependsOn: implementDependsOnFix ? ['fix-logs'] : [], addVerification: [] }];
   if (withFix) taskLinks.push({ taskId: 'fix-logs', addDependsOn: [], addVerification: [] });
   save(join(planner, 'interfaces', 'milestones', 'M1.json'), {
     version: 1, nodeId: 'M1', nodeType: 'milestone', decomposition: { kind: 'leaf', reason: 'bounded' },
@@ -134,7 +134,7 @@ test('PM PLAN_ACCEPTED on a unified project blocks when the plan would revise DO
     seedUnified(store, artifactRoot);
     const done = store.getTask('implement');
     store.updateTask('implement', done.version, { state: 'DONE' });
-    unifiedFixture(dir, { implementIntent: 'Rewritten semantics' });
+    unifiedFixture(dir, { withFix: true, implementDependsOnFix: true });
     const roles = createDefaultV2Roles({ store, workspace, artifactRoot, providerId: 'fake', codeProviderId: 'ariad-code' });
     const result = roles.pm.transition({ task: pmTask('pm-3'), result: accept });
     // The gate ladder intercepts the block: the plan goes back to the tech

@@ -109,16 +109,29 @@ test('reconcile is a no-op when the store already matches the plan', (t) => {
   assert.deepEqual(result, { created: [], updated: [], obsoleted: [], total: 2 });
 });
 
-test('reconcile refuses to revise a DONE task and writes nothing', (t) => {
+test('reconcile refuses structural revisions to a DONE task and writes nothing', (t) => {
   const { dir, artifactRoot, store } = fixture(t);
   const t1 = store.getTask('T1');
   store.updateTask('T1', t1.version, { state: 'DONE', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
-  buildArtifacts(dir, { withT2: true, t1Intent: 'Changed semantics.' });
+  buildArtifacts(dir, { withT2: true, t1DependsOnT2: true });
   assert.throws(
     () => reconcileUnifiedTaskTree({ artifactRoot, store, projectId: 'P' }),
     (error) => error.issues?.some((issue) => issue.reason === 'REVISE_COMPLETED_TASK'),
   );
   assert.equal(store.getTask('T2'), null);
+  assert.deepEqual(store.getTask('T1').dependsOn, []);
+});
+
+test('reconcile tolerates prose drift on DONE tasks without rewriting them', (t) => {
+  const { dir, artifactRoot, store } = fixture(t);
+  const t1 = store.getTask('T1');
+  store.updateTask('T1', t1.version, { state: 'DONE', history: [{ type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' }] });
+  // Migration-era DONE aggregates carry older prose than today's artifacts
+  // (batch-55 false block: V2.1/V2.3 differed only in title/intent text).
+  buildArtifacts(dir, { t1Intent: 'Changed semantics.' });
+  const result = reconcileUnifiedTaskTree({ artifactRoot, store, projectId: 'P' });
+  assert.deepEqual(result, { created: [], updated: [], obsoleted: [], total: 2 });
+  assert.equal(store.getTask('T1').state, 'DONE');
   assert.equal(store.getTask('T1').intent, 'Do T1.');
 });
 
