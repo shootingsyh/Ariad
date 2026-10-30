@@ -465,6 +465,7 @@ export function plannerArtifactInstructions(artifactRoot) {
     'PLANNER ARTIFACT TRANSPORT',
     'Do NOT return or write one monolithic project-plan JSON.',
     'The filesystem is the artifact registry; there is no manifest.',
+    'Existing planner JSON artifacts (milestone, boundary-contract and logical files) are NEVER edited as text: change them only with the ariad_planner_patch tool, which takes structured operations (addItem/updateItem/removeItem/setTop), validates the whole planner tree on a staged copy, and only then writes. Direct edit/write on an existing planner JSON file is blocked by runtime policy. Create a brand-new planner file with write (or a createDocument patch op); afterwards change it only through ariad_planner_patch.',
     `Write logical artifacts as flat JSON files in: ${logicalDir}`,
     `Write milestone artifacts as flat JSON files in: ${milestoneDir}`,
     'Use exactly <id>.json. IDs may contain dots for hierarchy (for example battle.combat or M1.1.2) but filenames/directories do not define parentage.',

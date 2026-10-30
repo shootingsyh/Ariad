@@ -122,6 +122,31 @@ test('planning roles get minimal tool tiers and bash stays confined to the works
   assert.equal(deliveryToolPolicy('developer', 'bash', { ...ws, input: { command: 'cat ~/.ssh/config' } })?.block, true);
 });
 
+test('tech lead planner artifacts are patch-only at runtime; creation stays open', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-tl-policy-'));
+  try {
+    const ws = { workspace };
+    const milestone = '.ariad/artifacts/planner/milestones/M1.json';
+    const contract = '.ariad/artifacts/planner/interfaces/features/game.json';
+    const existing = path.join(workspace, milestone);
+    fs.mkdirSync(path.dirname(existing), { recursive: true });
+    fs.writeFileSync(existing, '{}\n');
+    assert.equal(deliveryToolPolicy('tech_lead', 'edit', { ...ws, input: { path: milestone } })?.block, true, 'TL cannot edit existing milestone JSON');
+    assert.equal(deliveryToolPolicy('tech_lead', 'edit', { ...ws, input: { path: contract } })?.block, true, 'TL cannot edit existing contract JSON');
+    assert.equal(deliveryToolPolicy('tech_lead', 'write', { ...ws, input: { path: milestone } })?.block, true, 'TL cannot overwrite an existing planner file');
+    assert.equal(deliveryToolPolicy('tech_lead', 'write', { ...ws, input: { path: '.ariad/artifacts/planner/milestones/M2.json' } }), null, 'TL may create a new planner file with write');
+    assert.equal(deliveryToolPolicy('tech_lead', 'edit', { ...ws, input: { path: 'src/main.js' } }), null, 'TL edits outside planner artifacts are unaffected');
+    assert.equal(deliveryToolPolicy('tech_lead', 'edit', { ...ws, input: { path: '.ariad/artifacts/planner/feature-tree-diff.json' } }), null, 'the disposable feature-tree diff stays directly editable');
+    assert.equal(deliveryToolPolicy('developer', 'edit', { ...ws, input: { path: milestone } }), null, 'the guard is tech-lead specific');
+    const tl = piToolsForTask({ role: 'tech_lead', taskKind: 'PLANNING_TASK' });
+    assert.equal(tl.includes('ariad_planner_patch'), true, 'tech lead declares the planner patch tool');
+    const critic = piToolsForTask({ role: 'tech_lead_critic', taskKind: 'PLANNING_TASK' });
+    assert.equal(critic.includes('ariad_planner_patch'), false, 'read-tier planning roles do not get the patch tool');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Ariad generates local llama.cpp provider configuration from role models', () => {
   const config = buildAriadPiModelsConfig({
     developer: 'llamacpp/qwen3.8-27b',

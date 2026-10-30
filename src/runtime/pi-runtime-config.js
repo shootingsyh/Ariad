@@ -101,10 +101,14 @@ export const ARIAD_PI_PLANNING_READ_TOOLS = Object.freeze([
   ...ARIAD_PI_READONLY_PROJECT_TOOLS,
 ]);
 
-// Planning write tier: the Tech Lead authors planning artifacts as files,
-// so it keeps edit/write — but no bash: planning never runs commands.
+// Planning write tier: the Tech Lead authors planning artifacts, so it
+// keeps edit/write for new files and non-artifact content, plus the
+// structured ariad_planner_patch tool for existing planner JSON (runtime
+// policy denies direct edit/write there) — but no bash: planning never
+// runs commands.
 export const ARIAD_PI_PLANNING_WRITE_TOOLS = Object.freeze([
   'read', 'edit', 'write', 'grep', 'find', 'ls',
+  'ariad_planner_patch',
   ...ARIAD_PI_READONLY_PROJECT_TOOLS,
 ]);
 

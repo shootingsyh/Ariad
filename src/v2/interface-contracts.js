@@ -631,6 +631,7 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     `Node artifacts: ${nodeDir}`,
     `Boundary contracts: ${contractDir}`,
     'Every node present in the hierarchy must have one boundary contract.',
+    'Change existing boundary contracts only with the ariad_planner_patch tool (structured ops); direct edit/write on existing contract JSON is blocked by runtime policy.',
     'Contract shape includes decomposition, interfaces/imports/integrationScenarios plus task ownership fields.',
     'Interface primitive model is ONLY executor|provider. Do not emit legacy service/ui/journey/event/data types.',
     'Executor shape: {id,kind:"executor",visibility,contract:{input:string|string[],output:string|string[],sideEffects:string|string[]},verificationSketch?}.',

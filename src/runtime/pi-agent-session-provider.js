@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import {
   DefaultResourceLoader,
@@ -356,6 +356,27 @@ export function deliveryToolPolicy(role, toolName, context = {}) {
       return { block: true, reason: `Ariad bash confinement: ${violation}. Stay inside the project workspace; use relative paths, ariad_code_search, or ariad_anchor_lookup for code lookup.` };
     }
   }
+  if (role === 'tech_lead' && (toolName === 'edit' || toolName === 'write')) {
+    // Existing planner JSON is changed only through ariad_planner_patch:
+    // a degenerate model generation must never land verbatim in a shared
+    // planning artifact (2026-10-30 batch-52). New planner files may still
+    // be created with write; once a file exists, edit is always denied and
+    // write-overwrite is denied, so the patch tool is the only mutation
+    // path (the Tech Lead has no bash or delete tool to bypass with).
+    const target = context.input?.path ?? context.input?.file_path ?? context.input?.filePath;
+    if (typeof target === 'string' && target && context.workspace) {
+      const abs = resolve(context.workspace, target);
+      const rel = relative(join(context.workspace, '.ariad', 'artifacts', 'planner'), abs);
+      if (!rel.startsWith('..') && rel.endsWith('.json')) {
+        const segments = rel.split('/');
+        const guarded = segments[0] === 'milestones' || segments[0] === 'logical'
+          || (segments[0] === 'interfaces' && (segments[1] === 'features' || segments[1] === 'milestones'));
+        if (guarded && (toolName === 'edit' || existsSync(abs))) {
+          return { block: true, reason: `Ariad planner policy: existing planner artifacts change only through ariad_planner_patch (structured ops, validated before write); direct ${toolName} on planner/${rel} is denied. Create new planner files with write, then patch them.` };
+        }
+      }
+    }
+  }
   return null;
 }
 
@@ -485,7 +506,7 @@ export async function createDefaultPiRunSession(spec) {
         requestPlanning: spec.requestPlanning ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
       });
-      if (DELIVERY_ROLES.has(spec.role)) {
+      if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead') {
         pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace }) ?? undefined);
       }
       pi.registerTool({

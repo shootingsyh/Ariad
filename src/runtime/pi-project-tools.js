@@ -5,6 +5,7 @@ import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { queryInterfaces } from '../v2/interface-query.js';
+import { applyPlannerPatch } from '../v2/planner-patch.js';
 import { issueAnchor } from '../v2/interface-seal.js';
 import { sessionHistory } from './session-history.js';
 
@@ -29,6 +30,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_plan_features',
   'ariad_plan_milestones',
   'ariad_build_interfaces',
+  'ariad_planner_patch',
 ]);
 
 export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
@@ -195,6 +197,16 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
       return requestPlanning({ phase, downstream, ...params, requestedByTaskId: taskContext.taskId });
     });
   }
+
+  addTool('ariad_planner_patch',
+    'Tech Lead only. Change an EXISTING planner artifact (milestone delivery tree or boundary contract JSON) with structured operations instead of editing file text. Ariad applies the ops, strictly validates the whole planner tree on a staged copy, and only then atomically replaces the live file; a rejected patch leaves the live file untouched and returns the validation error. Ops: {op:"addItem",array,item} (duplicate id/taskId rejected), {op:"updateItem",array,match,set,addToList,removeFromList} (match must hit exactly one item), {op:"removeItem",array,match}, {op:"setTop",set,addToList,removeFromList}, or {op:"createDocument",document} as the first op for a file that does not exist yet. file is relative to .ariad/artifacts, e.g. "planner/milestones/V2.2.json". Use this for dependsOn edges, taskLinks, featureTasks, integrationTasks and task field updates; never use edit/write on these files.',
+    Type.Object({
+      file: Type.String({ minLength: 1 }),
+      ops: Type.Array(Type.Any(), { minItems: 1, maxItems: 200 }),
+    }, { additionalProperties: false }), async (params) => {
+      if (taskContext?.role !== 'tech_lead') throw new Error('PLANNER_PATCH_REQUIRES_TECH_LEAD');
+      return applyPlannerPatch({ artifactRoot: join(workspace, '.ariad', 'artifacts'), file: params.file, ops: params.ops });
+    });
 
   pi.registerTool({
     name: 'ariad_recover_legacy_issue_task',
