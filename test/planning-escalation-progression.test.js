@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
@@ -78,4 +78,37 @@ test('dispatcher persists a planning debugger diagnosis as SYSTEM_BLOCKED', asyn
     await new RoleResultDispatcher({ store, roles }).advanceResults('P');
     assert.equal(store.getTask('DBG').state, 'SYSTEM_BLOCKED');
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a planning result is bounced when the session left invalid planner artifacts on disk', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-artifact-guard-'));
+  try {
+    const artifactRoot = join(dir, '.ariad', 'artifacts');
+    const expand = { kind: 'expand', reason: 'r' };
+    const leaf = { kind: 'leaf', reason: 'r' };
+    const skeleton = { version: 1, nodeType: 'feature', interfaces: [], imports: [], integrationScenarios: [] };
+    const entry = { id: 't1', title: 'T', intent: 'i', acceptanceCriteria: ['a'], testStrategy: 's', verification: [], interfaceIds: [], issueRefs: [] };
+    mkdirSync(join(artifactRoot, 'planner', 'logical'), { recursive: true });
+    mkdirSync(join(artifactRoot, 'planner', 'interfaces', 'features'), { recursive: true });
+    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.json'), JSON.stringify({ ...skeleton, id: 'x', nodeId: 'x', parentId: null, decomposition: expand }));
+    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.y.json'), JSON.stringify({ ...skeleton, id: 'x.y', nodeId: 'x.y', parentId: 'x', decomposition: leaf }));
+    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.json'), JSON.stringify({ ...skeleton, nodeId: 'x', decomposition: expand }));
+    const contractPath = join(artifactRoot, 'planner', 'interfaces', 'features', 'x.y.json');
+    writeFileSync(contractPath, JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [entry] }));
+    const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
+    const task = { id: 'g', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', input: { purpose: 'PLANNING_ROUTE' }, history: [] };
+    const routed = { outcome: 'PLANNING_ROUTE', result: { stages: {} } };
+    const accepted = roles.tech_lead.transition({ task, result: routed });
+    assert.equal(accepted.state, 'DONE');
+    // The writer now leaves a key the strict loader rejects (the
+    // 2026-10-29 incident shape); acceptance must bounce it back to the
+    // tech lead through the gate ladder instead of sealing it.
+    writeFileSync(contractPath, JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [{ ...entry, history: [] }] }));
+    const bounced = roles.tech_lead.transition({ task, result: routed });
+    assert.equal(bounced.state, 'READY');
+    assert.equal(bounced.stage, 'tech_lead');
+    assert.equal(bounced.transitionHistory.type, 'PLAN_GATE_RETRY');
+    assert.equal(bounced.input.previousGateFailure.blockedType, 'ARTIFACT_VALIDATION_FAILED');
+    assert.match(bounced.input.previousGateFailure.summary, /history: unexpected property/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

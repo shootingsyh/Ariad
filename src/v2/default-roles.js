@@ -554,12 +554,49 @@ export function createDefaultV2Roles({
     };
   };
 
+  // Write-side validation for planner artifacts. A planning session can
+  // leave the on-disk contracts in a state the strict loaders reject -
+  // the 2026-10-29 SRPG halt was a tech-lead triage note written into a
+  // contract's featureTasks entry as a `history` key, which then threw
+  // inside reconcile and parked the whole project FAILED. A planning
+  // result is therefore never accepted while the artifacts fail their
+  // own schema: the bounce below rides the existing gate ladder back to
+  // the tech lead with the loader's message as feedback, so the writer
+  // fixes its own write instead of poisoning the next reconcile. The PM
+  // stage is excluded (its writes persist through the unified compiler,
+  // which validates as it loads), as is the debugger (the ladder's
+  // terminal fixer; bouncing it could loop it away from a diagnosis).
+  const plannerArtifactError = () => {
+    if (!artifactRoot) return null;
+    try {
+      validateBoundaryContracts(artifactRoot, 'feature');
+      validateBoundaryContracts(artifactRoot, 'milestone');
+      loadPlannerArtifactPlan(artifactRoot);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
   const planResultTransition = (task, result) => {
     if (task.taskKind !== TASK_KINDS.PLANNING) return null;
     const body = planTransitionBodies[task.stage];
     if (!body) return null;
     let legacy = body({ task, result });
     if (!legacy) return null;
+    if (task.stage !== 'pm' && task.stage !== 'project_debugger') {
+      const artifactError = plannerArtifactError();
+      if (artifactError) {
+        legacy = {
+          state: 'NEEDS_HUMAN',
+          transitionHistory: {
+            type: 'ARTIFACT_VALIDATION_FAILED',
+            summary: artifactError,
+            at: new Date().toISOString(),
+          },
+        };
+      }
+    }
     // Escalation whitelist: a planning-stage failure is machinery, not a
     // human decision. Bodies still report it as NEEDS_HUMAN; the bridge
     // converts it into the executor's recovery progression - back to the
