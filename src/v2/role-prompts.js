@@ -6,7 +6,7 @@ import { plannerArtifactInstructions } from './planner-artifacts.js';
 import { TECH_LEAD_PLAN_SCHEMA } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { resolve } from 'node:path';
-import { latestPlanInFlow, predecessorResults } from './planning-helpers.js';
+import { flowTasks, latestPlanInFlow, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
 
 export const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
@@ -229,8 +229,30 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       }, null, 2),
     ].join('\n\n');
   }
+  let batchRequests = [];
+  let techLeadResults = [];
+  try {
+    batchRequests = planningBatchRequests(store, task).map(item => ({
+      purpose: item.request?.purpose ?? null,
+      issueId: item.request?.issueId ?? null,
+      title: item.request?.issue?.title ?? null,
+    }));
+    const siblings = flowTasks(store, task);
+    techLeadResults = ['decompose', 'dependencies'].map(name => {
+      const sibling = siblings.find(item => item.id?.endsWith(`:${name}`));
+      const entry = sibling ? latestRoleResult(sibling) : null;
+      return entry ? { stage: name, outcome: entry.outcome ?? null, summary: entry.summary ?? null } : null;
+    }).filter(Boolean);
+  } catch {
+    // Batch context is advisory prompt material; never fail the prompt over it.
+    batchRequests = [];
+    techLeadResults = [];
+  }
   return [
     'You are Ariad\'s delivery-plan critic.',
+    'BATCH SCOPE: You are reviewing exactly one planning batch. Its requests and the Tech Lead results for it are included below as batchRequests and techLeadResults.',
+    'Review what this batch produced or changed, and its consistency with the surrounding accepted plan. Properties of the pre-existing accepted plan that this batch did not create or modify are out of scope: if you notice such a concern, report it in result.observations only - never in result.issues - and do not let it change your outcome.',
+    'Return ISSUES only for defects in this batch\'s own product: a wrong triage or assignment, a broken boundary or dependency change it introduced, or artifacts it wrote.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
@@ -240,6 +262,8 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       project: { id: project.id, spec: project.spec ?? null },
       round: task.input?.round ?? null,
       validation,
+      batchRequests,
+      techLeadResults,
       plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
     }, null, 2),
   ].join('\n\n');

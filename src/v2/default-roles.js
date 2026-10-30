@@ -283,6 +283,27 @@ export function createDefaultV2Roles({
             skipTaskIds: planningSkipIds(task, task.input?.round),
           };
         }
+        // Triage-only batches (issue disposition, no plan authorship): the
+        // critic is advisory. Its findings are recorded on the task, but
+        // they never open repair rounds - a triage batch must not turn into
+        // plan-wide surgery. Strict validation and PM review still gate it.
+        const batchRequests = typeof store?.listPlanningRequests === 'function'
+          ? planningBatchRequests(store, task)
+          : [];
+        if (batchRequests.length > 0
+          && batchRequests.every(item => item.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE')) {
+          return {
+            state: 'DONE',
+            skipTaskIds: planningSkipIds(task, task.input?.round),
+            transitionHistory: {
+              type: 'CRITIC_ADVISORY_ONLY',
+              role: 'tech_lead_critic',
+              summary: result.summary ?? result.result?.summary ?? 'Critic findings recorded as advisory for a triage-only batch.',
+              issues: result.result?.issues ?? [],
+              at: new Date().toISOString(),
+            },
+          };
+        }
         return { state: 'DONE' };
     },
     plan_validator: ({ task, result }) => {
