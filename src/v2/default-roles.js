@@ -17,8 +17,8 @@ import { completeTakeoverReview } from './takeover-gate.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { validateTechLeadPlan } from './tech-lead-plan.js';
 import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
-import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 
@@ -587,6 +587,31 @@ export function createDefaultV2Roles({
   // stage is excluded (its writes persist through the unified compiler,
   // which validates as it loads), as is the debugger (the ladder's
   // terminal fixer; bouncing it could loop it away from a diagnosis).
+  // A bare JSON parse error does not say which artifact is broken, and a
+  // bounced writer left hunting through dozens of files re-checks semantics
+  // instead (the 2026-10-30 batch-48 halt: a missing comma in
+  // milestones/V2.4.json stayed invisible through two retries and a debugger
+  // pass). Name the unparseable planner artifacts in the guard's feedback.
+  const unparseablePlannerArtifacts = () => {
+    const bad = [];
+    const walk = (dir) => {
+      if (bad.length >= 5) return;
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (bad.length >= 5) return;
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile() && entry.name.endsWith('.json')) {
+          try { JSON.parse(readFileSync(full, 'utf8')); }
+          catch { bad.push(full.slice(artifactRoot.length + 1)); }
+        }
+      }
+    };
+    walk(join(artifactRoot, 'planner'));
+    return bad;
+  };
+
   const plannerArtifactError = () => {
     if (!artifactRoot) return null;
     try {
@@ -595,7 +620,9 @@ export function createDefaultV2Roles({
       loadPlannerArtifactPlan(artifactRoot);
       return null;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
+      const broken = unparseablePlannerArtifacts();
+      return broken.length ? `${message} | unparseable planner artifacts: ${broken.join(', ')}` : message;
     }
   };
 
@@ -637,12 +664,12 @@ export function createDefaultV2Roles({
         ? {
           state: 'READY', stage: 'tech_lead',
           input: { ...(task.input ?? {}), planGateRetries: retries + 1, previousGateFailure },
-          transitionHistory: { type: 'PLAN_GATE_RETRY', stage: task.stage, attempt: retries + 1, blockedType, at: new Date().toISOString() },
+          transitionHistory: { type: 'PLAN_GATE_RETRY', stage: task.stage, attempt: retries + 1, blockedType, summary: previousGateFailure.summary, at: new Date().toISOString() },
         }
         : {
           state: 'READY', stage: 'project_debugger',
           input: { ...(task.input ?? {}), previousGateFailure },
-          transitionHistory: { type: 'PLAN_DEBUGGER_ROUTED', stage: task.stage, attempts: retries, blockedType, at: new Date().toISOString() },
+          transitionHistory: { type: 'PLAN_DEBUGGER_ROUTED', stage: task.stage, attempts: retries, blockedType, summary: previousGateFailure.summary, at: new Date().toISOString() },
         };
     }
     const { state, stage, ...extras } = legacy;
@@ -973,7 +1000,13 @@ export function createDefaultV2Roles({
           'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
           JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
-        ].join('\n\n') : null);
+        ].join('\n\n') : task.input?.previousGateFailure ? [
+          "You are Ariad's Project Debugger for a planning gate failure.",
+          'The artifact write-path guard rejected a planning result and two tech-lead retries did not fix it.',
+          'Gate failure:', JSON.stringify(task.input.previousGateFailure, null, 2),
+          'Treat the named artifacts as the prime suspect: re-read and re-parse them yourself before judging plan semantics - a semantics-only check misses defects like malformed JSON.',
+          'If a bounded artifact repair is viable, return RETRY_WITH_GUIDANCE with guidance naming the exact file and fix. Otherwise submit a structured diagnosis; never override validator or critic.',
+        ].join('\n') : null);
       },
       transition: ({ task, result }) => {
         if (task.taskKind === TASK_KINDS.PLANNING) return planResultTransition(task, result);
@@ -1199,6 +1232,12 @@ export function createDefaultV2Roles({
         if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
           plannerPrompt({ store, project, task, artifactRoot }),
+          ...(task.input?.previousGateFailure ? [
+            '',
+            'PREVIOUS GATE FAILURE',
+            'Your previous result was rejected by the artifact write-path guard. Fix exactly this first, and verify the fix by re-parsing the named artifacts before resubmitting:',
+            JSON.stringify(task.input.previousGateFailure, null, 2),
+          ] : []),
           '',
           'FINAL RESULT',
           'After completing all required file writes, submit outcome PLANNED through the provider structured role-result mechanism when available; terminal JSON is not accepted as a result.',

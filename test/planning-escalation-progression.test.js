@@ -112,3 +112,46 @@ test('a planning result is bounced when the session left invalid planner artifac
     assert.match(bounced.input.previousGateFailure.summary, /history: unexpected property/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('gate bounce names the unparseable artifact in history and routed summary', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-artifact-guard-json-'));
+  try {
+    const artifactRoot = join(dir, '.ariad', 'artifacts');
+    const expand = { kind: 'expand', reason: 'r' };
+    const leaf = { kind: 'leaf', reason: 'r' };
+    const skeleton = { version: 1, nodeType: 'feature', interfaces: [], imports: [], integrationScenarios: [] };
+    const entry = { id: 't1', title: 'T', intent: 'i', acceptanceCriteria: ['a'], testStrategy: 's', verification: [], interfaceIds: [], issueRefs: [] };
+    mkdirSync(join(artifactRoot, 'planner', 'logical'), { recursive: true });
+    mkdirSync(join(artifactRoot, 'planner', 'interfaces', 'features'), { recursive: true });
+    mkdirSync(join(artifactRoot, 'planner', 'milestones'), { recursive: true });
+    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.json'), JSON.stringify({ ...skeleton, id: 'x', nodeId: 'x', parentId: null, decomposition: expand }));
+    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.y.json'), JSON.stringify({ ...skeleton, id: 'x.y', nodeId: 'x.y', parentId: 'x', decomposition: leaf }));
+    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.json'), JSON.stringify({ ...skeleton, nodeId: 'x', decomposition: expand }));
+    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.y.json'), JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [entry] }));
+    // A milestone artifact with a missing comma (the 2026-10-30 batch-48 shape):
+    // the guard's feedback must name the file, not just report a bare parse error.
+    writeFileSync(join(artifactRoot, 'planner', 'milestones', 'M1.json'), '{ "id": "M1", "tasks": [] "logicalRefs": [] }');
+    const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
+    const task = { id: 'g2', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', input: { purpose: 'PLANNING_ROUTE' }, history: [] };
+    const routed = { outcome: 'PLANNING_ROUTE', result: { stages: {} } };
+    const bounced = roles.tech_lead.transition({ task, result: routed });
+    assert.equal(bounced.transitionHistory.type, 'PLAN_GATE_RETRY');
+    assert.match(bounced.input.previousGateFailure.summary, /M1\.json/);
+    assert.match(bounced.transitionHistory.summary, /M1\.json/);
+    const exhausted = roles.tech_lead.transition({ task: { ...task, input: { purpose: 'PLANNING_ROUTE', planGateRetries: 2 } }, result: routed });
+    assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
+    assert.equal(exhausted.stage, 'project_debugger');
+    assert.match(exhausted.transitionHistory.summary, /M1\.json/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('planning debugger prepare surfaces the gate failure detail', () => {
+  const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
+  const task = {
+    id: 'dbg1', projectId: 'P', taskKind: 'PLANNING', stage: 'project_debugger', history: [],
+    input: { previousGateFailure: { stage: 'tech_lead', blockedType: 'ARTIFACT_VALIDATION_FAILED', summary: 'boom | unparseable planner artifacts: planner/milestones/M1.json' } },
+  };
+  const prepared = roles.project_debugger.prepare({ task });
+  assert.match(JSON.stringify(prepared), /ARTIFACT_VALIDATION_FAILED/);
+  assert.match(JSON.stringify(prepared), /M1\.json/);
+});
