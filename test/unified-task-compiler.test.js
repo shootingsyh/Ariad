@@ -4,11 +4,20 @@ import {compileUnifiedTaskTree} from '../src/v2/unified-task-compiler.js';
 import {buildExecutionGraph} from '../src/v2/execution-graph.js';
 import { scopeOfTask } from '../src/v2/control-task-policy.js';
 const root='/home/shootingsyh/srpg-project/game/.ariad/artifacts';
+import {readdirSync,readFileSync} from 'node:fs';
+import {join} from 'node:path';
+// The fixture is the live SRPG planner tree, which grows by design when a
+// planning batch lands a new task (78 -> 79 when batch-45 added a fix).
+// Derive expectations from the milestone artifacts themselves: every task
+// entry appears exactly once in the compiled tree, with each milestone's
+// integration entry becoming that milestone's aggregate task.
+const milestoneDocs=readdirSync(join(root,'planner','milestones')).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(join(root,'planner','milestones',f),'utf8')));
+const expectedTaskCount=milestoneDocs.reduce((n,d)=>n+(d.tasks?.length??0),0);
 test('unified compiler emits runnable delivery-shaped tasks without mutating artifacts',()=>{
  const result=compileUnifiedTaskTree(root);
- assert.equal(result.tasks.length,78);
- assert.equal(result.tasks.filter(t=>t.executionMode==='aggregate').length,6);
- assert.equal(result.executionOrder.length,78);
+ assert.equal(result.tasks.length,expectedTaskCount);
+ assert.equal(result.tasks.filter(t=>t.executionMode==='aggregate').length,milestoneDocs.length);
+ assert.equal(result.executionOrder.length,expectedTaskCount);
  const graph=buildExecutionGraph(result.tasks.map(t=>({...t,state:'READY',stage:'developer'})));
  for(const task of result.tasks.filter(t=>t.executionMode==='aggregate')){
    assert.equal(scopeOfTask(task),'delivery');
@@ -38,7 +47,7 @@ test('prepared unified loader refuses unprepared, in-flight, or drifted projects
  const store={getProject:()=>project,listTasks:()=>rows};
  // The human delivery gate is the scheduler's dispatch concern; the loader
  // ignores it and loads while no delivery execution is in flight.
- assert.equal(loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}).tasks.length,78);
+ assert.equal(loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}).tasks.length,expectedTaskCount);
  rows=rows.map((t,i)=>i===0?{...t,state:'WORKING'}:t);
  assert.throws(()=>loadPreparedUnifiedTaskTree({artifactRoot:root,store,projectId:'p'}),/DELIVERY_IN_FLIGHT/);
  rows=rows.slice(1);
