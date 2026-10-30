@@ -70,3 +70,94 @@ export function loadPreparedUnifiedTaskTree({artifactRoot,store,projectId}) {
     executionOrder:compiled.executionOrder,stats:compiled.stats,
     historicalExceptions:project.unifiedTaskHistoricalExceptions??[]};
 }
+
+// Incremental landing for an approved unified plan. PM acceptance reconciles
+// the compiled artifact tree into the store in place: new tasks are created,
+// unfinished tasks take the approved spec, dropped unfinished tasks are
+// obsoleted, and accepted or in-flight work is never rewritten. Mirrors the
+// conservatism of the legacy task-tree reconciler. All writes are atomic.
+const unifiedSpecSignature = task => JSON.stringify([
+  task.parentId ?? null, task.executionMode ?? null, task.title ?? null, task.intent ?? null,
+  task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+  task.testStrategy ?? null, task.dependsOn ?? [], task.interfaceIds ?? [],
+]);
+
+export function reconcileUnifiedTaskTree({artifactRoot,store,projectId}) {
+  const project=store.getProject(projectId);
+  if(!project) throw new Error('UNIFIED_TASK_UNKNOWN_PROJECT');
+  if(project.unifiedTaskCompilerVersion!==1) throw new Error('UNIFIED_TASK_COMPILER_NOT_PREPARED');
+  const existing=store.listTasks(projectId,{scope:'delivery'});
+  const wrongSchema=existing.filter(t=>t.unifiedTaskSchemaVersion!==1);
+  if(wrongSchema.length){
+    const issues=wrongSchema.map(t=>({id:t.id,reason:'WRONG_SCHEMA_VERSION'}));
+    const error=new Error('UNIFIED_TASK_TREE_RECONCILE_REQUIRES_REVIEW: '+JSON.stringify(issues));
+    error.issues=issues;
+    throw error;
+  }
+  const compiled=compileUnifiedTaskTree(artifactRoot).tasks;
+  const wanted=new Map(compiled.map(t=>[t.id,t]));
+  const current=new Map(existing.map(t=>[t.id,t]));
+  const issues=[]; const inFlightChanged=[];
+  const creates=[], updates=[], obsoletes=[];
+  for(const spec of compiled){
+    const task=current.get(spec.id);
+    if(!task){creates.push(spec);continue;}
+    if(unifiedSpecSignature(task)===unifiedSpecSignature(spec)) continue;
+    if(task.state==='DONE') issues.push({id:task.id,reason:'REVISE_COMPLETED_TASK'});
+    else if(task.state==='WORKING'||task.state==='RESULT_READY'||task.execution) inFlightChanged.push(task.id);
+    else if(task.state==='NEEDS_HUMAN'||task.state==='SYSTEM_BLOCKED') issues.push({id:task.id,reason:'REVISE_BLOCKED_TASK'});
+    else updates.push(spec);
+  }
+  for(const task of existing){
+    if(wanted.has(task.id)||task.state==='OBSOLETE'||task.state==='SKIPPED') continue;
+    if(task.state==='DONE') issues.push({id:task.id,reason:'REMOVE_COMPLETED_TASK'});
+    else if(task.state==='READY'||task.state==='WAITING_REPLAN') obsoletes.push(task);
+    else if(task.state==='WORKING'||task.state==='RESULT_READY'||task.execution) inFlightChanged.push(task.id);
+    else issues.push({id:task.id,reason:'REMOVE_UNFINISHED_TASK'});
+  }
+  if(inFlightChanged.length){
+    const error=new Error(`UNIFIED_TASK_DELIVERY_IN_FLIGHT: ${[...new Set(inFlightChanged)].join(',')}`);
+    error.code='UNIFIED_TASK_DELIVERY_IN_FLIGHT';
+    throw error;
+  }
+  if(issues.length){
+    const error=new Error('UNIFIED_TASK_TREE_RECONCILE_REQUIRES_REVIEW: '+JSON.stringify(issues));
+    error.issues=issues;
+    throw error;
+  }
+  const updatedIds=new Set(updates.map(t=>t.id));
+  const obsoleteIds=new Set(obsoletes.map(t=>t.id));
+  const resulting=[
+    ...existing.filter(t=>!obsoleteIds.has(t.id)).map(t=>updatedIds.has(t.id)?{...t,...wanted.get(t.id)}:t),
+    ...creates,
+  ];
+  buildExecutionGraph(resulting);
+  const now=new Date().toISOString();
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    if(store.getProject(projectId).version!==project.version) throw new Error('UNIFIED_TASK_PROJECT_VERSION_CONFLICT');
+    for(const task of obsoletes){
+      store.updateTask(task.id,task.version,{
+        state:'OBSOLETE',execution:null,
+        history:[...(task.history??[]),{type:'TASK_TREE_OBSOLETE',at:now}],
+      });
+    }
+    for(const spec of creates){
+      store.createTask({...spec,projectId,state:'READY',stage:spec.stage??'developer'});
+    }
+    for(const spec of updates){
+      const task=current.get(spec.id);
+      store.updateTask(task.id,task.version,{
+        parentId:spec.parentId,executionMode:spec.executionMode,
+        title:spec.title,intent:spec.intent,
+        acceptanceCriteria:spec.acceptanceCriteria,testStrategy:spec.testStrategy,
+        dependsOn:spec.dependsOn,interfaceIds:spec.interfaceIds,logicalRefs:spec.logicalRefs,
+        input:{...(task.input??{}),...(spec.input??{})},
+        history:[...(task.history??[]),{type:'UNIFIED_TASK_TREE_RECONCILED',at:now,previousState:task.state}],
+      });
+    }
+    store.db.exec('COMMIT');
+  } catch(err){ store.db.exec('ROLLBACK'); throw err; }
+  return {created:creates.map(t=>t.id),updated:updates.map(t=>t.id),
+    obsoleted:obsoletes.map(t=>t.id),total:compiled.length};
+}

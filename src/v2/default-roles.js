@@ -16,7 +16,7 @@ import { executorTransitionFromResult } from './role-executor-transition.js';
 import { completeTakeoverReview } from './takeover-gate.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { validateTechLeadPlan } from './tech-lead-plan.js';
-import { loadPreparedUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
+import { loadPreparedUnifiedTaskTree, reconcileUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -398,30 +398,57 @@ export function createDefaultV2Roles({
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
           // A migrated unified tree must not pass through the legacy plan writer.
-          // Verify the compiled view without mutating tasks, history, or delivery state.
+          // PM approval lands the approved plan instead: reconcile the compiled
+          // artifact tree into the store in place (new tasks created, unfinished
+          // tasks updated, accepted or in-flight work never rewritten). A typed
+          // in-flight error defers this result to a later tick, unchanged.
           if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
             const project = store.getProject(task.projectId);
-            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
-            if (project?.unifiedTaskCompilerVersion === 1 && compatibility.ok) {
-              // The migrated tree is already compiled and accepted. Re-accepting
-              // it must not rewrite existing delivery state or enable scheduling.
-              const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
-              return {state:'DONE',transitionHistory:{
-                type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
-                summary:'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
-                taskCount:loaded.tasks.length,at:new Date().toISOString(),
-              }};
+            if (project?.unifiedTaskCompilerVersion !== 1) {
+              const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                  summary: 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.',
+                  compatibility, at: new Date().toISOString(),
+                },
+              };
             }
-            return {
-              state: 'NEEDS_HUMAN',
-              transitionHistory: {
-                type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                summary: compatibility.ok
-                  ? 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.'
-                  : 'Unified Task Tree compiler/store mismatch; delivery remains unchanged.',
-                compatibility, at: new Date().toISOString(),
-              },
-            };
+            let landed;
+            try {
+              landed = reconcileUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
+            } catch (error) {
+              if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                  summary: `Unified Task Tree plan could not be landed: ${error.message}. Delivery remains unchanged.`,
+                  reconcileIssues: error.issues ?? null, at: new Date().toISOString(),
+                },
+              };
+            }
+            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
+            if (!compatibility.ok) {
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                  summary: 'Unified Task Tree compiler/store mismatch after landing; delivery remains unchanged.',
+                  compatibility, landed, at: new Date().toISOString(),
+                },
+              };
+            }
+            const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
+            const changed = landed.created.length + landed.updated.length + landed.obsoleted.length;
+            return {state:'DONE',transitionHistory:{
+              type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
+              summary: changed
+                ? `Accepted unified tree and landed the approved plan: ${landed.created.length} created, ${landed.updated.length} updated, ${landed.obsoleted.length} obsoleted.`
+                : 'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
+              taskCount:loaded.tasks.length, landed, at:new Date().toISOString(),
+            }};
           }
           // Preserve the one-time human takeover review.
           if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
