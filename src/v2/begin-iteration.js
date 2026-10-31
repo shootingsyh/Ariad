@@ -91,8 +91,11 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     inFlight = tasks.filter(t => DELIVERY_KINDS.includes(t.taskKind) && ['WORKING', 'RESULT_READY'].includes(t.state)).map(t => t.id);
   } finally { ro.close(); }
 
-  if (project.desiredState !== 'STOPPED') {
-    fail('ITERATION_PROJECT_NOT_STOPPED', `project ${paths.id} desiredState is ${project.desiredState ?? 'unset'}; stop the project before beginning an iteration`);
+  let desiredState;
+  try { desiredState = manager.status(name)?.desiredState; } catch { desiredState = undefined; }
+  desiredState ??= project.desiredState;
+  if (desiredState !== 'STOPPED') {
+    fail('ITERATION_PROJECT_NOT_STOPPED', `project ${paths.id} desiredState is ${desiredState ?? 'unset'}; stop the project before beginning an iteration`);
   }
   if (inFlight.length) {
     fail('ITERATION_DELIVERY_IN_FLIGHT', `delivery tasks still in flight: ${inFlight.join(', ')}`);

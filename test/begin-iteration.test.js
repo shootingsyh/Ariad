@@ -111,3 +111,37 @@ test('begin-iteration refuses an existing target store', () => {
   const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
   assert.equal(ref.dbFile, undefined);
 });
+
+// Regression (2026-10-31, found live on iterprobe): production project
+// rows do not carry desiredState - it lives in the manager manifest.
+// The original guard read the row and refused every real project.
+test('begin-iteration reads desiredState from the manager manifest, not the store row', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks, issues: baseIssues });
+  // Strip desiredState from the store row to match the production shape.
+  const store = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
+  const row = store.db.prepare('SELECT data_json FROM v2_projects WHERE id = ?').get('demo');
+  const data = JSON.parse(row.data_json);
+  delete data.desiredState;
+  store.db.prepare('UPDATE v2_projects SET data_json = ? WHERE id = ?').run(JSON.stringify(data), 'demo');
+  store.db.close();
+  // The manager manifest is where setDesiredState records STOPPED.
+  writeFileSync(join(workspace, '.ariad', 'project.json'),
+    `${JSON.stringify({ id: 'demo', workspace, desiredState: 'STOPPED', executionState: 'SUCCEEDED' }, null, 2)}\n`);
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:30:00.000Z') });
+  assert.equal(report.project, 'demo');
+});
+
+test('begin-iteration refuses when the manager manifest says RUNNING even if the row is silent', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  const store = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
+  const row = store.db.prepare('SELECT data_json FROM v2_projects WHERE id = ?').get('demo');
+  const data = JSON.parse(row.data_json);
+  delete data.desiredState;
+  store.db.prepare('UPDATE v2_projects SET data_json = ? WHERE id = ?').run(JSON.stringify(data), 'demo');
+  store.db.close();
+  writeFileSync(join(workspace, '.ariad', 'project.json'),
+    `${JSON.stringify({ id: 'demo', workspace, desiredState: 'RUNNING', executionState: 'RUNNING' }, null, 2)}\n`);
+  const manager = new AriadProjectManager({ projectsRoot });
+  assert.throws(() => beginIteration({ manager, name: 'demo' }), /ITERATION_PROJECT_NOT_STOPPED/);
+});

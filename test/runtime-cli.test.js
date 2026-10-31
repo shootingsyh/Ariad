@@ -40,3 +40,29 @@ test('standalone project root is always the default', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Regression (2026-10-31): runAriadCli's begin-iteration branch used a
+// `dbFile` variable its own parse destructure never bound, so the CLI
+// command died with "dbFile is not defined" while library tests passed.
+test('ariad project begin-iteration runs through the CLI entry', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-cli-bi-'));
+  try {
+    const projectsRoot = path.join(root, 'projects');
+    const workspace = path.join(root, 'ws');
+    fs.mkdirSync(path.join(workspace, '.ariad'), { recursive: true });
+    fs.mkdirSync(path.join(projectsRoot, 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(projectsRoot, 'demo', 'project-ref.json'),
+      `${JSON.stringify({ id: 'demo', workspace }, null, 2)}\n`);
+    fs.writeFileSync(path.join(workspace, '.ariad', 'project.json'),
+      `${JSON.stringify({ id: 'demo', workspace, desiredState: 'STOPPED', executionState: 'SUCCEEDED' }, null, 2)}\n`);
+    const store = new SQLiteV2Store(path.join(workspace, '.ariad', 'state.db'));
+    store.createProject({ id: 'demo', workspace, executionState: 'IDLE', activeVersion: 1, mode: 'TAKEOVER' });
+    store.db.close();
+    const result = runAriadCli(['project', 'begin-iteration', 'demo', '--projects-root', projectsRoot]);
+    assert.equal(result.action, 'begin-iteration');
+    assert.equal(result.iteration.project, 'demo');
+    assert.ok(fs.existsSync(path.join(workspace, '.ariad', 'state2.db')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

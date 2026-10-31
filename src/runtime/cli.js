@@ -377,7 +377,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
 }
 
 export function runAriadCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, slotId } = parse(argv);
+  const { scope, action, name, projectsRoot, slotId, dbFile } = parse(argv);
 
   if (scope === 'setup') {
     return {
