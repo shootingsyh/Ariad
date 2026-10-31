@@ -408,7 +408,7 @@ export function createDefaultV2Roles({
             let versionedStore = null;
             try {
               versionedStore = new VersionedStore(join(versionedProject.workspace, '.ariad', 'state2.db'));
-              vlanded = reconcileVersionedDraft({ versionedStore, store, projectId: task.projectId, approvedBy: 'pm' });
+              vlanded = reconcileVersionedDraft({ versionedStore, store, projectId: task.projectId, approvedBy: 'pm', workspace: versionedProject.workspace });
             } catch (error) {
               if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
               return {
