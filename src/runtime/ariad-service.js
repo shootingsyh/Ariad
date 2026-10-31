@@ -6,6 +6,7 @@ import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { VersionedStore } from '../v2/versioned-store.js';
+import { docsRegimeAdopted, requirementsStatus } from '../v2/project-docs.js';
 import { isAdhocAnalysis } from '../v2/control-task-policy.js';
 import { requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
@@ -201,12 +202,26 @@ export class AriadService {
         let prod = null;
         try { prod = versioned.getProdVersion(); } finally { versioned.close(); }
         if (!prod) {
-          store.enqueuePlanningRequest({
-            id: `initial-plan:${project.id}`,
-            projectId: project.id,
-            request: { purpose: 'INITIAL_PLAN', instruction: record.goal || 'Replan the project for its new version from the approved requirements and the legacy record.' },
-            context: { bootstrap: true, iteration: true },
-          });
+          // Requirements first (design 2026-10-31): when the project
+          // has adopted the docs regime but its requirements document
+          // is not human-approved, the iteration starts with the PM
+          // authoring stage; decomposition is enqueued only after
+          // that stage completes against the approved document.
+          if (docsRegimeAdopted(project.workspace) && !requirementsStatus(project.workspace).approved) {
+            store.enqueuePlanningRequest({
+              id: `requirements:${project.id}`,
+              projectId: project.id,
+              request: { purpose: 'REQUIREMENTS_AUTHORING', instruction: record.goal || 'Author the version requirements document (reverse-engineering a baseline first when none exists), fold in the new requirements, and obtain human approval.' },
+              context: { bootstrap: true, iteration: true },
+            });
+          } else {
+            store.enqueuePlanningRequest({
+              id: `initial-plan:${project.id}`,
+              projectId: project.id,
+              request: { purpose: 'INITIAL_PLAN', instruction: record.goal || 'Replan the project for its new version from the approved requirements and the legacy record.' },
+              context: { bootstrap: true, iteration: true },
+            });
+          }
         }
       }
     }

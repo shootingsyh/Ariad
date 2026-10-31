@@ -429,6 +429,53 @@ export function createDefaultV2Roles({
         return { state: 'DONE' };
     },
     pm: ({ task, result }) => {
+        if (task.input?.purpose === 'REQUIREMENTS_AUTHORING') {
+          // Requirements stage (design 2026-10-31): the PM has authored
+          // or revised the requirements document. NEEDS_HUMAN parks the
+          // stage for the human's review; once the document stands
+          // human-approved and the PM confirms, the stage closes and
+          // normal version planning is enqueued to proceed from it.
+          const proj = store.getProject?.(task.projectId);
+          const ws = proj?.workspace;
+          const approved = ws ? requirementsStatus(ws).approved : false;
+          if (approved && result.outcome === 'PLAN_ACCEPTED') {
+            enqueuePlanning?.({
+              request: {
+                purpose: 'INITIAL_PLAN',
+                instruction: proj?.goal || 'Replan the project for its new version from the approved requirements and the legacy record.',
+              },
+            });
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'REQUIREMENTS_FINALIZED', role: 'pm',
+                summary: 'Requirements document is human-approved; version planning (INITIAL_PLAN) has been enqueued to proceed from it.',
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'NEEDS_HUMAN' && pmEscalationHasQuestions(result)) {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION', role: 'pm',
+                summary: result.summary ?? result.result?.reason ?? 'PM has prepared the requirements document for human review.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'PM_HUMAN_DECISION', role: 'pm',
+              summary: 'The requirements document is not yet human-approved, so the requirements stage cannot close.',
+              questions: ['Have the PM finalize .ariad/docs/REQUIREMENTS.md, then review it and approve it with ariad project approve-requirements.'],
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (scopeOfTask(task) === 'delivery') {
           if (result.outcome === 'PRODUCT_DECISION') {
             const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
@@ -1620,6 +1667,26 @@ export function createDefaultV2Roles({
     pm: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.input?.purpose === 'REQUIREMENTS_AUTHORING') {
+          const reqStatus = requirementsStatus(project.workspace);
+          const humanDecision = [...(task.history ?? [])].reverse()
+            .find(entry => entry?.type === 'HUMAN_DECISION') ?? null;
+          const prompt = [
+            'You are Ariad\'s PM authoring the project requirements document. This is a requirements stage, not a plan review: no decomposition exists yet, and none may start until the document you produce is finalized and human-approved.',
+            'Write (or revise) .ariad/docs/REQUIREMENTS.md now: read first (the existing documents under .ariad/docs, the legacy record in the project database, and the code), then land the document with your edit/write tools. The document is the single source of truth for what the product must be: high-level, plain language, written for humans, no internal IDs and no provenance annotations \u2014 it does not cite where requirements came from; it is where they live.',
+            'If no requirements document exists, reverse-engineer the baseline from what the previous version actually implemented, organized under the requirement categories customary for this product domain \u2014 for a game: core experience and gameplay, game systems, content, presentation and art, audio, UI and UX, save and lifecycle, platform and performance, quality floor, release readiness \u2014 using a domain template under .ariad/docs/templates/ when the project provides one, instead of categories invented on the spot. Only what is actually implemented belongs in the baseline.',
+            'Then fold the human\'s new requirements for the coming version (the request instruction in the payload, plus any HUMAN_DECISION in the task history) into the same document, and state in plain language what changes relative to the baseline: the delta the Tech Lead will plan from. Keep detail out of the root document; detail belongs to the Tech Lead\'s feature documents, and milestones carry no requirements detail.',
+            'Review your own draft twice \u2014 re-read it once against the implemented state and once against the human\'s stated requirements, fixing what you find \u2014 before presenting it.',
+            'Submit through the structured role-result mechanism. When the document is written and ready, submit NEEDS_HUMAN with result.questions asking the human to review .ariad/docs/REQUIREMENTS.md and approve it (ariad project approve-requirements ' + project.id + '). If the task history already contains a HUMAN_DECISION and the payload\'s requirementsStatus shows the document approved, submit PLAN_ACCEPTED with result.startDelivery=false to close this stage. If a genuine requirements question that only the human can answer blocks the writing itself, submit NEEDS_HUMAN with those concrete questions instead.',
+            JSON.stringify({
+              project: { id: project.id, mode: project.mode ?? 'NEW', workspace: project.workspace },
+              requirementsStatus: reqStatus,
+              humanDecision,
+              requests: task.input?.requests ?? [],
+            }, null, 2),
+          ].join('\n\n');
+          return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
+        }
         if (scopeOfTask(task) === 'delivery') {
           const debuggerResult = [...(task.history ?? [])].reverse().find(
             entry => entry?.type === 'ROLE_RESULT' && entry?.role === 'project_debugger'

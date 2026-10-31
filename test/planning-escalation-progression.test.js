@@ -312,3 +312,43 @@ test('approved requirements let the decompose submission reach the draft check',
   });
   assert.equal(out.input.previousGateFailure.blockedType, 'TL_PLAN_WITHOUT_DRAFT');
 });
+
+import { plannerFlowTasks } from '../src/v2/planner-flow.js';
+
+test('requirements authoring request becomes a single PM stage', () => {
+  const tasks = plannerFlowTasks('batch-r', [{ id: 'requirements:P', request: { purpose: 'REQUIREMENTS_AUTHORING', instruction: 'Author it.' }, context: { bootstrap: true } }]);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].stage, 'pm');
+  assert.equal(tasks[0].input.purpose, 'REQUIREMENTS_AUTHORING');
+});
+
+test('PM requirements stage parks for human review with questions', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-reqstage-'));
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
+  const out = roles.pm.transition({
+    task: { id: 'r1', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'REQUIREMENTS_AUTHORING', planningBatchId: 'b1' } },
+    result: { outcome: 'NEEDS_HUMAN', summary: 'doc ready', result: { questions: ['Please review REQUIREMENTS.md and approve it.'] } },
+  });
+  assert.equal(out.state, 'NEEDS_HUMAN');
+  assert.equal(out.transitionHistory.type, 'PM_HUMAN_DECISION');
+  assert.deepEqual(out.transitionHistory.questions, ['Please review REQUIREMENTS.md and approve it.']);
+});
+
+test('approved requirements close the PM stage and enqueue initial planning', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-reqdone-'));
+  mkdirSync(join(dir, '.ariad', 'docs'), { recursive: true });
+  writeFileSync(join(dir, '.ariad', 'docs', 'REQUIREMENTS.md'), '# Requirements\n\nBaseline.\n');
+  recordRequirementsApproval(dir, { approvedBy: 'test' });
+  const enqueued = [];
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: arg => enqueued.push(arg) });
+  const out = roles.pm.transition({
+    task: { id: 'r2', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'REQUIREMENTS_AUTHORING', planningBatchId: 'b1' } },
+    result: { outcome: 'PLAN_ACCEPTED', summary: 'approved', result: { startDelivery: false } },
+  });
+  assert.equal(out.state, 'DONE');
+  assert.equal(out.transitionHistory.type, 'REQUIREMENTS_FINALIZED');
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].request.purpose, 'INITIAL_PLAN');
+});

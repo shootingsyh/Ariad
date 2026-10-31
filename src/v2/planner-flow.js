@@ -21,6 +21,21 @@ export function plannerFlowTasks(batchId, requests) {
     ];
   }
 
+  // Requirements-first flow (design 2026-10-31): a versioned iteration
+  // whose requirements document is not yet human-approved starts with
+  // a single PM authoring task, not a decomposition. The PM writes or
+  // revises .ariad/docs/REQUIREMENTS.md and escalates for human
+  // approval; the follow-on INITIAL_PLAN request is enqueued when
+  // that stage completes (see the PM transition in default-roles).
+  if (requests.length === 1 && requests[0]?.request?.purpose === 'REQUIREMENTS_AUTHORING') {
+    return [
+      { id: taskId(batchId, 'requirements'), stage: 'pm', input: {
+        planningBatchId: batchId, purpose: 'REQUIREMENTS_AUTHORING',
+        requests: structuredClone(requests),
+      } },
+    ];
+  }
+
   const ids = {
     decompose: taskId(batchId, 'decompose'),
     dependencies: taskId(batchId, 'dependencies'),
