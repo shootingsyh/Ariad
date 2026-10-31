@@ -79,6 +79,12 @@ export class AriadProjectManager {
         adopted: true,
       };
     }
+    if (existsSync(p.manifest)) {
+      const manifest = readJson(p.manifest);
+      if (typeof manifest.dbFile === 'string' && manifest.dbFile) {
+        return { ...p, db: join(p.ariad, manifest.dbFile), adopted: false };
+      }
+    }
     return { ...p, adopted: false };
   }
 

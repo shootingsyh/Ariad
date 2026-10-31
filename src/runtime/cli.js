@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { recordRequirementsApproval } from '../v2/project-docs.js';
+import { beginIteration } from '../v2/begin-iteration.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
@@ -19,7 +20,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -40,7 +41,7 @@ function usage() {
     '  ariad project status <name> [--projects-root <path>]',
     '',
     'Setup prepares/checks global Pi provider authentication without printing credentials.',
-    'Migration requires the project to be STOPPED. It archives the entire old state.db and planner artifacts before creating a fresh control plane.',
+    'begin-iteration requires the project to be STOPPED: it archives the current store, creates a fresh DB-first store seeded with legacy conclusions, and points the project at it. PM/TL then replan inside Ariad.',
   ].join('\n');
 }
 
@@ -64,6 +65,7 @@ function parse(argv) {
   let providerId = null;
   let features = null;
   let slotId = null;
+  let dbFile = null;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
@@ -120,6 +122,11 @@ function parse(argv) {
       interfaceId = rest[++i];
       continue;
     }
+    if (rest[i] === '--db-file') {
+      if (!rest[i + 1]) throw new Error('--db-file requires a file name');
+      dbFile = rest[++i];
+      continue;
+    }
     if (rest[i] === '--role-models') {
       if (!rest[i + 1]) throw new Error('--role-models requires JSON');
       roleModels = JSON.parse(rest[++i]);
@@ -127,7 +134,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile };
 }
 
 
@@ -225,7 +232,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile } = parse(argv);
   // Install-level role defaults (ariad config guide / assistant /
   // dashboard) are the create fallback: an operator who configured
   // defaults should not have to repeat them on every create. Explicit
@@ -379,7 +386,7 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     };
   }
 
-  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install', 'approve-requirements'].includes(action)) {
+  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install', 'approve-requirements', 'begin-iteration'].includes(action)) {
     throw new Error(usage());
   }
 
@@ -401,6 +408,11 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     const paths = manager.resolveProjectPaths(name);
     const approval = recordRequirementsApproval(paths.workspace, { approvedBy: 'human-cli' });
     return { action, project: name, requirements: approval };
+  }
+
+  if (action === 'begin-iteration') {
+    const report = beginIteration({ manager, name, dbFile });
+    return { action, project: name, iteration: report };
   }
 
   const project = manager.status(name);
