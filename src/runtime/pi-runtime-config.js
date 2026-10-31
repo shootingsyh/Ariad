@@ -109,6 +109,7 @@ export const ARIAD_PI_PLANNING_READ_TOOLS = Object.freeze([
 export const ARIAD_PI_PLANNING_WRITE_TOOLS = Object.freeze([
   'read', 'edit', 'write', 'grep', 'find', 'ls',
   'ariad_planner_patch',
+  'ariad_tree_patch',
   ...ARIAD_PI_READONLY_PROJECT_TOOLS,
 ]);
 

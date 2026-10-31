@@ -6,6 +6,7 @@ import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { queryInterfaces } from '../v2/interface-query.js';
 import { applyPlannerPatch } from '../v2/planner-patch.js';
+import { VersionedStore } from '../v2/versioned-store.js';
 import { issueAnchor } from '../v2/interface-seal.js';
 import { sessionHistory } from './session-history.js';
 
@@ -31,6 +32,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_plan_milestones',
   'ariad_build_interfaces',
   'ariad_planner_patch',
+  'ariad_tree_patch',
 ]);
 
 export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
@@ -198,6 +200,15 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
     });
   }
 
+  let treeStore = null;
+  const openTreeStore = () => {
+    if (!treeStore) {
+      treeStore = new VersionedStore(join(workspace, '.ariad', 'state2.db'));
+      if (!treeStore.projectId) treeStore.initProject(taskContext?.projectId ?? 'project');
+    }
+    return treeStore;
+  };
+
   addTool('ariad_planner_patch',
     'Tech Lead only. Change an EXISTING planner artifact (milestone delivery tree or boundary contract JSON) with structured operations instead of editing file text. Ariad applies the ops, strictly validates the whole planner tree on a staged copy, and only then atomically replaces the live file; a rejected patch leaves the live file untouched and returns the validation error. Ops: {op:"addItem",array,item} (duplicate id/taskId rejected), {op:"updateItem",array,match,set,addToList,removeFromList} (match must hit exactly one item), {op:"removeItem",array,match}, {op:"setTop",set,addToList,removeFromList}, or {op:"createDocument",document} as the first op for a file that does not exist yet. file is relative to .ariad/artifacts, e.g. "planner/milestones/V2.2.json". Use this for dependsOn edges, taskLinks, featureTasks, integrationTasks and task field updates; never use edit/write on these files.',
     Type.Object({
@@ -206,6 +217,21 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
     }, { additionalProperties: false }), async (params) => {
       if (taskContext?.role !== 'tech_lead') throw new Error('PLANNER_PATCH_REQUIRES_TECH_LEAD');
       return applyPlannerPatch({ artifactRoot: join(workspace, '.ariad', 'artifacts'), file: params.file, ops: params.ops });
+    });
+
+  addTool('ariad_tree_patch',
+    'Tech Lead only. DB-first planning: author the task tree and boundary contracts in the open DRAFT version of the project database (state2.db) with structured operations; nothing here touches the production version or the running delivery queue. Actions: "openDraft" (start a new draft copied from prod; fails if one is already open), "applyOps" (ops: {op:"upsertTask",task} / {op:"removeTask",taskId} / {op:"upsertContract",contract} / {op:"removeContract",contractId}; the whole draft is validated after each call - dependency existence and acyclicity, contract behavior clauses, interface references - and a rejected call changes nothing), "diff" (draft vs prod change summary for review), "discardDraft". Promotion to prod is PM-only and never happens through this tool.',
+    Type.Object({
+      action: Type.Union([Type.Literal('openDraft'), Type.Literal('applyOps'), Type.Literal('diff'), Type.Literal('discardDraft')]),
+      ops: Type.Optional(Type.Array(Type.Any(), { minItems: 1, maxItems: 200 })),
+    }, { additionalProperties: false }), async (params) => {
+      if (taskContext?.role !== 'tech_lead') throw new Error('TREE_PATCH_REQUIRES_TECH_LEAD');
+      const store = openTreeStore();
+      if (params.action === 'openDraft') { const v = store.createDraft({ createdBy: 'tech_lead' }); return { draftVersion: v.version, baseVersion: v.base_version }; }
+      if (params.action === 'applyOps') return store.applyTreeOps(params.ops ?? []);
+      if (params.action === 'diff') return store.diffDraft();
+      if (params.action === 'discardDraft') return { discarded: store.discardDraft() };
+      throw new Error(`unknown action ${params.action}`);
     });
 
   pi.registerTool({
