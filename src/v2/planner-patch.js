@@ -118,25 +118,21 @@ function applyOp(doc, op, index) {
   throw new Error(`PLANNER_PATCH_OP_INVALID: ops[${index}] unknown op ${JSON.stringify(kind ?? null)}`);
 }
 
-export function validatePlannerArtifacts(artifactRoot, { touchedFile = null } = {}) {
-  // Contract behavior layer: when a patch writes a feature contract, that
-  // contract must satisfy the behavior layer; untouched stored contracts
+export function validatePlannerArtifacts(artifactRoot, { touchedFile = null, touchedFiles = null } = {}) {
+  // Contract behavior layer: when a patch writes feature contracts, those
+  // contracts must satisfy the behavior layer; untouched stored contracts
   // are not retroactively re-judged.
-  const featureScope = typeof touchedFile === 'string' && touchedFile.startsWith('planner/interfaces/features/')
-    ? [touchedFile.slice('planner/interfaces/features/'.length, -'.json'.length)]
-    : null;
-  validateBoundaryContracts(artifactRoot, 'feature', featureScope ? { requireBehaviorFor: featureScope } : {});
+  const touched = touchedFiles ?? (touchedFile ? [touchedFile] : []);
+  const featureScope = touched
+    .filter(f => typeof f === 'string' && f.startsWith('planner/interfaces/features/'))
+    .map(f => f.slice('planner/interfaces/features/'.length, -'.json'.length));
+  validateBoundaryContracts(artifactRoot, 'feature', featureScope.length ? { requireBehaviorFor: featureScope } : {});
   validateBoundaryContracts(artifactRoot, 'milestone');
   loadPlannerArtifactPlan(artifactRoot);
 }
 
-export function applyPlannerPatch({ artifactRoot, file, ops, validate = validatePlannerArtifacts }) {
-  if (!artifactRoot) throw new Error('PLANNER_PATCH_ARTIFACT_ROOT_REQUIRED');
-  if (!Array.isArray(ops) || ops.length === 0) throw new Error('PLANNER_PATCH_OPS_REQUIRED');
-  if (ops.length > 200) throw new Error('PLANNER_PATCH_TOO_MANY_OPS: at most 200 ops per call');
-  const rel = normalizePlannerPatchFile(file);
-  const livePath = join(artifactRoot, rel);
-  const existed = existsSync(livePath);
+function applyGroupOps({ stagedPath, rel, ops }) {
+  const existed = existsSync(stagedPath);
   let doc = null;
   const applied = [];
   ops.forEach((op, index) => {
@@ -154,33 +150,78 @@ export function applyPlannerPatch({ artifactRoot, file, ops, validate = validate
     if (!doc) {
       if (!existed) throw new Error(`PLANNER_PATCH_FILE_MISSING: ${rel} (start with a createDocument op)`);
       try {
-        doc = JSON.parse(readFileSync(livePath, 'utf8'));
+        doc = JSON.parse(readFileSync(stagedPath, 'utf8'));
       } catch (error) {
         throw new Error(`PLANNER_PATCH_TARGET_UNPARSEABLE: ${rel}: ${error.message}`);
       }
     }
     applied.push(applyOp(doc, op, index));
   });
-  const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  return { doc, applied, created: !existed };
+}
+
+export function applyPlannerPatch({ artifactRoot, file, ops, patches, validate = validatePlannerArtifacts }) {
+  if (!artifactRoot) throw new Error('PLANNER_PATCH_ARTIFACT_ROOT_REQUIRED');
+  const groups = [];
+  if (patches !== undefined) {
+    if (!Array.isArray(patches) || patches.length === 0) throw new Error('PLANNER_PATCH_PATCHES_REQUIRED');
+    if (patches.length > 8) throw new Error('PLANNER_PATCH_TOO_MANY_FILES: at most 8 files per call');
+    for (const entry of patches) groups.push({ file: entry?.file, ops: entry?.ops });
+  } else {
+    groups.push({ file, ops });
+  }
+  let totalOps = 0;
+  const seen = new Set();
+  const prepared = groups.map((group) => {
+    if (!Array.isArray(group.ops) || group.ops.length === 0) throw new Error('PLANNER_PATCH_OPS_REQUIRED');
+    totalOps += group.ops.length;
+    const rel = normalizePlannerPatchFile(group.file);
+    if (seen.has(rel)) throw new Error(`PLANNER_PATCH_DUPLICATE_FILE: ${rel} appears twice in one call`);
+    seen.add(rel);
+    return { rel, ops: group.ops };
+  });
+  if (totalOps > 200) throw new Error('PLANNER_PATCH_TOO_MANY_OPS: at most 200 ops per call');
+
+  // Stage the whole planner tree once, apply every group onto the staged
+  // copy, validate the staged tree as a whole, and only then commit all
+  // files. A multi-file batch is what makes interdependent repairs
+  // possible at all: two artifacts that are only valid together (e.g. two
+  // contracts whose cross-imports must change together) can never be
+  // fixed by single-file patches, because each one alone still fails
+  // whole-tree validation (iterprobe batch-2-4, 2026-10-31: TL retried
+  // twice and the debugger confirmed the deadlock before SYSTEM_BLOCKED).
   const staging = mkdtempSync(join(tmpdir(), 'ariad-planner-patch-'));
   try {
     const livePlanner = join(artifactRoot, 'planner');
     if (existsSync(livePlanner)) cpSync(livePlanner, join(staging, 'planner'), { recursive: true });
     else mkdirSync(join(staging, 'planner'), { recursive: true });
-    const stagedPath = join(staging, rel);
-    mkdirSync(dirname(stagedPath), { recursive: true });
-    writeFileSync(stagedPath, serialized);
+    const results = [];
+    for (const { rel, ops: groupOps } of prepared) {
+      const stagedPath = join(staging, rel);
+      const { doc, applied, created } = applyGroupOps({ stagedPath, rel, ops: groupOps });
+      const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+      mkdirSync(dirname(stagedPath), { recursive: true });
+      writeFileSync(stagedPath, serialized);
+      results.push({ file: rel, created, applied, bytes: serialized.length, serialized });
+    }
     try {
-      validate(staging, { touchedFile: rel });
+      validate(staging, { touchedFiles: prepared.map(p => p.rel) });
     } catch (error) {
       throw new Error(`PLANNER_PATCH_VALIDATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     }
+    for (const result of results) {
+      const livePath = join(artifactRoot, result.file);
+      mkdirSync(dirname(livePath), { recursive: true });
+      const temporary = `${livePath}.patch-tmp-${process.pid}`;
+      writeFileSync(temporary, result.serialized);
+      renameSync(temporary, livePath);
+    }
+    if (results.length === 1) {
+      const [{ file: f, created, applied, bytes }] = results;
+      return { file: f, created, applied, bytes };
+    }
+    return { files: results.map(({ file: f, created, applied, bytes }) => ({ file: f, created, applied, bytes })) };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
-  mkdirSync(dirname(livePath), { recursive: true });
-  const temporary = `${livePath}.patch-tmp-${process.pid}`;
-  writeFileSync(temporary, serialized);
-  renameSync(temporary, livePath);
-  return { file: rel, created: !existed, applied, bytes: serialized.length };
 }

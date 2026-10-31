@@ -210,13 +210,17 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
   };
 
   addTool('ariad_planner_patch',
-    'Tech Lead only. Change an EXISTING planner artifact (milestone delivery tree or boundary contract JSON) with structured operations instead of editing file text. Ariad applies the ops, strictly validates the whole planner tree on a staged copy, and only then atomically replaces the live file; a rejected patch leaves the live file untouched and returns the validation error. Ops: {op:"addItem",array,item} (duplicate id/taskId rejected), {op:"updateItem",array,match,set,addToList,removeFromList} (match must hit exactly one item), {op:"removeItem",array,match}, {op:"setTop",set,addToList,removeFromList}, or {op:"createDocument",document} as the first op for a file that does not exist yet. file is relative to .ariad/artifacts, e.g. "planner/milestones/V2.2.json". Use this for dependsOn edges, taskLinks, featureTasks, integrationTasks and task field updates; never use edit/write on these files.',
+    'Tech Lead only. Change an EXISTING planner artifact (milestone delivery tree or boundary contract JSON) with structured operations instead of editing file text. Ariad applies the ops, strictly validates the whole planner tree on a staged copy, and only then atomically replaces the live file; a rejected patch leaves the live file untouched and returns the validation error. Ops: {op:"addItem",array,item} (duplicate id/taskId rejected), {op:"updateItem",array,match,set,addToList,removeFromList} (match must hit exactly one item), {op:"removeItem",array,match}, {op:"setTop",set,addToList,removeFromList}, or {op:"createDocument",document} as the first op for a file that does not exist yet. file is relative to .ariad/artifacts, e.g. "planner/milestones/V2.2.json". When several artifacts are only valid together (for example two contracts whose imports must change together), pass patches: [{file, ops}, ...] instead of file/ops: the batch is staged, validated as one tree, and committed atomically - a single-file patch against a still-invalid tree can never pass validation. Use this for dependsOn edges, taskLinks, featureTasks, integrationTasks and task field updates; never use edit/write on these files.',
     Type.Object({
-      file: Type.String({ minLength: 1 }),
-      ops: Type.Array(Type.Any(), { minItems: 1, maxItems: 200 }),
+      file: Type.Optional(Type.String({ minLength: 1 })),
+      ops: Type.Optional(Type.Array(Type.Any(), { minItems: 1, maxItems: 200 })),
+      patches: Type.Optional(Type.Array(Type.Object({
+        file: Type.String({ minLength: 1 }),
+        ops: Type.Array(Type.Any(), { minItems: 1, maxItems: 200 }),
+      }, { additionalProperties: false }), { minItems: 1, maxItems: 8 })),
     }, { additionalProperties: false }), async (params) => {
       if (taskContext?.role !== 'tech_lead') throw new Error('PLANNER_PATCH_REQUIRES_TECH_LEAD');
-      return applyPlannerPatch({ artifactRoot: join(workspace, '.ariad', 'artifacts'), file: params.file, ops: params.ops });
+      return applyPlannerPatch({ artifactRoot: join(workspace, '.ariad', 'artifacts'), file: params.file, ops: params.ops, patches: params.patches });
     });
 
   addTool('ariad_tree_patch',
