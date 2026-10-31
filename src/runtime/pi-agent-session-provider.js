@@ -500,11 +500,12 @@ export async function createDefaultPiRunSession(spec) {
     extensionFactories: [(pi) => {
       registerAriadProjectTools(pi, {
         workspace,
+        projectStoreFile: spec.projectStoreFile ?? null,
         reportIssue: spec.reportIssue ?? null,
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
         recoverLegacyIssueBlockedTask: spec.recoverLegacyIssueBlockedTask ?? null,
         requestPlanning: spec.requestPlanning ?? null,
-        taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null },
+        taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null, projectId: spec.projectId ?? null },
       });
       if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead') {
         pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace }) ?? undefined);

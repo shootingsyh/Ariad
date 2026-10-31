@@ -35,7 +35,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_tree_patch',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
   const resolveFile = file => {
     const path = resolve(workspace, file);
     if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
@@ -201,9 +201,17 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
   }
 
   let treeStore = null;
+  const resolveTreeStoreFile = () => {
+    if (projectStoreFile) return projectStoreFile;
+    try {
+      const manifest = JSON.parse(readFileSync(join(workspace, '.ariad', 'project.json'), 'utf8'));
+      if (manifest?.dbFile) return join(workspace, '.ariad', manifest.dbFile);
+    } catch { /* no readable manifest: historical default below */ }
+    return join(workspace, '.ariad', 'state2.db');
+  };
   const openTreeStore = () => {
     if (!treeStore) {
-      treeStore = new VersionedStore(join(workspace, '.ariad', 'state2.db'));
+      treeStore = new VersionedStore(resolveTreeStoreFile());
       if (!treeStore.projectId) treeStore.initProject(taskContext?.projectId ?? 'project');
     }
     return treeStore;
@@ -224,18 +232,26 @@ export function registerAriadProjectTools(pi, { workspace, reportIssue = null, i
     });
 
   addTool('ariad_tree_patch',
-    'Tech Lead only. DB-first planning: author the task tree and boundary contracts in the open DRAFT version of the project database (state2.db) with structured operations; nothing here touches the production version or the running delivery queue. Actions: "openDraft" (start a new draft copied from prod; fails if one is already open), "applyOps" (ops: {op:"upsertTask",task} / {op:"removeTask",taskId} / {op:"upsertContract",contract} / {op:"removeContract",contractId}; the whole draft is validated after each call - dependency existence and acyclicity, contract behavior clauses, interface references - and a rejected call changes nothing), "diff" (draft vs prod change summary for review), "discardDraft". Promotion to prod is PM-only and never happens through this tool.',
+    'Tech Lead only. DB-first planning: author the task tree and boundary contracts in the open DRAFT version of the project database (state2.db) with structured operations; nothing here touches the production version or the running delivery queue. Actions: "openDraft" (start a new draft copied from prod; fails if one is already open), "applyOps" (ops: {op:"upsertTask",task} / {op:"removeTask",taskId} / {op:"upsertContract",contract} / {op:"removeContract",contractId}; the whole draft is validated after each call - dependency existence and acyclicity, contract behavior clauses, interface references - and a rejected call changes nothing), "diff" (draft vs prod change summary for review), "discardDraft". Promotion to prod is PM-only and never happens through this tool. Task spec (upsertTask): {id, taskKind - required, one of "FEATURE_TASK"|"INTEGRATION_TASK"|"MILESTONE_TASK", title - required, parentId (optional parent task id; hierarchy uses parentId - there is no milestoneId field), dependsOn (optional array of task ids), interfaceIds (optional array of exported interface ids), intent, acceptanceCriteria, testStrategy}. Contract spec (upsertContract): {id, nodeType - required, "feature"|"milestone", behavior (feature contracts: non-empty array of clause strings, unless integrationScenarios carry acceptanceCriteria; milestone contracts must not carry behavior), exportedInterfaces, integrationScenarios}. A rejected call returns {error, message, details} listing every validation problem - fix the named fields and resubmit; never resubmit an unchanged payload.',
     Type.Object({
       action: Type.Union([Type.Literal('openDraft'), Type.Literal('applyOps'), Type.Literal('diff'), Type.Literal('discardDraft')]),
       ops: Type.Optional(Type.Array(Type.Any(), { minItems: 1, maxItems: 200 })),
     }, { additionalProperties: false }), async (params) => {
       if (taskContext?.role !== 'tech_lead') throw new Error('TREE_PATCH_REQUIRES_TECH_LEAD');
       const store = openTreeStore();
-      if (params.action === 'openDraft') { const v = store.createDraft({ createdBy: 'tech_lead' }); return { draftVersion: v.version, baseVersion: v.base_version }; }
-      if (params.action === 'applyOps') return store.applyTreeOps(params.ops ?? []);
-      if (params.action === 'diff') return store.diffDraft();
-      if (params.action === 'discardDraft') return { discarded: store.discardDraft() };
-      throw new Error(`unknown action ${params.action}`);
+      try {
+        if (params.action === 'openDraft') { const v = store.createDraft({ createdBy: 'tech_lead' }); return { draftVersion: v.version, baseVersion: v.base_version }; }
+        if (params.action === 'applyOps') return store.applyTreeOps(params.ops ?? []);
+        if (params.action === 'diff') return store.diffDraft();
+        if (params.action === 'discardDraft') return { discarded: store.discardDraft() };
+        throw new Error(`unknown action ${params.action}`);
+      } catch (e) {
+        // Store errors carry a code and, for validation failures, the
+        // full problem list in e.details. Return them as the result: a
+        // thrown error reaches the model as a bare message, which left
+        // the tech lead resubmitting blind (found live on iterprobe).
+        return { error: e.code ?? 'TREE_PATCH_FAILED', message: e.message, details: e.details ?? null };
+      }
     });
 
   pi.registerTool({

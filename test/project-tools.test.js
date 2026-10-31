@@ -505,3 +505,26 @@ test('Pi fix insertion tool authorizes TL and forwards explicit dependency place
     assert.deepEqual(calls[0].task.issueRefs, ['issue:1']);
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
+
+test('ariad_tree_patch writes the draft into the runtime store file and surfaces validation details', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-tree-'));
+  try {
+    fs.mkdirSync(path.join(workspace, '.ariad'), { recursive: true });
+    const storeFile = path.join(workspace, '.ariad', 'state7.db');
+    const registered = new Map();
+    const pi = { registerTool(tool) { registered.set(tool.name, tool); } };
+    registerAriadProjectTools(pi, { workspace, taskContext: { role: 'tech_lead', projectId: 'P' }, projectStoreFile: storeFile });
+    const tool = registered.get('ariad_tree_patch');
+    const opened = await tool.execute('c1', { action: 'openDraft' });
+    assert.equal(opened.details.draftVersion, 1);
+    const rejected = await tool.execute('c2', { action: 'applyOps', ops: [{ op: 'upsertTask', task: { id: 'a.b', title: 'Leaf' } }] });
+    assert.equal(rejected.details.error, 'TREE_VALIDATION_FAILED');
+    assert.ok(rejected.details.details.some(e => e.includes('taskKind')));
+    const applied = await tool.execute('c3', { action: 'applyOps', ops: [{ op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', title: 'Leaf' } }] });
+    assert.equal(applied.details.applied, 1);
+    const { VersionedStore } = await import('../src/v2/versioned-store.js');
+    const vs = new VersionedStore(storeFile);
+    assert.equal(vs.listSpecTasks(1).length, 1);
+    vs.close();
+  } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+});
