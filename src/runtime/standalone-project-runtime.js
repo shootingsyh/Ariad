@@ -161,15 +161,33 @@ export class StandaloneProjectRuntime {
       const lastFailure = [...(task.history ?? [])]
         .reverse()
         .find(entry => entry?.type === 'SYSTEM_INTERRUPTION');
+      // A planning task parked in SYSTEM_BLOCKED at the debugger stage
+      // has already received the debugger's terminal diagnosis. A manual
+      // resume means the operator changed the conditions (for example
+      // fixed the runtime the diagnosis blamed); re-running the debugger
+      // on the same evidence only repeats its verdict and re-blocks the
+      // task without the repairing role ever re-running (iterprobe
+      // repair-1, 2026-10-31: two manual resumes, two identical
+      // diagnoses, artifacts untouched). Route those back to the tech
+      // lead with a fresh gate-retry budget; the diagnosis stays in
+      // history as evidence, and if the repair fails again the ladder
+      // re-engages on its own.
+      const planningDebuggerBlock = task.taskKind === 'PLANNING'
+        && task.stage === 'project_debugger'
+        && (task.history ?? []).some(entry => entry?.type === 'PLAN_DEBUGGER_DIAGNOSIS');
+      const recoveryPatch = { execution: null };
+      if (planningDebuggerBlock) {
+        recoveryPatch.stage = 'tech_lead';
+        recoveryPatch.input = { ...(task.input ?? {}), planGateRetries: 0 };
+      }
       this.store.appendTaskHistory(task.id, task.version, {
         type: 'SYSTEM_RECOVERY',
         role: task.stage,
         reason,
         previousFailure: lastFailure?.failure ?? null,
+        recoveredToStage: planningDebuggerBlock ? 'tech_lead' : task.stage,
         at: new Date().toISOString(),
-      }, applyTaskEvent(task, 'RECOVER', {
-        execution: null,
-      }));
+      }, applyTaskEvent(task, 'RECOVER', recoveryPatch));
       this.resources.release(task.id);
       recovered.push(task.id);
     }
