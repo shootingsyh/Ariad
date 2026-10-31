@@ -29,6 +29,14 @@ export function validateFeatureDecompositionIteration(artifactRoot, diff, compil
     if (node.parentId == null) fail(`added feature ${nodeId} cannot replace the root`);
     changedParents.add(node.parentId);
     if (contract.interfaces.length === 0) fail(`added feature ${nodeId} must define a semantic interface`);
+    if (contract.decomposition.kind === 'leaf' && !(contract.behavior?.length)) {
+      fail(`added leaf feature ${nodeId} requires behavior clauses (contract behavior layer)`);
+    }
+    for (const scenario of contract.integrationScenarios) {
+      if (!scenario.acceptanceCriteria?.length) {
+        fail(`added feature ${nodeId} scenario ${scenario.id} requires acceptanceCriteria (contract behavior layer)`);
+      }
+    }
     for (const entry of contract.interfaces) {
       if (!entry.verificationSketch?.trim() && entry.verification.length === 0) {
         fail(`interface ${nodeId}/${entry.id} requires verificationSketch or verification anchors`);

@@ -12,7 +12,7 @@ const write = (file, data) => {
   fs.writeFileSync(file, JSON.stringify(data));
 };
 const node = (id, parentId) => ({ id, parentId, title: id, summary: id });
-const contract = id => ({ version: 1, nodeId: id, nodeType: 'feature', decomposition: { kind: 'leaf', reason: 'bounded' }, interfaces: [], imports: [], integrationScenarios: [] });
+const contract = id => ({ version: 1, nodeId: id, nodeType: 'feature', decomposition: { kind: 'leaf', reason: 'bounded' }, interfaces: [], imports: [], integrationScenarios: [], behavior: [`${id} behaves as specified.`] });
 
 test('workflow validator rejects missing target, scope drift, missing contract and empty artifacts', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-node-validator-'));

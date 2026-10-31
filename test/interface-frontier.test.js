@@ -160,6 +160,7 @@ test('top-down feature frontier selects BFS first expandable leaf and expands on
           { nodeId: 'alpha', interfaceId: 'alpha-api' },
           { nodeId: 'beta', interfaceId: 'beta-api' },
         ],
+        acceptanceCriteria: ['Alpha and beta results compose at the project boundary.'],
       }],
     });
     contract(root, 'feature', 'alpha', { decomposition: 'expand', exports: ['alpha-api'] });
@@ -190,6 +191,7 @@ test('top-down feature frontier selects BFS first expandable leaf and expands on
           { nodeId: 'alpha-one', interfaceId: 'one-api' },
           { nodeId: 'alpha-two', interfaceId: 'two-api' },
         ],
+        acceptanceCriteria: ['Alpha children results compose at the alpha boundary.'],
       }],
     });
 

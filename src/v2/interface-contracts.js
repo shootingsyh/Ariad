@@ -96,7 +96,7 @@ function normalizeContract(raw, expectedNodeType) {
   const allowed = new Set([
     'version', 'nodeId', 'nodeType', 'decomposition',
     'interfaces', 'imports', 'integrationScenarios', 'featureUses', 'bindings',
-    'featureTasks', 'taskLinks', 'integrationTasks',
+    'featureTasks', 'taskLinks', 'integrationTasks', 'behavior',
   ]);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`${raw.nodeId ?? '?'}: unexpected property ${key}`);
   if (raw.version !== 1) fail(`${raw.nodeId ?? '?'}: version must be 1`);
@@ -131,6 +131,16 @@ function normalizeContract(raw, expectedNodeType) {
   }
   if (expectedNodeType === 'milestone' && featureTasksRaw.length) {
     fail(`${raw.nodeId}: milestone contracts cannot define canonical featureTasks`);
+  }
+
+  const behaviorRaw = raw.behavior ?? [];
+  if (!Array.isArray(behaviorRaw)) fail(`${raw.nodeId}: behavior must be array`);
+  const behavior = behaviorRaw.map((clause, clauseIndex) => {
+    if (typeof clause !== 'string' || !clause.trim()) fail(`${raw.nodeId}.behavior[${clauseIndex}]: non-empty string required`);
+    return clause.trim();
+  });
+  if (expectedNodeType === 'milestone' && behavior.length) {
+    fail(`${raw.nodeId}: milestone contracts do not carry behavior; behavior belongs to leaf feature contracts`);
   }
 
   const interfaceIds = new Set();
@@ -252,14 +262,24 @@ function normalizeContract(raw, expectedNodeType) {
 
   const integrationScenarios = raw.integrationScenarios.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail(`${raw.nodeId}.integrationScenarios[${index}] invalid`);
-    const keys = new Set(['id', 'description', 'uses']);
+    const keys = new Set(['id', 'description', 'uses', 'acceptanceCriteria', 'invariants']);
     for (const key of Object.keys(entry)) if (!keys.has(key)) fail(`${raw.nodeId}.integrationScenarios[${index}].${key} unexpected`);
     if (typeof entry.id !== 'string' || !entry.id) fail(`${raw.nodeId}.integrationScenarios[${index}].id required`);
     if (typeof entry.description !== 'string' || !entry.description.trim()) fail(`${raw.nodeId}.integrationScenarios[${index}].description required`);
     if (!Array.isArray(entry.uses)) fail(`${raw.nodeId}.integrationScenarios[${index}].uses must be array`);
+    const normalizeClauseList = (value, field) => {
+      if (value == null) return [];
+      if (!Array.isArray(value)) fail(`${raw.nodeId}.integrationScenarios[${index}].${field} must be array`);
+      return value.map((clause, clauseIndex) => {
+        if (typeof clause !== 'string' || !clause.trim()) fail(`${raw.nodeId}.integrationScenarios[${index}].${field}[${clauseIndex}]: non-empty string required`);
+        return clause.trim();
+      });
+    };
     return {
       id: entry.id,
       description: entry.description,
+      acceptanceCriteria: normalizeClauseList(entry.acceptanceCriteria, 'acceptanceCriteria'),
+      invariants: normalizeClauseList(entry.invariants, 'invariants'),
       uses: entry.uses.map((use, useIndex) => {
         if (!use || typeof use !== 'object' || Array.isArray(use)) fail(`${raw.nodeId}.integrationScenarios[${index}].uses[${useIndex}] invalid`);
         if (typeof use.nodeId !== 'string' || !use.nodeId) fail('scenario use requires nodeId');
@@ -399,6 +419,7 @@ function normalizeContract(raw, expectedNodeType) {
     featureTasks,
     taskLinks,
     integrationTasks,
+    behavior,
   };
 }
 
@@ -445,7 +466,24 @@ function freezeAndValidateExports(artifactRoot, nodeType, contracts) {
   if (changed) writeFileSync(frozenExportsPath, JSON.stringify(registry, null, 2) + '\n');
 }
 
-export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier = true, targetNodeId = null } = {}) {
+// Contract behavior layer (design 2026-10-30): a leaf feature must define
+// checkable behavior clauses, and every integration scenario must carry its
+// own acceptance criteria. Enforced only for nodes in scope (fresh frontier
+// output, per-node validation, patched nodes, decomposition additions) so
+// stored contracts from before the layer existed keep loading unchanged.
+function assertBehaviorLayer(contract, nodeType) {
+  for (const scenario of contract.integrationScenarios) {
+    if (!Array.isArray(scenario.acceptanceCriteria) || scenario.acceptanceCriteria.length === 0) {
+      fail(`${contract.nodeId}: integration scenario ${scenario.id} requires acceptanceCriteria (contract behavior layer)`);
+    }
+  }
+  if (nodeType !== 'feature') return;
+  if (contract.decomposition.kind === 'leaf' && (!Array.isArray(contract.behavior) || contract.behavior.length === 0)) {
+    fail(`${contract.nodeId}: leaf feature requires behavior clauses (contract behavior layer)`);
+  }
+}
+
+export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier = true, targetNodeId = null, requireBehaviorFor = null } = {}) {
   const tree = loadPlannerHierarchy(artifactRoot, nodeType);
   const contracts = loadBoundaryContracts(artifactRoot, nodeType);
 
@@ -463,9 +501,13 @@ export function validateBoundaryContracts(artifactRoot, nodeType, { allowFrontie
     ? loadBoundaryContracts(artifactRoot, 'feature')
     : null;
 
+  const behaviorScope = requireBehaviorFor == null
+    ? (targetNodeId != null ? new Set([targetNodeId]) : new Set())
+    : new Set(requireBehaviorFor);
   for (const item of targetNodeId == null ? tree.items : [tree.byId.get(targetNodeId)]) {
     const contract = contracts.get(item.id);
     if (!contract) fail(`${nodeType}:${item.id}: missing boundary contract`);
+    if (behaviorScope.has(item.id)) assertBehaviorLayer(contract, nodeType);
     const children = tree.childrenById.get(item.id) ?? [];
 
     if (contract.decomposition.kind === 'leaf' && children.length > 0) {
@@ -643,6 +685,8 @@ export function frontierArtifactInstructions(artifactRoot, nodeType) {
     'bindings live in the same contract artifact but are runtime metadata, not part of the frozen semantic export: [{interfaceId,realizationAnchors,verificationAnchors}].',
     'Milestone contracts define integrationTasks DURING the milestone frontier pass, plus taskLinks:[{taskId,addDependsOn,addVerification}] that link existing feature tasks and only ADD dependencies/verification.',
     'Milestones have no schema field capable of overriding a linked feature task title, intent, acceptanceCriteria, or ownership.',
+    'BEHAVIOR LAYER: a leaf feature contract must carry behavior:[...] — checkable clauses covering states, action order, preconditions, and exception or silent-failure behavior, each clause decidable by a tester. Clause sources in priority order: human rulings > project design documents > current code; when they conflict, report an issue instead of silently adopting the code behavior.',
+    'Every integrationScenarios entry must carry acceptanceCriteria:[...] (per-scenario, decidable) and may carry invariants:[...] for cross-child guarantees; a prose description alone is not an integration requirement.',
     'TOP-DOWN RULE: define a node boundary before looking below it.',
     'ONE-LAYER RULE: in one run create or refine only the current node and its direct children. Never create grandchildren.',
     'ENCAPSULATION RULE: a parent may depend only on direct-child exported interfaces.',
@@ -664,6 +708,7 @@ export function validateFrontierPass(artifactRoot, nodeType, targetNodeId = null
   }
   const contract = contracts.get(target.id);
   if (!contract) fail(`${nodeType}:${target.id}: missing target contract after frontier pass`);
+  assertBehaviorLayer(contract, nodeType);
 
   const children = tree.childrenById.get(target.id) ?? [];
   if (contract.decomposition.kind === 'leaf') {

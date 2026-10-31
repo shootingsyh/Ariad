@@ -63,6 +63,7 @@ function featureArtifacts() {
       }],
       imports: [],
       integrationScenarios: [],
+      behavior: ['Given a request, project-run produces a result and writes feature.txt.'],
       bindings: [],
       featureTasks: [{
         id: 'project-impl',
@@ -124,6 +125,7 @@ function milestoneArtifacts() {
         id: 'm1-flow',
         description: 'Run the project feature through the milestone.',
         uses: [{ graph: 'feature', nodeId: 'project', interfaceId: 'project-run' }],
+        acceptanceCriteria: ['The milestone run produces the feature result end to end.'],
       }],
       taskLinks: [{
         taskId: 'project-impl',

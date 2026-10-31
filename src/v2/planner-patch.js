@@ -118,8 +118,14 @@ function applyOp(doc, op, index) {
   throw new Error(`PLANNER_PATCH_OP_INVALID: ops[${index}] unknown op ${JSON.stringify(kind ?? null)}`);
 }
 
-export function validatePlannerArtifacts(artifactRoot) {
-  validateBoundaryContracts(artifactRoot, 'feature');
+export function validatePlannerArtifacts(artifactRoot, { touchedFile = null } = {}) {
+  // Contract behavior layer: when a patch writes a feature contract, that
+  // contract must satisfy the behavior layer; untouched stored contracts
+  // are not retroactively re-judged.
+  const featureScope = typeof touchedFile === 'string' && touchedFile.startsWith('planner/interfaces/features/')
+    ? [touchedFile.slice('planner/interfaces/features/'.length, -'.json'.length)]
+    : null;
+  validateBoundaryContracts(artifactRoot, 'feature', featureScope ? { requireBehaviorFor: featureScope } : {});
   validateBoundaryContracts(artifactRoot, 'milestone');
   loadPlannerArtifactPlan(artifactRoot);
 }
@@ -165,7 +171,7 @@ export function applyPlannerPatch({ artifactRoot, file, ops, validate = validate
     mkdirSync(dirname(stagedPath), { recursive: true });
     writeFileSync(stagedPath, serialized);
     try {
-      validate(staging);
+      validate(staging, { touchedFile: rel });
     } catch (error) {
       throw new Error(`PLANNER_PATCH_VALIDATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     }
