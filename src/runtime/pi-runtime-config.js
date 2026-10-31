@@ -92,10 +92,11 @@ const ARIAD_PI_READONLY_PROJECT_TOOLS = Object.freeze([
   'ariad_memory_search', 'ariad_session_history', 'ariad_role_result',
 ]);
 
-// Planning read tier: critics, plan validators, PM, debugger and seal
+// Planning read tier: critics, plan validators, debugger and seal
 // checker sessions judge artifacts and code; they never execute or edit.
 // (The Critic session that ran `find /` across the host had been handed
-// the full delivery set, bash included.)
+// the full delivery set, bash included.) The PM is the one exception:
+// it owns the requirements document and uses the PM document tier below.
 export const ARIAD_PI_PLANNING_READ_TOOLS = Object.freeze([
   'read', 'grep', 'find', 'ls',
   ...ARIAD_PI_READONLY_PROJECT_TOOLS,
@@ -113,8 +114,18 @@ export const ARIAD_PI_PLANNING_WRITE_TOOLS = Object.freeze([
   ...ARIAD_PI_READONLY_PROJECT_TOOLS,
 ]);
 
+// PM document tier: the PM authors and maintains the requirements
+// document (.ariad/docs/REQUIREMENTS.md) and other human-facing docs,
+// so it gets edit/write on top of the read tier — but no bash and no
+// planner/tree patch tools: the PM never authors the task tree and
+// never executes anything.
+export const ARIAD_PI_PM_DOC_TOOLS = Object.freeze([
+  ...ARIAD_PI_PLANNING_READ_TOOLS,
+  'edit', 'write',
+]);
+
 const PI_EXECUTION_ROLES = Object.freeze(['developer', 'test_engineer', 'tester', 'artist']);
-const PI_PLANNING_READ_ROLES = Object.freeze(['tech_lead_critic', 'plan_validator', 'pm', 'project_debugger', 'interface_seal']);
+const PI_PLANNING_READ_ROLES = Object.freeze(['tech_lead_critic', 'plan_validator', 'project_debugger', 'interface_seal']);
 
 export function piToolsForTask({ role, taskKind } = {}) {
   if (taskKind === 'ADHOC_ANALYSIS') return [...ARIAD_PI_REVIEW_TOOLS];
@@ -124,6 +135,7 @@ export function piToolsForTask({ role, taskKind } = {}) {
   // mutating tools AND bash, so the declaration is not the capability.
   if (role === 'reviewer' || role === 'ux_reviewer') return [...ARIAD_PI_DELIVERY_TOOLS];
   if (role === 'tech_lead') return [...ARIAD_PI_PLANNING_WRITE_TOOLS];
+  if (role === 'pm') return [...ARIAD_PI_PM_DOC_TOOLS];
   if (PI_PLANNING_READ_ROLES.includes(role)) return [...ARIAD_PI_PLANNING_READ_TOOLS];
   // Least privilege by default: an unrecognized session role gets the
   // read-only planning tier, never the full delivery set.

@@ -276,3 +276,39 @@ test('versioned decompose without a DB draft is rejected at submission, not at t
   assert.equal(out.transitionHistory.type, 'PLAN_GATE_RETRY');
   assert.equal(out.input.previousGateFailure.blockedType, 'TL_PLAN_WITHOUT_DRAFT');
 });
+
+import { recordRequirementsApproval } from '../src/v2/project-docs.js';
+
+test('versioned decompose is bounced at submission when requirements are missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-reqgate-'));
+  mkdirSync(join(dir, '.ariad', 'docs'), { recursive: true });
+  const file = join(dir, 'state2.db');
+  const vs = new VersionedStore(file);
+  vs.initProject('P');
+  vs.close();
+  const store = { filePath: file, getProject: () => ({ id: 'P', versionedTree: true, workspace: dir }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir });
+  const out = roles.tech_lead.transition({
+    task: { id: 'd2', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [], input: { purpose: 'PLANNER_DECOMPOSE', planGateRetries: 0 } },
+    result: { outcome: 'PLANNED', summary: 'plan ready', result: null },
+  });
+  assert.equal(out.input.previousGateFailure.blockedType, 'REQUIREMENTS_GATE');
+});
+
+test('approved requirements let the decompose submission reach the draft check', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-reqok-'));
+  mkdirSync(join(dir, '.ariad', 'docs'), { recursive: true });
+  writeFileSync(join(dir, '.ariad', 'docs', 'REQUIREMENTS.md'), '# Requirements\n\nBaseline.\n');
+  recordRequirementsApproval(dir, { approvedBy: 'test' });
+  const file = join(dir, 'state2.db');
+  const vs = new VersionedStore(file);
+  vs.initProject('P');
+  vs.close();
+  const store = { filePath: file, getProject: () => ({ id: 'P', versionedTree: true, workspace: dir }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir });
+  const out = roles.tech_lead.transition({
+    task: { id: 'd3', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [], input: { purpose: 'PLANNER_DECOMPOSE', planGateRetries: 0 } },
+    result: { outcome: 'PLANNED', summary: 'plan ready', result: null },
+  });
+  assert.equal(out.input.previousGateFailure.blockedType, 'TL_PLAN_WITHOUT_DRAFT');
+});

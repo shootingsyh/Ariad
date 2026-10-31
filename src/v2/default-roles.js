@@ -197,6 +197,28 @@ export function createDefaultV2Roles({
           if (task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const proj = store.getProject?.(task.projectId);
             if (proj?.versionedTree === true) {
+              // Requirements gate (design 2026-10-31): decomposition of a
+              // new version starts only from human-approved requirements.
+              // Bounce at submission, before any draft check, so the
+              // failure names the missing foundation instead of sending
+              // the batch through gates built on unfinalized ground. PM
+              // authors the document; a human approves it (hash-pinned).
+              if (docsRegimeAdopted(proj.workspace)) {
+                const reqStatus = requirementsStatus(proj.workspace);
+                if (!reqStatus.approved) {
+                  return {
+                    state: 'NEEDS_HUMAN',
+                    transitionHistory: {
+                      type: 'REQUIREMENTS_GATE',
+                      role: 'tech_lead',
+                      summary: reqStatus.exists
+                        ? 'REQUIREMENTS_NOT_APPROVED: .ariad/docs/REQUIREMENTS.md exists but is not human-approved (or was edited after approval) \u2014 a human must approve it (ariad project approve-requirements) before decomposition begins.'
+                        : 'REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing \u2014 PM must author the version requirements document (reverse-engineering a baseline from the implemented state when none exists), review it, and a human must approve it (ariad project approve-requirements) before decomposition begins.',
+                      at: new Date().toISOString(),
+                    },
+                  };
+                }
+              }
               let draftOpen = false;
               try {
                 const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state2.db'));
@@ -1468,6 +1490,26 @@ export function createDefaultV2Roles({
           }
           const validatorProject = store.getProject(task.projectId);
           if (validatorProject?.versionedTree === true) {
+            // Requirements gate, front-moved from promotion (design
+            // 2026-10-31): a DB draft is validated only against
+            // human-approved requirements, so a decomposition can no
+            // longer be built and reviewed on unfinalized ground. PM
+            // authors the document; the human approves it (hash-pinned).
+            if (docsRegimeAdopted(validatorProject.workspace)) {
+              const reqStatus = requirementsStatus(validatorProject.workspace);
+              if (!reqStatus.exists) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: 'REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing \u2014 PM must author the version requirements document (reverse-engineering a baseline from the implemented state when none exists) and a human must approve it before a DB draft can be validated', errorCode: 'REQUIREMENTS_NOT_FINALIZED' },
+                };
+              }
+              if (!reqStatus.approved) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: 'REQUIREMENTS_NOT_APPROVED: the requirements document was edited after approval (or never approved) \u2014 a human must approve it (ariad project approve-requirements) before a DB draft can be validated', errorCode: 'REQUIREMENTS_NOT_APPROVED' },
+                };
+              }
+            }
             const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
             try {
               const draft = draftStore.getOpenDraft();
@@ -1480,7 +1522,7 @@ export function createDefaultV2Roles({
               if (draftStore.listSpecTasks(draft.version).length === 0) {
                 return {
                   outcome: 'NOT_PASS',
-                  result: { valid: false, plan: null, error: 'DRAFT_EMPTY: the open DB draft contains no tasks - author the full tree into it with ariad_tree_patch applyOps before validation', errorCode: 'DRAFT_EMPTY' },
+                  result: { valid: false, plan: null, error: 'DRAFT_EMPTY: the open DB draft contains no tasks - author the tree into it with ariad_tree_patch applyOps before validation', errorCode: 'DRAFT_EMPTY' },
                 };
               }
               const draftErrors = draftStore.validateVersion(draft.version);
@@ -1632,6 +1674,7 @@ export function createDefaultV2Roles({
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain: fold the human\'s latest requirements into it and obtain human approval before any new-version decomposition is planned. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
+          'REQUIREMENTS AUTHORSHIP: You own .ariad/docs/REQUIREMENTS.md. It is the single source of truth for what the product must be, written for humans: high-level, plain language, no internal IDs and no provenance annotations \u2014 the document does not cite where its requirements came from; it is where they live. When a project has no requirements document (the normal case for a taken-over or iterated project), authoring one is your first duty, before judging any decomposition: reverse-engineer the baseline from what the previous version actually implemented \u2014 the legacy record, the existing project documents, and the code \u2014 organized under the requirement categories customary for the product domain (use a domain template under .ariad/docs/templates/ when the project has one) instead of categories invented on the spot. Then fold the human\'s new requirements for the coming version into the same document, and state in plain language what changes relative to the baseline: the delta the Tech Lead will plan from. Keep the root document at the level a product owner would write; detail belongs to the Tech Lead\'s feature documents, and milestones carry no requirements detail. Review your own draft twice before presenting it. When the document is ready, return NEEDS_HUMAN with result.questions asking the human to review the document and approve it (ariad project approve-requirements). If a plan reaches you while the document is missing or unapproved, do not judge the plan on its merits \u2014 say the requirements must be finalized and approved first.',
           'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
           'Review the plan as if this product must be handed to real intended users and be good enough to ship, deliver, or sell within its stated scope. Do not accept a plan merely because individual components have isolated tests.',
           'Every important feature and every milestone must have at least one representative end-to-end user scenario: enter through a real supported product entry point, follow the required user-visible steps without shortcuts, exercise the relevant child capabilities together, and reach the intended user-visible outcome.',

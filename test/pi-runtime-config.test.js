@@ -102,11 +102,17 @@ test('planning roles get minimal tool tiers and bash stays confined to the works
   const tl = piToolsForTask({ role: 'tech_lead', taskKind: 'PLANNING_TASK' });
   assert.equal(tl.includes('write'), true, 'tech lead authors artifact files');
   assert.equal(tl.includes('bash'), false, 'planning never runs a shell');
-  for (const role of ['tech_lead_critic', 'plan_validator', 'pm', 'project_debugger', 'interface_seal']) {
+  for (const role of ['tech_lead_critic', 'plan_validator', 'project_debugger', 'interface_seal']) {
     const tools = piToolsForTask({ role, taskKind: 'PLANNING_TASK' });
     for (const forbidden of ['bash', 'edit', 'write']) assert.equal(tools.includes(forbidden), false, `${role} must not have ${forbidden}`);
     assert.equal(tools.includes('ariad_role_result'), true);
   }
+  // PM owns the requirements document: it gets edit/write for documents,
+  // but no bash and no planner/tree authoring tools.
+  const pmTools = piToolsForTask({ role: 'pm', taskKind: 'PLANNING_TASK' });
+  assert.equal(pmTools.includes('edit'), true, 'pm authors the requirements document');
+  assert.equal(pmTools.includes('write'), true, 'pm authors the requirements document');
+  for (const forbidden of ['bash', 'ariad_planner_patch', 'ariad_tree_patch']) assert.equal(pmTools.includes(forbidden), false, `pm must not have ${forbidden}`);
   const unknown = piToolsForTask({ role: 'some_future_role', taskKind: 'MILESTONE_TASK' });
   assert.equal(unknown.includes('bash'), false, 'unknown roles default to the read tier');
   assert.deepEqual(piToolsForTask({ role: 'artist', taskKind: 'MILESTONE_TASK' }), [...ARIAD_PI_DELIVERY_TOOLS]);
