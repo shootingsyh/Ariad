@@ -147,6 +147,13 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     pointer = 'project.json';
   }
 
+  // Best-effort: a project without a readable manifest must not fail
+  // the iteration over the auxiliary reset (its store row already
+  // carries IDLE, and the manifest is recreated on first write).
+  if (typeof manager.writeManifest === 'function') {
+    try { manager.writeManifest(name, { executionState: 'IDLE' }); } catch { /* no manifest to reset */ }
+  }
+
   return {
     project: paths.id,
     projectId: project.id,

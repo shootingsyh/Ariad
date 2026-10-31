@@ -145,3 +145,26 @@ test('begin-iteration refuses when the manager manifest says RUNNING even if the
   const manager = new AriadProjectManager({ projectsRoot });
   assert.throws(() => beginIteration({ manager, name: 'demo' }), /ITERATION_PROJECT_NOT_STOPPED/);
 });
+
+// Regression (2026-10-31, found live on iterprobe): the workspace
+// manifest's stored stateDb is baked at creation; after begin-iteration
+// flips dbFile, status() must report the NEW store path, or the daemon
+// keeps opening the old store and the iteration never starts.
+test('status reports the store resolved from the dbFile pointer, not the stale manifest stateDb', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  writeFileSync(join(workspace, '.ariad', 'project.json'),
+    `${JSON.stringify({ id: 'demo', workspace, desiredState: 'STOPPED', executionState: 'SUCCEEDED', stateDb: join(workspace, '.ariad', 'state.db') }, null, 2)}\n`);
+  const manager = new AriadProjectManager({ projectsRoot });
+  assert.equal(manager.status('demo').stateDb, join(workspace, '.ariad', 'state.db'));
+  beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:45:00.000Z') });
+  assert.equal(manager.status('demo').stateDb, join(workspace, '.ariad', 'state2.db'));
+});
+
+test('begin-iteration resets the manifest executionState so the new version is not born SUCCEEDED', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  writeFileSync(join(workspace, '.ariad', 'project.json'),
+    `${JSON.stringify({ id: 'demo', workspace, desiredState: 'STOPPED', executionState: 'SUCCEEDED' }, null, 2)}\n`);
+  const manager = new AriadProjectManager({ projectsRoot });
+  beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:50:00.000Z') });
+  assert.equal(manager.status('demo').executionState, 'IDLE');
+});

@@ -239,6 +239,7 @@ export class AriadProjectManager {
       uxReview: manifest.uxReview?.enabled === true ? { enabled: true } : { enabled: false },
       features: { artist: { enabled: manifest.features?.artist?.enabled !== false } },
       executionState: manifest.executionState ?? 'IDLE',
+      stateDb: p.db,
       projectVersion: Number.isInteger(manifest.projectVersion) ? manifest.projectVersion : 0,
       activeVersion: Number.isInteger(manifest.activeVersion)
         ? manifest.activeVersion
