@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Canonical ignore coverage for Ariad's local-only runtime residue.
-// Session transcripts, state stores and logs live inside the project
+// The project memory store (memory.db) is tracked on purpose: it is the
+// project's accumulated knowledge and should travel with the repo; only
+// its live sidecar files are ignored. Session transcripts, state stores
+// and logs live inside the project
 // workspace (the memory curator and the runtime read them from those
 // paths, so the paths stay put), but they are machine-local working
 // state and must never be swept into the project's Git history by a
@@ -11,7 +14,9 @@ import { join } from 'node:path';
 export const ARIAD_DIR_GITIGNORE_LINES = [
   '# Ariad runtime state — local only, never commit',
   '/state*.db*',
-  '/memory.db*',
+  '/memory.db-wal',
+  '/memory.db-shm',
+  '/memory.db-journal',
   '/pi/',
   '/run_logs/',
 ];

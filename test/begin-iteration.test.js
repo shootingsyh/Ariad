@@ -236,9 +236,10 @@ test('workspace ignore coverage merges canonical lines without clobbering or dup
   assert.equal(root.split('\n').filter(l => l === '/backups/').length, 1);
   const inner = readFileSync(join(ariad, '.gitignore'), 'utf8');
   assert.ok(inner.includes('state.db-wal'));
-  for (const line of ['/state*.db*', '/memory.db*', '/pi/', '/run_logs/']) {
+  for (const line of ['/state*.db*', '/memory.db-wal', '/pi/', '/run_logs/']) {
     assert.equal(inner.split('\n').filter(l => l === line).length, 1, line);
   }
+  assert.ok(!inner.split('\n').includes('/memory.db*'), 'memory.db itself stays tracked');
 });
 
 test('manager.create gives a new project an ignore folder and default gitignore coverage', () => {
