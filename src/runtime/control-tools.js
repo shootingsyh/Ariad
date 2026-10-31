@@ -98,6 +98,12 @@ export class AriadControlTools {
     return this.service.listIssues(name, states);
   }
 
+  decide(name, decision) {
+    if (!name) throw new Error('project name is required');
+    if (!decision || !String(decision).trim()) throw new Error('decision text is required');
+    return this.service.submitDecision(name, decision);
+  }
+
   async execute(action, input = {}) {
     switch (action) {
       case 'list': return this.list();
@@ -116,6 +122,7 @@ export class AriadControlTools {
       case 'stop': return this.stop(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'open_issue': return this.openIssue(input.name, input.issue ?? input);
       case 'list_issues': return this.listIssues(input.name, input.states ?? null);
+      case 'decide': return this.decide(input.name, input.decision);
       default: throw new Error(`unknown Ariad control action: ${action}`);
     }
   }

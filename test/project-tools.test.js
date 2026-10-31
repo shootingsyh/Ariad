@@ -280,6 +280,19 @@ test('AriadControlTools delegates lifecycle actions to manager and service', asy
   assert.deepEqual(calls.slice(2).map(call => call[0]), ['start', 'pause', 'pause', 'resume', 'stop']);
 });
 
+test('AriadControlTools decide delivers the human decision to the service', async () => {
+  const calls = [];
+  const manager = { status(name) { return { id: name }; } };
+  const service = {
+    async submitDecision(name, decision) { calls.push([name, decision]); return { result: { taskId: 't1' }, project: { id: name } }; },
+  };
+  const tools = new AriadControlTools({ manager, service });
+  const out = await tools.execute('decide', { name: 'P', decision: 'Approved; proceed.' });
+  assert.deepEqual(calls, [['P', 'Approved; proceed.']]);
+  assert.equal(out.result.taskId, 't1');
+  await assert.rejects(() => tools.execute('decide', { name: 'P', decision: '  ' }), /decision text is required/);
+});
+
 test('control MCP exposes external Ariad project management tool', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-control-mcp-'));
   const child = spawn(process.execPath, ['src/runtime/control-mcp.js'], {

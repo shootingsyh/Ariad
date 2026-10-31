@@ -20,7 +20,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -54,6 +54,7 @@ function parse(argv) {
   const [scope, action, ...arguments_] = argv;
   let name = null;
   let analysisInstruction = null;
+  let decision = null;
   let roleModels = null;
   let goal = null;
   let sourcePath = null;
@@ -68,6 +69,7 @@ function parse(argv) {
   let dbFile = null;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
+  if (scope === 'project' && action === 'decide') decision = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
     if (!arguments_.length) throw new Error('issue-open requires JSON');
     issue = JSON.parse(arguments_.shift());
@@ -134,7 +136,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile };
 }
 
 
@@ -232,7 +234,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile } = parse(argv);
   // Install-level role defaults (ariad config guide / assistant /
   // dashboard) are the create fallback: an operator who configured
   // defaults should not have to repeat them on every create. Explicit
@@ -355,9 +357,12 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       throw new Error(`ROLE_MODEL_VALIDATION_FAILED: ${failures.join('; ')} - fix the model refs (ariad config guide) and retry; project was not created`);
     }
   }
-  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues'].includes(action)) {
+  if (scope === 'project' && action === 'decide' && !decision?.trim()) {
+    throw new Error('decide requires decision text: ariad project decide <name> <decision>');
+  }
+  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues', 'decide'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
-    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'create', 'takeover', 'adopt', 'issue-open'].includes(action)) await ensureAriadDaemon(root);
+    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'create', 'takeover', 'adopt', 'issue-open', 'decide'].includes(action)) await ensureAriadDaemon(root);
     const actualAction = action === 'set-ux-review' ? 'set_ux_review' : action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
     return daemonRequest(root, {
       action: actualAction,
@@ -370,6 +375,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       ...(goal != null ? { goal } : {}),
       ...(sourcePath != null ? { sourcePath } : {}),
       ...(issue != null ? { issue } : {}),
+      ...(decision != null ? { decision } : {}),
       ...(interfaceId != null ? { interfaceId } : {}),
     });
   }
