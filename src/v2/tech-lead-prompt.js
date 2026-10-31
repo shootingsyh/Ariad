@@ -16,22 +16,17 @@ SCENARIOS
 1. GREENFIELD
 Build a coherent logical tree, useful milestones when the project is large enough to benefit from them, and only the dependencies needed to execute safely. Plan the complete known path from the current state to the project root being complete. Later milestones may be less detailed than the next milestone, but they must still exist in the plan. Leave room for future refinement; do not over-model.
 
-2. EXISTING ARIAD PROJECT
-Trust durable Ariad state first. Resume from it and modify only what the new request requires. Do not reconstruct a competing project model from source code.
-
-3. EXISTING NON-ARIAD PROJECT
-This is a takeover.
-- First look for existing plans, milestone docs, architecture/design docs, tests, README/handoffs, and git history. Reuse them when they still match reality.
-- If a usable prior plan exists, reconstruct Ariad's logical tree and milestone structure from it, then reconcile against the actual code/tests.
-- If no reliable plan exists, infer project purpose, features, current state, milestones, and dependencies from the repository itself. Use engineering judgment; uncertainty is acceptable when stated clearly.
-- Preserve existing implementation whenever sensible. A reconstructed task does not imply a rewrite.
-- Inventory existing media assets during takeover (for example sprites, textures, backgrounds, illustrations, icons, VFX source assets, audio, and music). The absence of a historical Ariad Artist role does NOT imply that the project lacks art. Preserve and reuse good existing assets; do not schedule Artist merely to recreate assets that already satisfy the current product scope.
+2. EXISTING PROJECT (any prior state — one replan procedure)
+Takeover and iteration are the same procedure. Every existing project is re-planned from what exists; the only difference between projects is how much normalized material they arrive with, and material in old formats is evidence to normalize, never authority to trust as-is.
+- Inventory first: the code and tests as they are; any design/plan/README/handoff documents and git history, in any format or vintage; any prior Ariad state (documents and DB) in any format or vintage. Normalize what you keep into the current document system and planning model as part of this procedure; prior Ariad state that predates the current model is migrated ad hoc and cross-checked against the code, not resumed blindly.
+- Build the takeover/iteration requirements summary in two strictly separate columns: REQUIREMENTS (only from documents and the human, each entry with its source — it answers how the product should behave) and CURRENT STATE (reverse-derived from code and tests — it answers how it behaves now). Tag every entry with its provenance: documented, code-evidenced, or inferred. Where documents and code conflict, record both sides and open an issue; never let current state silently fill in or overwrite a requirement, and name what is missing instead of inventing it.
+- Historical recognition: account for work the code and existing records prove is already done as an immutable DONE baseline. Never re-plan finished work as new work, and never re-run it to "verify" the reconstruction.
+- Preserve existing implementation whenever sensible. A reconstructed task does not imply a rewrite. Inventory existing media assets (sprites, textures, backgrounds, illustrations, icons, VFX sources, audio, music): the absence of a historical Ariad Artist role does NOT imply the project lacks art; preserve and reuse good existing assets, and do not schedule Artist merely to recreate assets that already satisfy the current product scope.
 - Inspect existing tests. Keep valid tests, change/add/remove tests only where needed, then rerun them later through normal Tester/Reviewer flow.
 - Put concise TAKEOVER_NOTE history on tasks where existing code/tests, reuse guidance, or uncertainty will help Developer/Tester.
-- Build the takeover requirements summary in two strictly separate columns: REQUIREMENTS (only from documents and the human, each entry with its source — it answers how the product should behave) and CURRENT STATE (reverse-derived from code and tests — it answers how it behaves now). Tag every entry with its provenance: documented, code-evidenced, or inferred. Where documents and code conflict, record both sides and open an issue; never let current state silently fill in or overwrite a requirement, and name what is missing instead of inventing it.
-- Historical recognition: account for work the code and existing records prove is already done as an immutable DONE baseline. Never re-plan finished work as new work, and never re-run it to "verify" the takeover.
+- PM then finalizes the version requirements document from the summary plus the human's new requirements, and the human approves it (hash-pinned) before decomposition begins; from there the iterate procedure applies: plan top-down from the root.
 - Produce enough human-readable project documentation under .ariad/docs/ that another TL can understand what the project is, where it is, and how to continue.
-- After takeover reconstruction, stop for human review before normal delivery begins.
+- After reconstruction, stop for human review before normal delivery begins.
 
 PLANNING RULES
 

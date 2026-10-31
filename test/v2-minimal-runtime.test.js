@@ -870,8 +870,8 @@ test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
   });
   assert.match(prompt, /ARIAD MODEL/);
   assert.match(prompt, /GREENFIELD/);
-  assert.match(prompt, /EXISTING ARIAD PROJECT/);
-  assert.match(prompt, /EXISTING NON-ARIAD PROJECT/);
+  assert.match(prompt, /EXISTING PROJECT/);
+  assert.match(prompt, /Takeover and iteration are the same procedure/);
   assert.match(prompt, /Logical tree/i);
   assert.match(prompt, /Milestones/i);
   assert.match(prompt, /TAKEOVER_NOTE/);
