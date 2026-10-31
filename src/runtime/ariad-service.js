@@ -5,6 +5,7 @@ import { ReconcileTrigger } from '../v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { VersionedStore } from '../v2/versioned-store.js';
 import { isAdhocAnalysis } from '../v2/control-task-policy.js';
 import { requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
@@ -184,6 +185,29 @@ export class AriadService {
           request: { purpose: 'INITIAL_PLAN', instruction: project.goal || 'Plan and deliver the requested project.' },
           context: { bootstrap: true },
         });
+      }
+    }
+    // A DB-first project fresh from begin-iteration has an empty store
+    // and no production version yet: starting it enters version
+    // planning whatever its mode (the NEW-only rule above predates
+    // iteration; an iterated TAKEOVER project otherwise sits idle).
+    {
+      const store = this.runtimeFor(project).store;
+      const record = store.getProject(project.id);
+      if (record?.versionedTree === true
+        && store.listTasks(project.id).length === 0
+        && store.listPlanningRequests(project.id).length === 0) {
+        const versioned = new VersionedStore(store.filePath);
+        let prod = null;
+        try { prod = versioned.getProdVersion(); } finally { versioned.close(); }
+        if (!prod) {
+          store.enqueuePlanningRequest({
+            id: `initial-plan:${project.id}`,
+            projectId: project.id,
+            request: { purpose: 'INITIAL_PLAN', instruction: record.goal || 'Replan the project for its new version from the approved requirements and the legacy record.' },
+            context: { bootstrap: true, iteration: true },
+          });
+        }
       }
     }
     this.wake('running');

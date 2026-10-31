@@ -112,3 +112,30 @@ test('AriadService owns reconcile and pause/resume without OpenClaw', async () =
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('iterated DB-first project start enqueues version planning even in TAKEOVER mode', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-iter-start-'));
+  const manager = new AriadProjectManager({ projectsRoot: root });
+  const project = manager.create('iterated-project', {
+    goal: 'Evolve the existing tool to its next version',
+    mode: 'TAKEOVER',
+    roleModels: Object.fromEntries(ARIAD_MODEL_ROLES.map(role => [role, 'test/runtime'])),
+  });
+  const provider = new PydanticV2Provider(new PydanticRuntimeClient(), {
+    resolveModelConfig: () => ({ kind: 'test', model: 'noop', result: {} }),
+  });
+  const service = new AriadService({ manager, provider });
+  try {
+    const store = service.runtimeFor(manager.status(project.id)).store;
+    store.updateProject(project.id, store.getProject(project.id).version, { versionedTree: true });
+    await service.ensureRunning(project.id);
+    await service.ensureRunning(project.id);
+    const requests = store.listPlanningRequests(project.id);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].request.purpose, 'INITIAL_PLAN');
+    assert.equal(requests[0].context.iteration, true);
+  } finally {
+    await service.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
