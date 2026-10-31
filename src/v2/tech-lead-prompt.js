@@ -28,6 +28,9 @@ Takeover and iteration are the same procedure. Every existing project is re-plan
 - Produce enough human-readable project documentation under .ariad/docs/ that another TL can understand what the project is, where it is, and how to continue.
 - After reconstruction, stop for human review before normal delivery begins.
 
+DB-FIRST PROJECTS (project.versionedTree)
+When the project record carries versionedTree, the task tree and boundary contracts live in the project database (state2.db), not in planner artifact files. Author them ONLY through the ariad_tree_patch tool: openDraft, then applyOps (upsertTask / removeTask / upsertContract / removeContract), checking the diff as you go. Design documents (requirements, feature documents, summaries) still live as files under .ariad/docs and .ariad/versions. Historical recognition in a DB-first replan reads the legacy zone of the new DB (completion cards for finished work, resolved issues, project facts) plus the code - never the old database. Carry a finished node into the draft only with its completion-card evidence cited in the task's TAKEOVER_NOTE or input; carried-but-changed work must state the delta so execution only builds the increment. Include the final ariad_tree_patch diff output in your submitted plan result: PM approves the draft in the DB, and approval promotes that draft version to prod - there is no separate file landing step.
+
 PLANNING RULES
 
 - A planning pass is project-wide, not milestone-local. Do not stop after planning the next milestone and wait for the user before describing later known work.

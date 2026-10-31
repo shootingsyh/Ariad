@@ -18,6 +18,8 @@ import { completeTakeoverReview } from './takeover-gate.js';
 import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { validateTechLeadPlan } from './tech-lead-plan.js';
 import { loadPreparedUnifiedTaskTree, reconcileUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
+import { VersionedStore } from './versioned-store.js';
+import { reconcileVersionedDraft } from './versioned-promotion.js';
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -398,6 +400,37 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
+          // DB-first projects (project.versionedTree): PM approval promotes
+          // the open DB draft to prod; there are no planner files to land.
+          const versionedProject = store.getProject(task.projectId);
+          if (versionedProject?.versionedTree === true) {
+            let vlanded;
+            let versionedStore = null;
+            try {
+              versionedStore = new VersionedStore(join(versionedProject.workspace, '.ariad', 'state2.db'));
+              vlanded = reconcileVersionedDraft({ versionedStore, store, projectId: task.projectId, approvedBy: 'pm' });
+            } catch (error) {
+              if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'VERSIONED_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                  summary: 'Versioned tree plan could not be landed: ' + error.message + '. Delivery remains unchanged.',
+                  reconcileIssues: error.issues ?? null, at: new Date().toISOString(),
+                },
+              };
+            } finally {
+              versionedStore?.close();
+            }
+            const vchanged = vlanded.created.length + vlanded.updated.length + vlanded.obsoleted.length;
+            return { state: 'DONE', transitionHistory: {
+              type: 'VERSIONED_TREE_PLAN_ACCEPTED', role: 'pm',
+              summary: vchanged
+                ? 'Accepted DB draft and promoted v' + vlanded.version + ' to prod: ' + vlanded.created.length + ' created, ' + vlanded.updated.length + ' updated, ' + vlanded.obsoleted.length + ' obsoleted.'
+                : 'Accepted DB draft and promoted v' + vlanded.version + ' to prod without task changes.',
+              taskCount: vlanded.total, landed: vlanded, at: new Date().toISOString(),
+            } };
+          }
           // A migrated unified tree must not pass through the legacy plan writer.
           // PM approval lands the approved plan instead: reconcile the compiled
           // artifact tree into the store in place (new tasks created, unfinished

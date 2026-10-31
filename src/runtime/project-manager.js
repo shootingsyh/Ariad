@@ -75,7 +75,7 @@ export class AriadProjectManager {
         workspace,
         ariad,
         manifest: join(ariad, 'project.json'),
-        db: join(ariad, 'state.db'),
+        db: join(ariad, ref.dbFile ?? 'state.db'),
         adopted: true,
       };
     }
