@@ -168,3 +168,38 @@ test('begin-iteration resets the manifest executionState so the new version is n
   beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:50:00.000Z') });
   assert.equal(manager.status('demo').executionState, 'IDLE');
 });
+
+// Regressions (2026-10-31, iterprobe live findings): the new version
+// must start with its delivery gate closed, and the previous store's
+// legacy zone must carry forward into the next iteration.
+test('begin-iteration starts the new version with the delivery gate closed', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  const store = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
+  const row = store.getProject('demo');
+  store.updateProject('demo', row.version, { deliveryEnabled: true });
+  store.db.close();
+  const manager = new AriadProjectManager({ projectsRoot });
+  beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T13:00:00.000Z') });
+  const next = new SQLiteV2Store(join(workspace, '.ariad', 'state2.db'));
+  try {
+    assert.equal(next.getProject('demo').deliveryEnabled, false);
+    assert.ok(next.filePath.endsWith('state2.db'));
+  } finally { next.db.close(); }
+});
+
+test('begin-iteration carries the previous store legacy zone forward', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  const vs = new VersionedStore(join(workspace, '.ariad', 'state.db'));
+  vs.initProject('demo');
+  vs.putLegacyEntries([{ kind: 'done_card', oldId: 'ancient-task', summary: 'Ancient done', payload: { title: 'Ancient done' } }]);
+  vs.close();
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T13:05:00.000Z') });
+  assert.equal(report.seeded.carriedLegacy, 1);
+  const nextVs = new VersionedStore(join(workspace, '.ariad', 'state2.db'));
+  try {
+    const kinds = nextVs.listLegacy().map(e => `${e.kind}:${e.oldId}`);
+    assert.ok(kinds.includes('done_card:ancient-task'), `carried entry missing, got ${kinds.join(', ')}`);
+    assert.ok(kinds.includes('done_card:t-done'), 'freshly distilled cards still seeded');
+  } finally { nextVs.close(); }
+});

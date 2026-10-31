@@ -91,6 +91,17 @@ export function seedLegacyFromOldDb(oldDb, store, projectId) {
     payload: { count: incidentCount, note: 'Raw incident stream stays in the archived old DB; settled lessons live in project memory and done cards.' },
   });
 
+  let carriedLegacy = 0;
+  if (tableExists(oldDb, 'legacy_entries')) {
+    const carried = oldDb.prepare('SELECT kind, old_id, summary, payload_json FROM legacy_entries').all()
+      .map(r => ({ kind: r.kind, oldId: r.old_id, summary: r.summary, payload: parse(r.payload_json) }));
+    // Inserted first: putLegacyEntries upserts in order, so the freshly
+    // distilled entries above win any (kind, oldId) collision (e.g. the
+    // regenerated project_facts / incident_digest rows).
+    entries.unshift(...carried);
+    carriedLegacy = carried.length;
+  }
+
   store.putLegacyEntries(entries);
   let liveIssuesInserted = 0;
   for (const issue of liveIssues) {
@@ -103,5 +114,5 @@ export function seedLegacyFromOldDb(oldDb, store, projectId) {
     });
     liveIssuesInserted++;
   }
-  return { doneCards, skippedIdx, resolvedIssues, liveIssuesInserted, legacyTotal: store.listLegacy().length };
+  return { doneCards, skippedIdx, resolvedIssues, liveIssuesInserted, carriedLegacy, legacyTotal: store.listLegacy().length };
 }

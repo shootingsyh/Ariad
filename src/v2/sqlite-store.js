@@ -106,6 +106,7 @@ export class SQLiteV2Store {
   constructor(file) {
     if (!file) throw new Error('SQLiteV2Store requires a database file path');
     this.db = new DatabaseSync(file);
+    this.filePath = file;
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec(`

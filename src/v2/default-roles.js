@@ -428,7 +428,7 @@ export function createDefaultV2Roles({
             let vlanded;
             let versionedStore = null;
             try {
-              versionedStore = new VersionedStore(join(versionedProject.workspace, '.ariad', 'state2.db'));
+              versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state2.db'));
               vlanded = reconcileVersionedDraft({ versionedStore, store, projectId: task.projectId, approvedBy: 'pm', workspace: versionedProject.workspace });
             } catch (error) {
               if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
@@ -444,12 +444,19 @@ export function createDefaultV2Roles({
               versionedStore?.close();
             }
             const vchanged = vlanded.created.length + vlanded.updated.length + vlanded.obsoleted.length;
+            const startDelivery = result.result?.startDelivery === true;
+            if (startDelivery) {
+              const freshProject = store.getProject(task.projectId);
+              if (freshProject && freshProject.deliveryEnabled !== true) {
+                store.updateProject(task.projectId, freshProject.version, { deliveryEnabled: true });
+              }
+            }
             return { state: 'DONE', transitionHistory: {
               type: 'VERSIONED_TREE_PLAN_ACCEPTED', role: 'pm',
               summary: vchanged
                 ? 'Accepted DB draft and promoted v' + vlanded.version + ' to prod: ' + vlanded.created.length + ' created, ' + vlanded.updated.length + ' updated, ' + vlanded.obsoleted.length + ' obsoleted.'
                 : 'Accepted DB draft and promoted v' + vlanded.version + ' to prod without task changes.',
-              taskCount: vlanded.total, landed: vlanded, at: new Date().toISOString(),
+              taskCount: vlanded.total, landed: vlanded, deliveryGateOpened: startDelivery, at: new Date().toISOString(),
             } };
           }
           // A migrated unified tree must not pass through the legacy plan writer.
@@ -1421,6 +1428,34 @@ export function createDefaultV2Roles({
                   errorCode: error?.code ?? null,
                 },
               };
+            }
+          }
+          const validatorProject = store.getProject(task.projectId);
+          if (validatorProject?.versionedTree === true) {
+            const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
+            try {
+              const draft = draftStore.getOpenDraft();
+              if (!draft) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: 'NO_OPEN_DRAFT: this is a DB-first (versionedTree) project - the plan must be authored into a database draft with the ariad_tree_patch tool (openDraft, then applyOps); planner artifact files alone cannot be promoted', errorCode: 'NO_OPEN_DRAFT' },
+                };
+              }
+              if (draftStore.listSpecTasks(draft.version).length === 0) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: 'DRAFT_EMPTY: the open DB draft contains no tasks - author the full tree into it with ariad_tree_patch applyOps before validation', errorCode: 'DRAFT_EMPTY' },
+                };
+              }
+              const draftErrors = draftStore.validateVersion(draft.version);
+              if (draftErrors.length) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: 'DRAFT_INVALID: ' + draftErrors.join('; '), errorCode: 'DRAFT_INVALID' },
+                };
+              }
+            } finally {
+              draftStore.close();
             }
           }
           try {

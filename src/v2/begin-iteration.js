@@ -116,7 +116,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     try {
       runtime.createProject({
         ...project, versionedTree: true, unifiedTaskCompilerVersion: 1,
-        desiredState: 'STOPPED', executionState: 'IDLE',
+        desiredState: 'STOPPED', executionState: 'IDLE', deliveryEnabled: false,
       });
     } finally { runtime.db.close(); }
     const versioned = new VersionedStore(newDbPath);
