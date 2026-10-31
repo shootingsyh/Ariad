@@ -155,6 +155,7 @@ test('Ariad generates local llama.cpp provider configuration from role models', 
   }, { llamaCppBaseUrl: 'http://127.0.0.1:18080/v1' });
 
   assert.equal(config.providers.llamacpp.baseUrl, 'http://127.0.0.1:18080/v1');
+  assert.deepEqual(config.providers.llamacpp.models[0].input, ['text', 'image'], 'generated llamacpp entries must declare image input: the local server runs with an mmproj vision projector, and Pi strips images for text-only models');
   assert.equal(config.providers.llamacpp.api, 'openai-completions');
   assert.deepEqual(
     config.providers.llamacpp.models.map(model => model.id),
