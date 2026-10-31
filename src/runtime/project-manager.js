@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { normalizeRoleModels, requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { artistEnabled, inspectProjectSlots } from './plugin-slots.js';
+import { ensureAriadGitignore, ensureWorkspaceGitignore, ensureProjectIgnoreDir } from './workspace-ignore.js';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -16,13 +17,6 @@ function readJson(path) {
 
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-function ensureAriadGitignore(ariadDir) {
-  const file = join(ariadDir, '.gitignore');
-  if (!existsSync(file)) {
-    writeFileSync(file, 'state.db-wal\nstate.db-shm\nstate.db-journal\n', 'utf8');
-  }
 }
 
 function ensureGitRepo(workspace) {
@@ -125,6 +119,8 @@ export class AriadProjectManager {
 
     mkdirSync(ariad, { recursive: true });
     ensureAriadGitignore(ariad);
+    ensureWorkspaceGitignore(workspace);
+    ensureProjectIgnoreDir(workspace);
     const createdAt = this.now().toISOString();
     writeJson(manifest, {
       id: base.id,
@@ -192,6 +188,8 @@ export class AriadProjectManager {
     const oldAriad = join(oldWorkspace, '.ariad');
     if (existsSync(oldAriad)) cpSync(oldAriad, targetAriad, { recursive: true, force: false, errorOnExist: true });
     ensureAriadGitignore(targetAriad);
+    ensureWorkspaceGitignore(targetWorkspace);
+    ensureProjectIgnoreDir(targetWorkspace);
 
     const next = {
       ...current,

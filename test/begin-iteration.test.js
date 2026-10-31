@@ -7,6 +7,7 @@ import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
 import { beginIteration } from '../src/v2/begin-iteration.js';
+import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../src/runtime/workspace-ignore.js';
 
 function makeAdoptedProject({ desiredState = 'STOPPED', tasks = [], issues = [], incidents = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ariad-iter-'));
@@ -216,4 +217,40 @@ test('begin-iteration archives persistent role sessions for a fresh planning sta
   assert.equal(existsSync(persistentDir), false);
   const archived = join(workspace, '.ariad', 'pi', 'session-archive', '2026-10-31T12-00-00-000Z', 'persistent', 'sess-tl', 'ariad-session.json');
   assert.ok(existsSync(archived));
+});
+
+test('workspace ignore coverage merges canonical lines without clobbering or duplicating', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-ignore-'));
+  const ws = join(dir, 'ws');
+  const ariad = join(ws, '.ariad');
+  mkdirSync(ariad, { recursive: true });
+  writeFileSync(join(ws, '.gitignore'), 'build/\n');
+  writeFileSync(join(ariad, '.gitignore'), 'state.db-wal\n');
+  ensureWorkspaceGitignore(ws);
+  ensureAriadGitignore(ariad);
+  ensureWorkspaceGitignore(ws);
+  ensureAriadGitignore(ariad);
+  const root = readFileSync(join(ws, '.gitignore'), 'utf8');
+  assert.ok(root.startsWith('build/\n'));
+  assert.equal(root.split('\n').filter(l => l === '/ignore/').length, 1);
+  assert.equal(root.split('\n').filter(l => l === '/backups/').length, 1);
+  const inner = readFileSync(join(ariad, '.gitignore'), 'utf8');
+  assert.ok(inner.includes('state.db-wal'));
+  for (const line of ['/state*.db*', '/memory.db*', '/pi/', '/run_logs/']) {
+    assert.equal(inner.split('\n').filter(l => l === line).length, 1, line);
+  }
+});
+
+test('manager.create gives a new project an ignore folder and default gitignore coverage', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-create-'));
+  const manager = new AriadProjectManager({ projectsRoot: join(root, 'projects') });
+  const roleModels = Object.fromEntries(['pm', 'tech_lead', 'tech_lead_critic', 'developer', 'tester', 'reviewer', 'project_debugger', 'artist'].map(r => [r, 'x/y']));
+  const created = manager.create('demo-new', { goal: 'g', roleModels });
+  assert.ok(existsSync(join(created.workspace, 'ignore')));
+  const rootIgnore = readFileSync(join(created.workspace, '.gitignore'), 'utf8');
+  assert.ok(rootIgnore.includes('/ignore/'));
+  assert.ok(rootIgnore.includes('/backups/'));
+  const innerIgnore = readFileSync(join(created.workspace, '.ariad', '.gitignore'), 'utf8');
+  assert.ok(innerIgnore.includes('/pi/'));
+  assert.ok(innerIgnore.includes('/state*.db*'));
 });

@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { SQLiteV2Store } from './sqlite-store.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { seedLegacyFromOldDb } from './legacy-seed.js';
+import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../runtime/workspace-ignore.js';
 
 // begin-iteration: the system-side head of an iteration (replan) cycle.
 // It archives the project's current store, creates a fresh DB-first
@@ -107,6 +108,9 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
   }
   const newDbPath = join(paths.ariad, newDbFile);
   if (existsSync(newDbPath)) fail('ITERATION_TARGET_EXISTS', `target store already exists: ${newDbPath}`);
+
+  ensureAriadGitignore(paths.ariad);
+  ensureWorkspaceGitignore(paths.workspace);
 
   const archive = archiveStore({ oldDbPath, workspace: paths.workspace, projectId: project.id, now });
 
