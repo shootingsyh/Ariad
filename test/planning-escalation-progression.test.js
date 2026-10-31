@@ -256,3 +256,23 @@ test('gate loop terminates: repeated validation failure reaches the debugger', (
   assert.equal(exhausted.stage, 'project_debugger');
   assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
 });
+
+import { VersionedStore } from '../src/v2/versioned-store.js';
+
+test('versioned decompose without a DB draft is rejected at submission, not at the gate', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-nodraft-'));
+  const file = join(dir, 'state2.db');
+  const vs = new VersionedStore(file);
+  vs.initProject('P');
+  vs.close();
+  const store = { filePath: file, getProject: () => ({ id: 'P', versionedTree: true, workspace: dir }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir });
+  const out = roles.tech_lead.transition({
+    task: { id: 'd1', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [], input: { purpose: 'PLANNER_DECOMPOSE', planGateRetries: 0 } },
+    result: { outcome: 'PLANNED', summary: 'plan ready', result: null },
+  });
+  assert.equal(out.state, 'READY');
+  assert.equal(out.stage, 'tech_lead');
+  assert.equal(out.transitionHistory.type, 'PLAN_GATE_RETRY');
+  assert.equal(out.input.previousGateFailure.blockedType, 'TL_PLAN_WITHOUT_DRAFT');
+});

@@ -203,3 +203,17 @@ test('begin-iteration carries the previous store legacy zone forward', () => {
     assert.ok(kinds.includes('done_card:t-done'), 'freshly distilled cards still seeded');
   } finally { nextVs.close(); }
 });
+
+test('begin-iteration archives persistent role sessions for a fresh planning start', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks, issues: baseIssues });
+  const persistentDir = join(workspace, '.ariad', 'pi', 'sessions', 'persistent');
+  mkdirSync(join(persistentDir, 'sess-tl'), { recursive: true });
+  mkdirSync(join(persistentDir, 'sess-pm'), { recursive: true });
+  writeFileSync(join(persistentDir, 'sess-tl', 'ariad-session.json'), '{"role":"tech_lead"}\n');
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:00:00.000Z') });
+  assert.equal(report.sessionsArchived, 2);
+  assert.equal(existsSync(persistentDir), false);
+  const archived = join(workspace, '.ariad', 'pi', 'session-archive', '2026-10-31T12-00-00-000Z', 'persistent', 'sess-tl', 'ariad-session.json');
+  assert.ok(existsSync(archived));
+});

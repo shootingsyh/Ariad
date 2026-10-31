@@ -193,6 +193,27 @@ export function createDefaultV2Roles({
               },
             };
           }
+          if (task.input?.purpose === 'PLANNER_DECOMPOSE') {
+            const proj = store.getProject?.(task.projectId);
+            if (proj?.versionedTree === true) {
+              let draftOpen = false;
+              try {
+                const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state2.db'));
+                try { draftOpen = Boolean(vs.getOpenDraft()); } finally { vs.close(); }
+              } catch { draftOpen = false; }
+              if (!draftOpen) {
+                return {
+                  state: 'NEEDS_HUMAN',
+                  transitionHistory: {
+                    type: 'TL_PLAN_WITHOUT_DRAFT',
+                    role: 'tech_lead',
+                    summary: 'Versioned (DB-first) project: author the plan into a database draft with ariad_tree_patch (openDraft, then applyOps) before submitting it. No open draft exists, so this result carries no landable plan.',
+                    at: new Date().toISOString(),
+                  },
+                };
+              }
+            }
+          }
           if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
             let pass;

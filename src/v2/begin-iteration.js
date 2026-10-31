@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { SQLiteV2Store } from './sqlite-store.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
@@ -110,6 +110,19 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
 
   const archive = archiveStore({ oldDbPath, workspace: paths.workspace, projectId: project.id, now });
 
+  let sessionsArchived = 0;
+  const persistentDir = join(paths.workspace, '.ariad', 'pi', 'sessions', 'persistent');
+  if (existsSync(persistentDir)) {
+    const entries = readdirSync(persistentDir);
+    if (entries.length) {
+      const stamp = now.toISOString().replace(/[:.]/g, '-');
+      const archiveTo = join(paths.workspace, '.ariad', 'pi', 'session-archive', stamp, 'persistent');
+      mkdirSync(join(archiveTo, '..'), { recursive: true });
+      renameSync(persistentDir, archiveTo);
+      sessionsArchived = entries.length;
+    }
+  }
+
   let seeded;
   try {
     const runtime = new SQLiteV2Store(newDbPath);
@@ -162,6 +175,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     archiveDir: archive.dir,
     archiveSha256: archive.manifest.sha256,
     seeded,
+    sessionsArchived,
     pointer,
     nextSteps: [
       'restart the daemon so it opens the new store',
