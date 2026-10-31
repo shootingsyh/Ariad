@@ -7,6 +7,7 @@ import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { executorTransitionFromResult } from '../src/v2/role-executor-transition.js';
 import { RoleResultDispatcher } from '../src/v2/role-result-dispatcher.js';
+import { ensureInterfaceArtifactLayout } from '../src/v2/interface-contracts.js';
 
 // Escalation whitelist, executor layer: planning-stage failures retry at
 // the tech lead, then route to the project debugger, and only a terminal
@@ -154,4 +155,56 @@ test('planning debugger prepare surfaces the gate failure detail', () => {
   const prepared = roles.project_debugger.prepare({ task });
   assert.match(JSON.stringify(prepared), /ARTIFACT_VALIDATION_FAILED/);
   assert.match(JSON.stringify(prepared), /M1\.json/);
+});
+
+test('frontier pass validation failure enters the gate ladder instead of throwing', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-frontier-gate-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const artifactRoot = join(dir, 'artifacts');
+  const layout = ensureInterfaceArtifactLayout(artifactRoot);
+  const write = (file, value) => {
+    mkdirSync(join(file, '..'), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  };
+  // One feature node whose contract predates the behavior layer: its
+  // integration scenario carries no acceptanceCriteria. When a frontier
+  // pass targets this node, finishFrontierPass throws - the transition
+  // must convert that into the planning gate progression, not let it
+  // escape and fail the whole project.
+  write(join(artifactRoot, 'planner', 'logical', 'project.json'), {
+    id: 'project', title: 'project', summary: 'root', parentId: null,
+  });
+  write(join(layout.featureDir, 'project.json'), {
+    version: 1, nodeId: 'project', nodeType: 'feature',
+    decomposition: { kind: 'leaf', reason: 'single node fixture' },
+    interfaces: [{
+      id: 'run', kind: 'executor', visibility: 'exported',
+      contract: { input: [], output: ['run result'], sideEffects: [] },
+    }],
+    imports: [],
+    integrationScenarios: [{ id: 'legacy-scenario', description: 'Pre-behavior-layer scenario without acceptance criteria.', uses: [] }],
+    bindings: [], featureTasks: [], behavior: ['The project runs.'],
+  });
+  write(layout.activeFrontierPath, {
+    version: 1, nodeType: 'feature', bootstrap: false,
+    targetNodeId: 'project', existingNodeParents: { project: null },
+  });
+  const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
+  const task = {
+    id: 'tl-1', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead',
+    flowId: 'planner:P:b1', history: [],
+    input: { purpose: 'PLANNER_DECOMPOSE', frontierPhase: 'feature', planGateRetries: 0 },
+  };
+  const first = roles.tech_lead.transition({ task, result: { outcome: 'PLANNED' } });
+  assert.equal(first.state, 'READY');
+  assert.equal(first.stage, 'tech_lead');
+  assert.equal(first.transitionHistory.type, 'PLAN_GATE_RETRY');
+  assert.match(first.input.previousGateFailure.summary, /legacy-scenario/);
+  const exhausted = roles.tech_lead.transition({
+    task: { ...task, input: { ...task.input, planGateRetries: 2 } },
+    result: { outcome: 'PLANNED' },
+  });
+  assert.equal(exhausted.state, 'READY');
+  assert.equal(exhausted.stage, 'project_debugger');
+  assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
 });

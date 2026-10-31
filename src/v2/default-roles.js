@@ -181,7 +181,28 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
           if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
-            const pass = finishFrontierPass(artifactRoot, nodeType);
+            let pass;
+            try {
+              pass = finishFrontierPass(artifactRoot, nodeType);
+            } catch (error) {
+              // A frontier validation failure is a planning gate failure,
+              // not a project failure: route it through the same
+              // ARTIFACT_VALIDATION_FAILED bridge as every other artifact
+              // problem, so the tech lead can repair it (gate retries,
+              // then the debugger) instead of the throw escaping the
+              // scheduler tick and latching the whole project FAILED
+              // (SRPG, 2026-10-31: a pre-behavior-layer integration
+              // scenario without acceptanceCriteria in the frontier
+              // target contract parked the entire project).
+              return {
+                state: 'NEEDS_HUMAN',
+                transitionHistory: {
+                  type: 'ARTIFACT_VALIDATION_FAILED',
+                  summary: error instanceof Error ? error.message : String(error),
+                  at: new Date().toISOString(),
+                },
+              };
+            }
             const frontierHistory = {
               type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
               role: 'tech_lead',
