@@ -179,6 +179,20 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLANNED' || result.outcome === 'REPLANNED') {
+          if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' || task.input?.purpose === 'PLANNER_PM_REVIEW') {
+            const gateStage = task.input.purpose === 'PLANNER_FINAL_VALIDATE' ? 'plan_validator' : 'pm';
+            return {
+              stage: gateStage,
+              state: 'READY',
+              transitionHistory: {
+                type: 'GATE_REPAIR_RETURNED',
+                role: 'tech_lead',
+                gate: task.input.purpose,
+                summary: 'Repair submitted; returning the task to its gate for re-evaluation.',
+                at: new Date().toISOString(),
+              },
+            };
+          }
           if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const nodeType = task.input?.frontierPhase ?? 'feature';
             let pass;
@@ -358,8 +372,7 @@ export function createDefaultV2Roles({
             return { state: 'DONE' };
           }
           return {
-            stage: 'tech_lead',
-            state: 'READY',
+            state: 'NEEDS_HUMAN',
             transitionHistory: {
               type: 'PLANNER_VALIDATION_ESCALATION',
               role: 'plan_validator',
@@ -626,7 +639,7 @@ export function createDefaultV2Roles({
   };
 
   const PLAN_SIGNALS = {
-    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:plan_validator': 'REVALIDATE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     VALIDATE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     CRITIQUE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     PM_REVIEW: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },

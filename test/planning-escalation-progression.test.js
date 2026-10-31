@@ -208,3 +208,51 @@ test('frontier pass validation failure enters the gate ladder instead of throwin
   assert.equal(exhausted.stage, 'project_debugger');
   assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
 });
+
+// Regression (2026-10-31, iterprobe): gate repairs must be re-verified.
+// A tech-lead PLANNED reply on a bounced gate task (final validation /
+// PM review) used to close the gate DONE with no re-check, so an empty
+// repair silently landed an unlandable plan.
+test('final validation failure enters the counted gate ladder', () => {
+  const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
+  const base = { id: 'fv', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', history: [] };
+  const fail = { outcome: 'NOT_PASS', result: { valid: false, error: 'NO_OPEN_DRAFT: no draft', errorCode: 'NO_OPEN_DRAFT' } };
+  const first = roles.plan_validator.transition({ task: { ...base, input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 0 } }, result: fail });
+  assert.equal(first.state, 'READY');
+  assert.equal(first.stage, 'tech_lead');
+  assert.equal(first.transitionHistory.type, 'PLAN_GATE_RETRY');
+  assert.equal(first.input.planGateRetries, 1);
+});
+
+test('tech lead repair on a gate task returns it to the gate, never DONE', () => {
+  const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
+  const tl = { id: 'g', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [] };
+  const repaired = { outcome: 'PLANNED', summary: 'ok' };
+  const backToValidator = roles.tech_lead.transition({ task: { ...tl, input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 1 } }, result: repaired });
+  assert.equal(backToValidator.state, 'READY');
+  assert.equal(backToValidator.stage, 'plan_validator');
+  assert.equal(backToValidator.transitionHistory.type, 'GATE_REPAIR_RETURNED');
+  const backToPm = roles.tech_lead.transition({ task: { ...tl, input: { purpose: 'PLANNER_PM_REVIEW', planGateRetries: 1 } }, result: repaired });
+  assert.equal(backToPm.state, 'READY');
+  assert.equal(backToPm.stage, 'pm');
+  // A non-gate planning repair still completes as before.
+  const ordinary = roles.tech_lead.transition({ task: { ...tl, input: { purpose: 'PLANNER_REPAIR' } }, result: repaired });
+  assert.equal(ordinary.state, 'DONE');
+});
+
+test('gate loop terminates: repeated validation failure reaches the debugger', () => {
+  const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
+  const fail = { outcome: 'NOT_PASS', result: { valid: false, error: 'still bad', errorCode: 'X' } };
+  const second = roles.plan_validator.transition({
+    task: { id: 'fv2', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', history: [], input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 1 } },
+    result: fail,
+  });
+  assert.equal(second.stage, 'tech_lead');
+  assert.equal(second.input.planGateRetries, 2);
+  const exhausted = roles.plan_validator.transition({
+    task: { id: 'fv3', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', history: [], input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 2 } },
+    result: fail,
+  });
+  assert.equal(exhausted.stage, 'project_debugger');
+  assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
+});
