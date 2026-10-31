@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
+import { recordRequirementsApproval } from '../v2/project-docs.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
@@ -18,7 +19,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -378,7 +379,7 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     };
   }
 
-  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install'].includes(action)) {
+  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install', 'approve-requirements'].includes(action)) {
     throw new Error(usage());
   }
 
@@ -393,6 +394,13 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     const project = manager.status(name);
     return installProjectSlot({ workspace: project.workspace, manifest: project }, slotId)
       .then(result => ({ action, project: name, ...result }));
+  }
+
+  if (action === 'approve-requirements') {
+    if (!name) throw new Error('approve-requirements requires a project name');
+    const paths = manager.resolveProjectPaths(name);
+    const approval = recordRequirementsApproval(paths.workspace, { approvedBy: 'human-cli' });
+    return { action, project: name, requirements: approval };
   }
 
   const project = manager.status(name);

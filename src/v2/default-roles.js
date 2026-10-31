@@ -7,6 +7,7 @@ import { artCapabilityRecommendations, requiredArtCapabilities } from './art-cap
 import { validatePlanAutonomy } from './autonomy.js';
 import { TASK_KINDS, scopeOfTask } from './control-task-policy.js';
 import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
+import { docsRegimeAdopted, requirementsStatus } from './project-docs.js';
 import { finishFrontierPass, hasBoundaryContracts, loadBoundaryContracts, loadPlannerHierarchy, validateBoundaryContracts, validateTaskOwnershipCompilation } from './interface-contracts.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { ensurePlannerArtifactLayout, loadFeatureTreeDiff, loadPlannerArtifactPlan, validatePlannerArtifactPlan } from './planner-artifacts.js';
@@ -1387,6 +1388,20 @@ export function createDefaultV2Roles({
               }
               const decomp = iterationRequest(store, task);
               if (decomp?.request?.changeType === 'FEATURE_DECOMPOSITION') {
+                // Document system gate (design 2026-10-30/31): TL decomposition
+                // for a new version starts only from human-finalized
+                // requirements. PM finalizes the version requirements
+                // document with the human first; the approval is pinned by
+                // hash, so editing the document re-opens the gate.
+                if (docsRegimeAdopted(workspace)) {
+                  const status = requirementsStatus(workspace);
+                  if (!status.exists) {
+                    throw new Error('REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing — PM must finalize the version requirements document with the human before TL decomposition begins');
+                  }
+                  if (!status.approved) {
+                    throw new Error('REQUIREMENTS_NOT_APPROVED: the requirements document was edited after approval (or never approved) — a human must re-approve it (ariad project approve-requirements) before TL decomposition begins');
+                  }
+                }
                 if (!hasBoundaryContracts(artifactRoot, 'feature')) {
                   throw new Error('FEATURE_DECOMPOSITION_INCOMPLETE: missing Feature Interface Graph');
                 }
@@ -1394,6 +1409,7 @@ export function createDefaultV2Roles({
                   artifactRoot,
                   loadFeatureTreeDiff(artifactRoot),
                   validated.plan.tasks,
+                  { workspace },
                 );
               }
               validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
@@ -1490,6 +1506,7 @@ export function createDefaultV2Roles({
         const featureTreeDiff = iteration ? loadFeatureTreeDiff(artifactRoot) : null;
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
+          'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain: fold the human\'s latest requirements into it and obtain human approval before any new-version decomposition is planned. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
           'Review both the logical feature/component tree and the milestone structure. The plan must cover the complete currently-known route to project completion, not stop at the next milestone. Near-term work may be detailed and later milestones coarse. Milestones should be useful integrated checkpoints without forcing unnecessary ceremony.',
           'Review the plan as if this product must be handed to real intended users and be good enough to ship, deliver, or sell within its stated scope. Do not accept a plan merely because individual components have isolated tests.',
           'Every important feature and every milestone must have at least one representative end-to-end user scenario: enter through a real supported product entry point, follow the required user-visible steps without shortcuts, exercise the relevant child capabilities together, and reach the intended user-visible outcome.',

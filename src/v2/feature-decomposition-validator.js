@@ -1,4 +1,5 @@
 import { loadBoundaryContracts, loadPlannerHierarchy, validateBoundaryContracts } from './interface-contracts.js';
+import { validateFeatureDocs } from './project-docs.js';
 
 function fail(message) {
   const error = new Error('FEATURE_DECOMPOSITION_INCOMPLETE: ' + message);
@@ -11,7 +12,7 @@ function fail(message) {
  * tree diff without corresponding interface and acceptance ownership.
  * No implementation PASS or runtime evidence is inferred from these plans.
  */
-export function validateFeatureDecompositionIteration(artifactRoot, diff, compiledTasks = []) {
+export function validateFeatureDecompositionIteration(artifactRoot, diff, compiledTasks = [], { workspace = null } = {}) {
   if (!diff || !Array.isArray(diff.operations)) fail('feature-tree-diff.json required');
   const added = diff.operations.filter(item => item.op === 'add').map(item => item.node?.id);
   if (added.length === 0) fail('decomposition must add at least one independently testable feature');
@@ -67,6 +68,26 @@ export function validateFeatureDecompositionIteration(artifactRoot, diff, compil
           fail(`task ${task.id} must have acceptance criteria and planned verification`);
         }
       }
+    }
+  }
+
+  // Document system (design 2026-10-30): when the project keeps a docs root,
+  // tree changes and feature documents must land in the same batch — every
+  // added/updated feature needs its .ariad/docs/features/<id>.md document and
+  // a FEATURES.md index entry; removed features must leave the index.
+  if (workspace) {
+    const changedNodeIds = diff.operations
+      .filter(item => item.op === 'add' || item.op === 'update')
+      .map(item => (item.op === 'add' ? item.node?.id : item.id))
+      .filter(Boolean);
+    const removedNodeIds = diff.operations
+      .filter(item => item.op === 'remove')
+      .map(item => item.id)
+      .filter(Boolean);
+    try {
+      validateFeatureDocs(workspace, { changedNodeIds, removedNodeIds });
+    } catch (error) {
+      fail(error.message.replace(/^PROJECT_DOCS_INCOMPLETE: /, ''));
     }
   }
 
