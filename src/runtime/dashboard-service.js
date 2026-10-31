@@ -181,15 +181,19 @@ function availableVersions(project     , db                                  ) {
       const match = /^v(\d+)$/.exec(entry.name);
       if (!match) continue;
       const version = Number(match[1]);
+      // Version snapshots are retired (design 2026-10-31): a version is
+      // listed because its version directory exists. A legacy snapshot.json
+      // left by the old mechanism is still read for counts when present,
+      // but nothing creates one and nothing depends on one; version history
+      // is carried by the project git.
       const snapshot = readSnapshot(join(versionsRoot, entry.name, 'snapshot.json'));
-      if (!snapshot) continue;
       historical.set(version, {
         version,
         current: false,
-        capturedAt: snapshot.capturedAt ?? null,
-        featureCount: Array.isArray(snapshot.logicalNodes) ? snapshot.logicalNodes.length : 0,
-        milestoneCount: Array.isArray(snapshot.milestones) ? snapshot.milestones.length : 0,
-        taskCount: Array.isArray(snapshot.deliveryTasks) ? snapshot.deliveryTasks.length : 0,
+        capturedAt: snapshot?.capturedAt ?? null,
+        featureCount: Array.isArray(snapshot?.logicalNodes) ? snapshot.logicalNodes.length : null,
+        milestoneCount: Array.isArray(snapshot?.milestones) ? snapshot.milestones.length : null,
+        taskCount: Array.isArray(snapshot?.deliveryTasks) ? snapshot.deliveryTasks.length : null,
       });
     }
   }
@@ -248,11 +252,27 @@ function projectVersionView(manager                , name        , version      
   }
 
   const snapshot = readSnapshot(snapshotPath(project, version));
-  if (!snapshot) throw new Error(`snapshot unavailable for project version v${version}`);
+  if (!snapshot) {
+    // Retired-snapshot fallback: the version keeps version-bound documents
+    // only; its tree history lives in the project git, not in a snapshot.
+    return {
+      version,
+      current: false,
+      sourceLabel: 'Version-bound documents only; tree history in project git (snapshots retired)',
+      capturedAt: null,
+      logicalRootId: null,
+      logicalNodes: [],
+      milestones: [],
+      deliveryPlanVersion: null,
+      deliveryPlanSummary: null,
+      deliveryRootTaskId: null,
+      tasks: [],
+    };
+  }
   return {
     version,
     current: false,
-    sourceLabel: 'Immutable completed-version snapshot',
+    sourceLabel: 'Legacy completed-version snapshot (read-only; snapshots retired)',
     capturedAt: snapshot.capturedAt ?? null,
     logicalRootId: snapshot.logicalRootId ?? null,
     logicalNodes: Array.isArray(snapshot.logicalNodes) ? snapshot.logicalNodes : [],
