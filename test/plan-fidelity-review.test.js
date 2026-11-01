@@ -62,6 +62,9 @@ test('PM plan-review prompt carries the fidelity standard', () => {
   assert.match(prompt, /covered only in part is not covered/);
   assert.match(prompt, /ux\.required/);
   assert.match(prompt, /accepting on their summaries alone is a review failure/);
+  assert.match(prompt, /ACCOUNTING - YOUR RESULT MUST CARRY THE TRACE ITSELF/);
+  assert.match(prompt, /clause granularity/);
+  assert.match(prompt, /expression or scar variant/);
 });
 
 test('batch critic prompt carries the fidelity review', () => {
@@ -81,12 +84,14 @@ test('batch critic prompt carries the fidelity review', () => {
   assert.match(prompt, /FIDELITY TO THE APPROVED REQUIREMENTS/);
   assert.match(prompt, /covered only in part is not covered/);
   assert.match(prompt, /gap-analysis disposition/);
+  assert.match(prompt, /Granularity is part of fidelity/);
 });
 
 test('tech lead prompt requires an auditable gap disposition and acceptance fidelity', () => {
   const prompt = buildTechLeadPrompt({ projectContext: {}, schema: null });
   assert.match(prompt, /SATISFIED-BY-EXISTING/);
   assert.match(prompt, /never silently default to regression-only/);
+  assert.match(prompt, /per enumerated clause, not per section headline/);
   assert.match(prompt, /Acceptance fidelity/);
   assert.match(prompt, /could pass its own acceptance criteria while the requirement it carries is unmet/);
 });
