@@ -280,3 +280,22 @@ test('debug hold parks the PM plan review for the human, never the failure ladde
   assert.equal(exhausted.state, 'NEEDS_HUMAN');
   assert.equal(exhausted.transitionHistory.type, 'DEBUG_HOLD');
 });
+
+test('PM plan-review prompt carries the human decision and the correction rule', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-pmdecision-'));
+  const decision = 'Send it back: add ux.required to the presentation task before delivery.';
+  const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: 18 } } }] };
+  const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [{ type: 'DEBUG_HOLD' }, { type: 'HUMAN_DECISION', decision }], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listPlanningRequests: () => [] };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
+  const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
+  const prompt = prepared.context.v2Prompt;
+  // The 2026-10-31 SRPG bounce failed because the human's correction
+  // decision never reached the PM's prompt: it re-accepted the unchanged
+  // plan verbatim and the draft was promoted over an explicit revise
+  // instruction. The decision must be in the payload, with the rule
+  // that a correction means PLAN_REVISION_REQUIRED.
+  assert.match(prompt, /add ux\.required to the presentation task/);
+  assert.match(prompt, /HUMAN DECISIONS ARE AUTHORITATIVE/);
+  assert.match(prompt, /never re-accept the unchanged plan over a correction/);
+});

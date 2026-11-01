@@ -1248,12 +1248,14 @@ export function createDefaultV2Roles({
             : project.mode === 'TAKEOVER'
               ? 'This is an existing project (takeover and iteration are one procedure), and the one-time human takeover review has already been satisfied durably at the project level. Do NOT request another takeover/delivery authorization merely because this technical replan changes tasks or scope. If the validated plan preserves user intent and introduces no genuinely new product decision, return PLAN_ACCEPTED and keep normal delivery authorized.'
               : null,
+          'HUMAN DECISIONS ARE AUTHORITATIVE: the payload humanDecision field carries the human\'s answer to a parked review (a debug hold or another human gate), when one exists. Follow it exactly. If it asks for any change or correction to the plan, return PLAN_REVISION_REQUIRED and carry the requested changes verbatim in result.guidance - never re-accept the unchanged plan over a correction. Accept the plan only when the decision unconditionally approves or releases it, or when no decision is present and the plan merits acceptance on its own.',
           'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Use NEEDS_HUMAN only when the requirements/goal themselves are the problem (unclear, contradictory, infeasible, or missing a decision only the requirements owner can make); it is honored only with concrete questions in result.questions - a question-less NEEDS_HUMAN is rejected and treated as a revision request. For any plan problem, use PLAN_REVISION_REQUIRED. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
           'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For an existing project whose required human review/requirements approval has not been recorded, delivery must remain gated until it has been; only a later PM review may explicitly start it.',
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
             plan: validation?.plan ?? null,
+            humanDecision,
           }, null, 2),
         ].filter(Boolean).join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
