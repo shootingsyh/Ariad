@@ -18,8 +18,8 @@ const FEATURE_CONTRACT = {
   exportedInterfaces: [{ id: 'alpha_api' }],
   behavior: ['Alpha must charge before it can fire.'],
 };
-const TASK_A = { id: 'a-task', taskKind: 'FEATURE_TASK', title: 'Alpha task', parentId: null, dependsOn: [], interfaceIds: ['alpha_api'], executionMode: 'direct' };
-const TASK_B = { id: 'b-task', taskKind: 'FEATURE_TASK', title: 'Beta task', parentId: null, dependsOn: ['a-task'], interfaceIds: [], executionMode: 'direct' };
+const TASK_A = { id: 'a-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Alpha task', parentId: null, dependsOn: [], interfaceIds: ['alpha_api'], executionMode: 'direct' };
+const TASK_B = { id: 'b-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Beta task', parentId: null, dependsOn: ['a-task'], interfaceIds: [], executionMode: 'direct' };
 
 function seedV1(store) {
   store.createDraft({ createdBy: 'tl' });
@@ -70,8 +70,8 @@ test('invalid ops roll back the whole batch', (t) => {
   // cycle across two tasks also rejected
   assert.throws(
     () => store.applyTreeOps([
-      { op: 'upsertTask', task: { id: 'x', taskKind: 'FEATURE_TASK', title: 'X', dependsOn: ['y'] } },
-      { op: 'upsertTask', task: { id: 'y', taskKind: 'FEATURE_TASK', title: 'Y', dependsOn: ['x'] } },
+      { op: 'upsertTask', task: { id: 'x', taskKind: 'INTEGRATION_TASK', title: 'X', dependsOn: ['y'] } },
+      { op: 'upsertTask', task: { id: 'y', taskKind: 'INTEGRATION_TASK', title: 'Y', dependsOn: ['x'] } },
     ]),
     (e) => e.code === 'TREE_VALIDATION_FAILED',
   );
@@ -147,4 +147,68 @@ test('legacy zone roundtrip and live issues', (t) => {
   store.updateIssue('issue-1', { state: 'ASSIGNED' });
   assert.equal(store.listIssues({ states: ['ASSIGNED'] }).length, 1);
   assert.equal(store.listIssues({ states: ['OPEN'] }).length, 0);
+});
+
+test('two trees: featureId is required and must reference a feature node', (t) => {
+  const store = makeStore(t);
+  store.createDraft({ createdBy: 'tl' });
+  assert.throws(
+    () => store.applyTreeOps([
+      { op: 'upsertContract', contract: FEATURE_CONTRACT },
+      { op: 'upsertTask', task: { id: 'no-ref', taskKind: 'FEATURE_TASK', title: 'No ref', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+    ]),
+    err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('featureId')),
+  );
+  store.applyTreeOps([{ op: 'upsertContract', contract: FEATURE_CONTRACT }]);
+  assert.throws(
+    () => store.applyTreeOps([
+      { op: 'upsertTask', task: { id: 'bad-ref', taskKind: 'FEATURE_TASK', featureId: 'feature.missing', title: 'Bad ref', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+    ]),
+    err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('feature.missing')),
+  );
+  assert.throws(
+    () => store.applyTreeOps([
+      { op: 'upsertTask', task: { id: 'ms', taskKind: 'MILESTONE_TASK', featureId: 'feature.alpha', title: 'Milestone', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+    ]),
+    err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('must not carry featureId')),
+  );
+});
+
+test('feature tree: contract parentId builds a hierarchy and rejects dangling parents and cycles', (t) => {
+  const store = makeStore(t);
+  store.createDraft({ createdBy: 'tl' });
+  const parent = { id: 'feature.sys', nodeType: 'feature', exportedInterfaces: [], integrationScenarios: [{ id: 's', acceptanceCriteria: ['sys holds'] }] };
+  const child = { id: 'feature.sys.sub', nodeType: 'feature', parentId: 'feature.sys', exportedInterfaces: [], behavior: ['Sub behaves.'] };
+  store.applyTreeOps([
+    { op: 'upsertContract', contract: parent },
+    { op: 'upsertContract', contract: child },
+  ]);
+  assert.throws(
+    () => store.applyTreeOps([
+      { op: 'upsertContract', contract: { id: 'feature.orphan', nodeType: 'feature', parentId: 'feature.nope', exportedInterfaces: [], behavior: ['x'] } },
+    ]),
+    err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('parentId feature.nope')),
+  );
+  assert.throws(
+    () => store.applyTreeOps([
+      { op: 'upsertContract', contract: { id: 'feature.sys', nodeType: 'feature', parentId: 'feature.sys.sub', exportedInterfaces: [], integrationScenarios: [{ id: 's', acceptanceCriteria: ['sys holds'] }] } },
+    ]),
+    err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('feature tree cycle')),
+  );
+});
+
+test('effective tasks derive milestoneId from the task-tree parent chain', (t) => {
+  const store = makeStore(t);
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([
+    { op: 'upsertContract', contract: FEATURE_CONTRACT },
+    { op: 'upsertTask', task: { id: 'm-root', taskKind: 'MILESTONE_TASK', title: 'Root', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+    { op: 'upsertTask', task: { id: 'm-child', taskKind: 'MILESTONE_TASK', title: 'Child', parentId: 'm-root', dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+    { op: 'upsertTask', task: { id: 'leaf', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Leaf', parentId: 'm-child', dependsOn: [], interfaceIds: [], executionMode: 'direct' } },
+  ]);
+  store.promoteDraft({ approvedBy: 'pm' });
+  const byId = new Map(store.effectiveTasks().map(x => [x.id, x]));
+  assert.equal(byId.get('leaf').milestoneId, 'm-child');
+  assert.equal(byId.get('m-child').milestoneId, 'm-child');
+  assert.equal(byId.get('m-root').milestoneId, 'm-root');
 });

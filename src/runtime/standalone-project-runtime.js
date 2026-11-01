@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { VersionedTaskStore } from '../v2/versioned-task-store.js';
 import { RoleRegistry } from '../v2/role-registry.js';
 import { ProviderRegistry } from '../v2/provider-registry.js';
 import { ResourcePool, ScopedResourcePool } from '../v2/resource-pool.js';
@@ -66,6 +67,12 @@ export class StandaloneProjectRuntime {
       });
     }
     ensureTakeoverReviewState(this.store, project.id);
+    // DB-first projects execute the prod task tree in place: swap the
+    // runtime store for the de-materialized facade before any role,
+    // scheduler or supervisor sees it.
+    if (this.store.getProject(project.id)?.versionedTree === true) {
+      this.store = new VersionedTaskStore(this.store);
+    }
 
     const providers = new ProviderRegistry();
     providers.register(provider);

@@ -257,6 +257,43 @@ export class VersionedStore {
         if (!exported.has(iid)) errors.push(`task ${t.id}: interfaceId ${iid} is not exported by any contract in version ${version}`);
       }
     }
+    // Two trees, kept separate (owner model, 2026-10-31): contracts form the
+    // FEATURE tree - the reference SoT, organized by parentId - while spec
+    // tasks form the milestone/task tree and REFERENCE feature nodes via
+    // featureId. Milestones never appear as feature structure.
+    const contractById = new Map(contracts.map(c => [c.id ?? c.nodeId, c]));
+    for (const c of contracts) {
+      const cid = c.id ?? c.nodeId;
+      if (c.parentId != null) {
+        if (c.parentId === cid) errors.push(`contract ${cid}: parentId must not be itself`);
+        else if (!contractById.has(c.parentId)) errors.push(`contract ${cid}: parentId ${c.parentId} not in version ${version}`);
+        else if ((contractById.get(c.parentId).nodeType ?? contractById.get(c.parentId).kind) !== 'feature') {
+          errors.push(`contract ${cid}: parentId ${c.parentId} is not a feature node`);
+        }
+      }
+    }
+    const cmark = new Map();
+    const cvisit = (id, path) => {
+      if (cmark.get(id) === 1) { errors.push(`feature tree cycle: ${[...path, id].join(' -> ')}`); return; }
+      if (cmark.get(id) === 2) return;
+      cmark.set(id, 1);
+      const parent = contractById.get(id)?.parentId;
+      if (parent != null && contractById.has(parent)) cvisit(parent, [...path, id]);
+      cmark.set(id, 2);
+    };
+    for (const c of contracts) cvisit(c.id ?? c.nodeId, []);
+    for (const t of tasks) {
+      const target = t.featureId != null ? contractById.get(t.featureId) : null;
+      if (t.taskKind === 'FEATURE_TASK') {
+        if (t.featureId == null) errors.push(`task ${t.id}: FEATURE_TASK requires featureId referencing a feature-tree node`);
+        else if (!target) errors.push(`task ${t.id}: featureId ${t.featureId} not in version ${version}`);
+        else if ((target.nodeType ?? target.kind) !== 'feature') errors.push(`task ${t.id}: featureId ${t.featureId} is not a feature node`);
+      } else if (t.taskKind === 'MILESTONE_TASK') {
+        if (t.featureId != null) errors.push(`task ${t.id}: MILESTONE_TASK must not carry featureId - milestones organize the task tree, features live in the feature tree`);
+      } else if (t.featureId != null && !target) {
+        errors.push(`task ${t.id}: featureId ${t.featureId} not in version ${version}`);
+      }
+    }
     return errors;
   }
 
@@ -408,19 +445,38 @@ export class VersionedStore {
     const specs = prod == null ? [] : this.listSpecTasks(prod);
     const specIds = new Set(specs.map(s => s.id));
     const execById = new Map(this.listExecTasks().map(e => [e.id, e]));
+    // milestoneId is never stored on a spec: it is the task's nearest
+    // MILESTONE_TASK ancestor in the task tree (a milestone task's own id).
+    const specById = new Map(specs.map(s => [s.id, s]));
+    const milestoneOf = (spec) => {
+      if (spec.taskKind === 'MILESTONE_TASK') return spec.id;
+      const seen = new Set([spec.id]);
+      let cursor = specById.get(spec.parentId);
+      while (cursor && !seen.has(cursor.id)) {
+        if (cursor.taskKind === 'MILESTONE_TASK') return cursor.id;
+        seen.add(cursor.id);
+        cursor = specById.get(cursor.parentId);
+      }
+      return null;
+    };
     const out = [];
     for (const spec of specs) {
       const ex = execById.get(spec.id);
       if (ex && !ex.embedded) {
+        // Exec data is the execution face of the spec task (state, stage,
+        // history, execution, artifacts, result fields, input overrides);
+        // it can never carry spec fields - writers strip them (see
+        // VersionedTaskStore), and upsertExecTask strips id/projectId.
         out.push({
-          ...spec, projectId: this.projectId,
+          ...spec, ...ex.data, projectId: this.projectId, milestoneId: milestoneOf(spec),
+          input: { ...(spec.input ?? {}), ...(ex.data.input ?? {}) },
           state: ex.data.state ?? 'READY', stage: ex.data.stage ?? null,
           history: ex.data.history ?? [], execution: ex.data.execution ?? null,
           artifacts: ex.data.artifacts ?? null,
           version: ex.version, updatedAt: ex.updatedAt,
         });
       } else {
-        out.push({ ...spec, projectId: this.projectId, state: 'READY', stage: null, history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
+        out.push({ ...spec, projectId: this.projectId, milestoneId: milestoneOf(spec), state: 'READY', stage: null, history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
       }
     }
     for (const ex of this.listExecTasks()) {

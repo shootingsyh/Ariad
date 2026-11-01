@@ -1,25 +1,16 @@
-import { buildExecutionGraph } from './execution-graph.js';
-import { gateSignature, stableStringify } from './versioned-store.js';
 import { docsRegimeAdopted, requirementsStatus } from './project-docs.js';
 
-// PM promotion for DB-first projects: materialize the open draft version
-// into the runtime store's delivery tasks (same guard semantics as
-// reconcileUnifiedTaskTree: gate-signature drift on DONE/blocked tasks is
-// refused, in-flight changes defer, prose drift on DONE/blocked is
-// tolerated and never rewritten), then flip the prod pointer in the
-// versioned store. Materialization is idempotent: if the flip step fails,
-// a retry re-runs with no further writes and flips again.
-const specSignature = task => stableStringify({
-  gate: gateSignature(task),
-  title: task.title ?? null,
-  intent: task.intent ?? null,
-  acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
-  testStrategy: task.testStrategy ?? null,
-});
-
-export function reconcileVersionedDraft({ versionedStore, store, projectId, approvedBy = null, workspace = null }) {
-  const project = store.getProject(projectId);
-  if (!project) throw new Error('VERSIONED_UNKNOWN_PROJECT');
+// PM promotion for DB-first projects, de-materialized (2026-10-31):
+// promotion is a pointer flip, not a copy. The draft version becomes
+// prod in the versioned store; the scheduler reads the prod task tree
+// directly through VersionedTaskStore (prod specs joined with exec
+// records), so nothing is materialized into the runtime task table.
+// Executed-work protection (DONE gate signatures frozen, in-flight
+// defers, blocked tasks never revised) is enforced by
+// VersionedStore.promoteDraft against the exec records. The returned
+// created/updated/obsoleted lists come from the pre-promotion draft
+// diff and describe the spec delta for the PM's summary only.
+export function promoteVersionedDraft({ versionedStore, workspace = null, approvedBy = null }) {
   // Root-document gate (same semantics as the file-based flow): when the
   // project has adopted the docs regime (.ariad/docs exists), a version
   // may only be promoted from human-finalized requirements. PM finalizes
@@ -51,105 +42,13 @@ export function reconcileVersionedDraft({ versionedStore, store, projectId, appr
     err.details = validationErrors;
     throw err;
   }
-  const existing = store.listTasks(projectId, { scope: 'delivery' });
-  const compiled = versionedStore.listSpecTasks(draft.version)
-    .map(spec => ({ ...spec, unifiedTaskSchemaVersion: 1 }));
-  // milestoneId is derived, never authored: DB-first specs carry only
-  // parentId, but the dispatch policy and the boundary-context builder
-  // still key on milestoneId. The legacy compilers stamped it from tree
-  // position (tech-lead-plan / unified-task-tree); that step was lost in
-  // the DB-first move, so restore it here, at materialization: a task's
-  // milestone is its nearest MILESTONE_TASK ancestor by parentId.
-  const specById = new Map(compiled.map(t => [t.id, t]));
-  const deriveMilestoneId = (spec) => {
-    const seen = new Set([spec.id]);
-    let cursor = specById.get(spec.parentId);
-    while (cursor && !seen.has(cursor.id)) {
-      if (cursor.taskKind === 'MILESTONE_TASK') return cursor.id;
-      seen.add(cursor.id);
-      cursor = specById.get(cursor.parentId);
-    }
-    return null;
-  };
-  for (const spec of compiled) {
-    if (spec.taskKind !== 'MILESTONE_TASK' && !spec.milestoneId) {
-      spec.milestoneId = deriveMilestoneId(spec);
-    }
-  }
-  const wanted = new Map(compiled.map(t => [t.id, t]));
-  const current = new Map(existing.map(t => [t.id, t]));
-  const issues = [];
-  const inFlightChanged = [];
-  const creates = [], updates = [], obsoletes = [];
-  for (const spec of compiled) {
-    const task = current.get(spec.id);
-    if (!task) { creates.push(spec); continue; }
-    if (specSignature(task) === specSignature(spec)) continue;
-    if (gateSignature(task) !== gateSignature(spec)) {
-      if (task.state === 'DONE') issues.push({ id: task.id, reason: 'REVISE_COMPLETED_TASK' });
-      else if (task.state === 'WORKING' || task.state === 'RESULT_READY' || task.execution) inFlightChanged.push(task.id);
-      else if (task.state === 'NEEDS_HUMAN' || task.state === 'SYSTEM_BLOCKED') issues.push({ id: task.id, reason: 'REVISE_BLOCKED_TASK' });
-      else updates.push(spec);
-    } else if (['READY', 'WAITING_REPLAN'].includes(task.state)) {
-      updates.push(spec);
-    }
-  }
-  for (const task of existing) {
-    if (wanted.has(task.id) || task.state === 'OBSOLETE' || task.state === 'SKIPPED') continue;
-    if (task.state === 'DONE') issues.push({ id: task.id, reason: 'REMOVE_COMPLETED_TASK' });
-    else if (task.state === 'READY' || task.state === 'WAITING_REPLAN') obsoletes.push(task);
-    else if (task.state === 'WORKING' || task.state === 'RESULT_READY' || task.execution) inFlightChanged.push(task.id);
-    else issues.push({ id: task.id, reason: 'REMOVE_UNFINISHED_TASK' });
-  }
-  if (inFlightChanged.length) {
-    const error = new Error(`UNIFIED_TASK_DELIVERY_IN_FLIGHT: ${[...new Set(inFlightChanged)].join(',')}`);
-    error.code = 'UNIFIED_TASK_DELIVERY_IN_FLIGHT';
-    throw error;
-  }
-  if (issues.length) {
-    const error = new Error(`UNIFIED_TASK_TREE_RECONCILE_REQUIRES_REVIEW: ${JSON.stringify(issues)}`);
-    error.issues = issues;
-    throw error;
-  }
-  const updatedIds = new Set(updates.map(t => t.id));
-  const obsoleteIds = new Set(obsoletes.map(t => t.id));
-  const resulting = [
-    ...existing.filter(t => !obsoleteIds.has(t.id)).map(t => (updatedIds.has(t.id) ? { ...t, ...wanted.get(t.id) } : t)),
-    ...creates,
-  ];
-  buildExecutionGraph(resulting);
-  const now = new Date().toISOString();
-  store.db.exec('BEGIN IMMEDIATE');
-  try {
-    if (store.getProject(projectId).version !== project.version) throw new Error('UNIFIED_TASK_PROJECT_VERSION_CONFLICT');
-    for (const task of obsoletes) {
-      store.updateTask(task.id, task.version, {
-        state: 'OBSOLETE', execution: null,
-        history: [...(task.history ?? []), { type: 'TASK_TREE_OBSOLETE', at: now }],
-      });
-    }
-    for (const spec of creates) {
-      store.createTask({ ...spec, projectId, state: 'READY', stage: spec.stage ?? 'developer' });
-    }
-    for (const spec of updates) {
-      const task = current.get(spec.id);
-      store.updateTask(task.id, task.version, {
-        parentId: spec.parentId, milestoneId: spec.milestoneId ?? null, executionMode: spec.executionMode,
-        title: spec.title, intent: spec.intent,
-        acceptanceCriteria: spec.acceptanceCriteria, testStrategy: spec.testStrategy,
-        dependsOn: spec.dependsOn, interfaceIds: spec.interfaceIds, logicalRefs: spec.logicalRefs,
-        input: { ...(task.input ?? {}), ...(spec.input ?? {}) },
-        history: [...(task.history ?? []), { type: 'UNIFIED_TASK_TREE_RECONCILED', at: now, previousState: task.state }],
-      });
-    }
-    store.db.exec('COMMIT');
-  } catch (err) { store.db.exec('ROLLBACK'); throw err; }
+  const diff = versionedStore.diffDraft();
   const flip = versionedStore.promoteDraft({ approvedBy });
   return {
-    created: creates.map(t => t.id),
-    updated: updates.map(t => t.id),
-    obsoleted: obsoletes.map(t => t.id),
-    total: compiled.length,
+    created: diff.tasks.added,
+    updated: diff.tasks.changed,
+    obsoleted: diff.tasks.removed,
+    total: versionedStore.listSpecTasks(flip.version).length,
     version: flip.version,
     contentHash: flip.contentHash,
   };

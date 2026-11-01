@@ -19,7 +19,7 @@ import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
 import { validateTechLeadPlan } from './tech-lead-plan.js';
 import { loadPreparedUnifiedTaskTree, reconcileUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { VersionedStore } from './versioned-store.js';
-import { reconcileVersionedDraft } from './versioned-promotion.js';
+import { promoteVersionedDraft } from './versioned-promotion.js';
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -533,7 +533,7 @@ export function createDefaultV2Roles({
             let versionedStore = null;
             try {
               versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state2.db'));
-              vlanded = reconcileVersionedDraft({ versionedStore, store, projectId: task.projectId, approvedBy: 'pm', workspace: versionedProject.workspace });
+              vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace });
             } catch (error) {
               if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
               return {

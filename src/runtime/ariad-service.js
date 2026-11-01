@@ -5,6 +5,7 @@ import { ReconcileTrigger } from '../v2/reconcile-trigger.js';
 import { SQLiteReconcileSignal } from '../v2/sqlite-reconcile-signal.js';
 import { FileReconcileWake } from '../v2/file-reconcile-wake.js';
 import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { VersionedTaskStore } from '../v2/versioned-task-store.js';
 import { VersionedStore } from '../v2/versioned-store.js';
 import { docsRegimeAdopted, requirementsStatus } from '../v2/project-docs.js';
 import { isAdhocAnalysis } from '../v2/control-task-policy.js';
@@ -135,10 +136,13 @@ export class AriadService {
     };
 
     if (project.stateDb && existsSync(project.stateDb)) {
-      const store = new SQLiteV2Store(project.stateDb);
+      const rawStore = new SQLiteV2Store(project.stateDb);
+      const durableProject = rawStore.getProject(project.id);
+      // DB-first projects hold their delivery tasks as versioned specs,
+      // not runtime rows - read them through the de-materialized facade.
+      const store = durableProject?.versionedTree === true ? new VersionedTaskStore(rawStore) : rawStore;
       try {
         const tasks = store.listTasks(project.id);
-        const durableProject = store.getProject(project.id);
         return {
           ...project,
           runtime: 'standalone',
@@ -155,7 +159,8 @@ export class AriadService {
           },
         };
       } finally {
-        store.close();
+        if (store !== rawStore) store.close();
+        rawStore.close();
       }
     }
     return { ...project, runtime: 'standalone', codeCapabilities: this.codeCapabilities.get(project.id) ?? null };

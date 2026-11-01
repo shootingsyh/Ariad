@@ -533,8 +533,11 @@ test('ariad_tree_patch writes the draft into the runtime store file and surfaces
     const rejected = await tool.execute('c2', { action: 'applyOps', ops: [{ op: 'upsertTask', task: { id: 'a.b', title: 'Leaf' } }] });
     assert.equal(rejected.details.error, 'TREE_VALIDATION_FAILED');
     assert.ok(rejected.details.details.some(e => e.includes('taskKind')));
-    const applied = await tool.execute('c3', { action: 'applyOps', ops: [{ op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', title: 'Leaf' } }] });
-    assert.equal(applied.details.applied, 1);
+    const applied = await tool.execute('c3', { action: 'applyOps', ops: [
+      { op: 'upsertContract', contract: { id: 'feature.ab', nodeType: 'feature', exportedInterfaces: [], behavior: ['AB behaves.'] } },
+      { op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', featureId: 'feature.ab', title: 'Leaf' } },
+    ] });
+    assert.equal(applied.details.applied, 2);
     const { VersionedStore } = await import('../src/v2/versioned-store.js');
     const vs = new VersionedStore(storeFile);
     assert.equal(vs.listSpecTasks(1).length, 1);
