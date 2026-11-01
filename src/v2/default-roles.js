@@ -805,8 +805,13 @@ export function createDefaultV2Roles({
     return bad;
   };
 
-  const plannerArtifactError = () => {
+  const plannerArtifactError = (task) => {
     if (!artifactRoot) return null;
+    // DB-first projects keep the plan in the database draft; the on-disk
+    // planner bundle is a legacy medium there and its health must not gate
+    // planning results (a stale bundle from a previous generation bounced
+    // every result against an error the writer could not fix, SRPG 2026-10-31).
+    if (typeof store.getProject === 'function' && store.getProject(task.projectId)?.versionedTree === true) return null;
     try {
       validateBoundaryContracts(artifactRoot, 'feature');
       validateBoundaryContracts(artifactRoot, 'milestone');
@@ -826,7 +831,7 @@ export function createDefaultV2Roles({
     let legacy = body({ task, result });
     if (!legacy) return null;
     if (task.stage !== 'pm' && task.stage !== 'project_debugger') {
-      const artifactError = plannerArtifactError();
+      const artifactError = plannerArtifactError(task);
       if (artifactError) {
         legacy = {
           state: 'NEEDS_HUMAN',
@@ -1579,6 +1584,14 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: 'DRAFT_INVALID: ' + draftErrors.join('; '), errorCode: 'DRAFT_INVALID' },
                 };
               }
+              // DB-first verdict rests on the draft alone: do not fall
+              // through to the on-disk planner bundle below - it is a
+              // legacy medium for versioned projects and a stale bundle
+              // must not fail a valid draft (SRPG, 2026-10-31).
+              return {
+                outcome: 'PASS',
+                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftStore.listSpecTasks(draft.version).length }, error: null, errorCode: null },
+              };
             } finally {
               draftStore.close();
             }

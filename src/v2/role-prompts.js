@@ -163,6 +163,24 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
+    // DB-first (versionedTree) projects keep the whole plan in the database
+    // draft: dependency compilation edits the draft with ariad_tree_patch.
+    // The on-disk planner artifacts are a legacy medium for these projects
+    // and must not even be read here - a stale bundle from a previous
+    // generation otherwise fails prompt preparation itself and parks the
+    // project before the tech lead can work (SRPG, 2026-10-31).
+    if (project?.versionedTree === true) {
+      return [
+        'You are Ariad\'s Tech Lead dependency compilation pass.',
+        'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. The decomposition pass already owns task definition in the open database draft.',
+        'This is a DB-first project: the plan lives in the database draft, not in planner artifact files. Compile dependencies directly into the draft with the ariad_tree_patch tool (read the draft tasks, then applyOps updateTask to set dependsOn). Do not create or edit planner artifact files.',
+        'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass; only dependency edges (dependsOn) and milestone placement may change.',
+        'Logical parentage is semantic only and never creates an execution dependency.',
+        'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
+        'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
+        buildTechLeadPrompt({ projectContext: context, schema: null }),
+      ].filter(Boolean).join('\n\n');
+    }
     const canonicalTasks = hasBoundaryContracts(artifactRoot)
       ? buildOwnedExecutionTasks(artifactRoot)
       : [];

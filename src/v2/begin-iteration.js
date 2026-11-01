@@ -114,6 +114,18 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
 
   const archive = archiveStore({ oldDbPath, workspace: paths.workspace, projectId: project.id, now });
 
+  // Planner artifacts are the pre-DB-first plan medium: the new store's
+  // drafts replace them, and leaving the old bundle in the workspace
+  // keeps legacy readers validating a previous generation's plan (a
+  // stale V2.1 taskLink parked SRPG's first DB-first iteration). Archive
+  // the bundle with the store snapshot; the workspace starts clean.
+  let plannerArtifactsArchived = false;
+  const plannerArtifactsDir = join(paths.workspace, '.ariad', 'artifacts', 'planner');
+  if (existsSync(plannerArtifactsDir)) {
+    renameSync(plannerArtifactsDir, join(archive.dir, 'planner-artifacts'));
+    plannerArtifactsArchived = true;
+  }
+
   let sessionsArchived = 0;
   const persistentDir = join(paths.workspace, '.ariad', 'pi', 'sessions', 'persistent');
   if (existsSync(persistentDir)) {
@@ -180,6 +192,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     archiveSha256: archive.manifest.sha256,
     seeded,
     sessionsArchived,
+    plannerArtifactsArchived,
     pointer,
     nextSteps: [
       'restart the daemon so it opens the new store',

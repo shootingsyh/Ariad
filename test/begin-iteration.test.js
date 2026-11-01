@@ -255,3 +255,55 @@ test('manager.create gives a new project an ignore folder and default gitignore 
   assert.ok(innerIgnore.includes('/pi/'));
   assert.ok(innerIgnore.includes('/state*.db*'));
 });
+
+import { plannerPrompt } from '../src/v2/role-prompts.js';
+import { ensureInterfaceArtifactLayout } from '../src/v2/interface-contracts.js';
+
+test('begin-iteration archives the legacy planner artifacts bundle with the store snapshot', async () => {
+  const { projectsRoot, workspace } = makeAdoptedProject();
+  const plannerDir = join(workspace, '.ariad', 'artifacts', 'planner');
+  mkdirSync(join(plannerDir, 'milestones'), { recursive: true });
+  writeFileSync(join(plannerDir, 'milestones', 'V2.1.json'), '{"stale":true}\n');
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:00:00Z') });
+  assert.equal(report.plannerArtifactsArchived, true);
+  assert.equal(existsSync(plannerDir), false);
+  assert.equal(
+    readFileSync(join(report.archiveDir, 'planner-artifacts', 'milestones', 'V2.1.json'), 'utf8'),
+    '{"stale":true}\n',
+  );
+});
+
+test('planner dependencies prompt never reads the disk bundle for DB-first projects', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-deps-prompt-'));
+  const layout = ensureInterfaceArtifactLayout(root);
+  writeFileSync(join(layout.milestoneDir, 'V2.1.json'), `${JSON.stringify({
+    version: 1,
+    nodeId: 'V2.1',
+    nodeType: 'milestone',
+    decomposition: { kind: 'leaf', reason: 'stale bundle from a previous generation' },
+    interfaces: [],
+    imports: [],
+    featureUses: [],
+    integrationScenarios: [],
+    taskLinks: [{ taskId: 'ghost-task' }],
+    integrationTasks: [],
+  }, null, 2)}\n`);
+  const task = {
+    id: 'planner:b:dependencies',
+    projectId: 'demo',
+    input: { purpose: 'PLANNER_DEPENDENCIES', planningBatchId: 'b', requests: [] },
+  };
+  const store = { listTasks: () => [], getProject: () => null };
+  // Control: the legacy path still compiles from the bundle and therefore
+  // still trips over its dangling taskLink.
+  assert.throws(
+    () => plannerPrompt({ store, project: { id: 'demo', versionedTree: false }, task, artifactRoot: root }),
+    /taskLink references unknown feature task ghost-task/,
+  );
+  // DB-first: the prompt is built for the draft flow and never touches
+  // the stale bundle.
+  const prompt = plannerPrompt({ store, project: { id: 'demo', versionedTree: true }, task, artifactRoot: root });
+  assert.match(prompt, /ariad_tree_patch/);
+  assert.doesNotMatch(prompt, /CANONICAL TASKS/);
+});
