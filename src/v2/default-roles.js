@@ -17,6 +17,11 @@ import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 
+// PM plan-review convergence bound: after this many PM_PLAN_REVISION rounds
+// in one project store (one iteration), a further rejection parks for a
+// human decision instead of spawning another full replan.
+export const PM_REVISION_ROUND_CAP = 5;
+
 import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
@@ -431,6 +436,28 @@ export function createDefaultV2Roles({
           } };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
+          // Convergence bound: unbounded PM revision rounds are a system
+          // failure mode, not diligence. When the rounds already spent on
+          // this project reach the cap, park for a human decision with
+          // the latest objections instead of burning another full replan.
+          // A human decision recorded on THIS task re-authorizes the
+          // loop: the re-review may then enqueue further rounds.
+          const revisionRounds = typeof store?.listPlanningRequests === 'function'
+            ? store.listPlanningRequests(task.projectId).filter(item => item.request?.purpose === 'PM_PLAN_REVISION').length
+            : 0;
+          const humanReauthorized = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
+          if (revisionRounds >= PM_REVISION_ROUND_CAP && !humanReauthorized) {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION', role: 'pm',
+                summary: 'Plan review has not converged after ' + revisionRounds + ' PM revision rounds; another automatic replan is unlikely to settle it. Latest PM reason: ' + String(result.result?.reason ?? result.summary ?? '').slice(0, 500),
+                guidance: result.result?.guidance ?? null,
+                questions: ['Plan review has looped through ' + revisionRounds + ' revision rounds without acceptance. Accept the current draft as-is, give specific direction, or authorize more revision rounds?'],
+                at: new Date().toISOString(),
+              },
+            };
+          }
           enqueuePlanning?.({
             request: {
               purpose: 'PM_PLAN_REVISION',
@@ -1331,7 +1358,16 @@ export function createDefaultV2Roles({
             humanDecision,
           }, null, 2),
         ].filter(Boolean).join('\n\n');
-        return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
+        // Plan review judges one specific draft: use a fresh session per
+        // review task instead of the PM persistent authoring session. A
+        // shared session anchors the reviewer on its own earlier traces,
+        // and it starts re-demanding text the current draft already
+        // carries (SRPG 2026-11-01: nine revision rounds, with clauses
+        // demanded verbatim that had been in the validated plan since
+        // round six). A re-run of the SAME review task (a human decision
+        // on a parked review) reuses its session, so the decision lands
+        // in the context that produced that review.
+        return prepareLlm(task, prompt, { sessionKey: `pm-review:${task.projectId}:${task.id}` });
       },
       transition: ({ task, result }) => planResultTransition(task, result) ?? pmDeliveryTransition(task, result),
     },

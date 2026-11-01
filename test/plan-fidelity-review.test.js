@@ -95,3 +95,60 @@ test('tech lead prompt requires an auditable gap disposition and acceptance fide
   assert.match(prompt, /Acceptance fidelity/);
   assert.match(prompt, /could pass its own acceptance criteria while the requirement it carries is unmet/);
 });
+
+// PM revision-loop regression (2026-11-01, SRPG): plan review ran in the
+// PM persistent authoring session, anchored on its own earlier traces,
+// and re-demanded clauses verbatim that the validated plan had carried
+// since an earlier round; with no convergence bound the cycle burned
+// nine full revision rounds. These tests pin the two fixes: a fresh
+// session per review task, and a revision-round cap that parks for a
+// human decision instead of replanning forever.
+
+test('PM plan review uses a fresh session per review task', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-pmnewsession-'));
+  const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv], listPlanningRequests: () => [] };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
+  const mkTask = id => ({ id, projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b' } });
+  const first = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: mkTask('planner:batch-1-1:pm-review') });
+  const second = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: mkTask('planner:batch-2-2:pm-review') });
+  assert.equal(first.context.sessionKey, 'pm-review:P:planner:batch-1-1:pm-review');
+  assert.equal(second.context.sessionKey, 'pm-review:P:planner:batch-2-2:pm-review');
+  assert.notEqual(first.context.sessionKey, second.context.sessionKey);
+});
+
+test('PM revision below the cap enqueues another revision round', () => {
+  const enqueued = [];
+  const store = { listPlanningRequests: () => [{ request: { purpose: 'PM_PLAN_REVISION' } }, { request: { purpose: 'PM_PLAN_REVISION' } }] };
+  const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
+  const task = { id: 'planner:batch-3-3:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
+  const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'fix the carriers', reason: 'gaps remain' } } });
+  assert.equal(out.state, 'DONE');
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].request.purpose, 'PM_PLAN_REVISION');
+});
+
+test('PM revision at the cap parks for a human decision instead of replanning', () => {
+  const enqueued = [];
+  const five = Array.from({ length: 5 }, () => ({ request: { purpose: 'PM_PLAN_REVISION' } }));
+  const store = { listPlanningRequests: () => five };
+  const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
+  const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
+  const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'still gaps', reason: 'not converged' } } });
+  assert.equal(out.state, 'NEEDS_HUMAN');
+  assert.equal(out.transitionHistory.type, 'PM_HUMAN_DECISION');
+  assert.equal(out.transitionHistory.questions.length, 1);
+  assert.match(out.transitionHistory.summary, /not converged after 5 PM revision rounds/);
+  assert.equal(enqueued.length, 0);
+});
+
+test('a human decision on the parked review re-authorizes further revision rounds', () => {
+  const enqueued = [];
+  const five = Array.from({ length: 5 }, () => ({ request: { purpose: 'PM_PLAN_REVISION' } }));
+  const store = { listPlanningRequests: () => five };
+  const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
+  const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [{ type: 'HUMAN_DECISION', decision: 'Keep revising until it converges.' }], input: { purpose: 'PLANNER_PM_REVIEW' } };
+  const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'still gaps', reason: 'not converged' } } });
+  assert.equal(out.state, 'DONE');
+  assert.equal(enqueued.length, 1);
+});
