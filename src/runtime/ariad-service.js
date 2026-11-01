@@ -74,7 +74,18 @@ export class AriadService {
   readGeneration() {
     let generation = 0;
     for (const project of this.manager.list()) {
-      generation += this.signalFor(project)?.read() ?? 0;
+      try {
+        generation += this.signalFor(project)?.read() ?? 0;
+      } catch (error) {
+        // One project's unreadable state DB must not starve every other
+        // project: ReconcileTrigger reads the summed generation BEFORE it
+        // runs reconcile(), so a throw here used to block the whole daemon
+        // (2026-11-01: one signal's disk I/O error froze all projects,
+        // including a healthy SRPG whose plan result was already in).
+        this.logger?.warn?.(
+          `Ariad reconcile signal unreadable for project ${project.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     return generation;
   }

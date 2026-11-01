@@ -139,3 +139,34 @@ test('iterated DB-first project start enqueues version planning even in TAKEOVER
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('readGeneration isolates a project whose state DB is unreadable', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-readgen-isolation-'));
+  const goodDb = path.join(root, 'good.db');
+  const badDb = path.join(root, 'bad.db');
+  fs.writeFileSync(badDb, 'this is not a sqlite database');
+  const warnings = [];
+  const manager = {
+    list: () => [
+      { id: 'bad-project', stateDb: badDb },
+      { id: 'good-project', stateDb: goodDb },
+    ],
+  };
+  const service = new AriadService({
+    manager,
+    provider: { id: 'test-provider' },
+    logger: { warn: message => warnings.push(message), error: () => {} },
+  });
+  try {
+    // The bad project is listed first: before the isolation fix its throw
+    // aborted the summed read and ReconcileTrigger never ran reconcile()
+    // for ANY project (2026-11-01 daemon freeze).
+    const generation = service.readGeneration();
+    assert.equal(typeof generation, 'number');
+    assert.ok(warnings.some(message => message.includes('bad-project')));
+    // A second pass keeps isolating instead of caching the failure.
+    assert.equal(service.readGeneration(), generation);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

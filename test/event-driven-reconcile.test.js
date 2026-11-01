@@ -159,3 +159,22 @@ test('cross-process wake file notifies the sleeping scheduler owner', async () =
   ownerSignal.stop();
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('signal read recovers when its cached connection dies', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-signal-recover-'));
+  const file = path.join(dir, 'state.db');
+  const signal = new SQLiteReconcileSignal(file);
+  try {
+    assert.equal(signal.bump(), 1);
+    // Simulate the 2026-11-01 daemon failure: the long-lived connection
+    // dies underneath the signal (there: repeated disk I/O errors on a
+    // stale WAL handle) while the database file itself stays healthy.
+    signal.db.close();
+    assert.equal(signal.read(), 1);
+    assert.equal(signal.bump(), 2);
+    assert.equal(signal.read(), 2);
+  } finally {
+    signal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

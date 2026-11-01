@@ -10,7 +10,17 @@ const DURABLE_TABLES = [
 export class SQLiteReconcileSignal {
   constructor(file) {
     if (!file) throw new Error('SQLiteReconcileSignal requires a database file path');
-    this.db = new DatabaseSync(file);
+    this.file = file;
+    this.db = null;
+    this.#open();
+  }
+
+  #open() {
+    if (this.db) {
+      try { this.db.close(); } catch { /* already dead: reopening anyway */ }
+      this.db = null;
+    }
+    this.db = new DatabaseSync(this.file);
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS v2_reconcile_signal (
@@ -50,21 +60,45 @@ export class SQLiteReconcileSignal {
     // Stores may create/migrate durable tables after this signal is opened.
     // Refreshing trigger installation here keeps upgrades zero-touch and makes
     // every subsequent durable mutation visible to the generation counter.
-    this.#installMutationTriggers();
-    return Number(this.db.prepare(
-      'SELECT generation FROM v2_reconcile_signal WHERE singleton = 1'
-    ).get().generation);
+    try {
+      this.#installMutationTriggers();
+      return Number(this.db.prepare(
+        'SELECT generation FROM v2_reconcile_signal WHERE singleton = 1'
+      ).get().generation);
+    } catch (error) {
+      // A long-lived connection can go stale underneath a healthy file
+      // (2026-11-01: the daemon's cached handle started failing every read
+      // with SQLITE_IOERR after other processes cycled the WAL files, while
+      // a fresh connection read the same database fine). Reopen once and
+      // retry before giving up, so one stale handle cannot wedge the signal
+      // for the lifetime of the process.
+      this.#open();
+      this.#installMutationTriggers();
+      return Number(this.db.prepare(
+        'SELECT generation FROM v2_reconcile_signal WHERE singleton = 1'
+      ).get().generation);
+    }
   }
 
   bump() {
-    const now = new Date().toISOString();
-    this.db.prepare(
-      'UPDATE v2_reconcile_signal SET generation = generation + 1, updated_at = ? WHERE singleton = 1'
-    ).run(now);
+    const update = () => {
+      const now = new Date().toISOString();
+      this.db.prepare(
+        'UPDATE v2_reconcile_signal SET generation = generation + 1, updated_at = ? WHERE singleton = 1'
+      ).run(now);
+    };
+    try {
+      update();
+    } catch (error) {
+      this.#open();
+      update();
+    }
     return this.read();
   }
 
   close() {
-    this.db.close();
+    if (!this.db) return;
+    try { this.db.close(); } catch { /* closing a dead handle is fine */ }
+    this.db = null;
   }
 }
