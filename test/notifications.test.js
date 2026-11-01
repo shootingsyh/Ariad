@@ -74,3 +74,10 @@ test('store appends one notification per transition into a human-attention state
   assert.equal(records[1].kind, 'SYSTEM_BLOCKED');
   assert.equal(records[1].seq, 2);
 });
+
+test('ephemeral (:memory:) stores have no notification stream', () => {
+  const appended = appendNotification(':memory:', { projectId: 'P', taskId: 'T1', taskTitle: 't', state: 'NEEDS_HUMAN', task: { history: [{ summary: 's' }] } });
+  assert.equal(appended, null);
+  assert.deepEqual(readNotifications(':memory:'), []);
+  assert.equal(ackNotifications(':memory:', 99), 0);
+});

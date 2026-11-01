@@ -18,6 +18,14 @@ export function notificationsDbPath(storeFile) {
   return join(dirname(storeFile), 'notifications.db');
 }
 
+// An ephemeral store (':memory:' in tests) has no directory to keep a
+// notification stream in, and resolving one anyway lands a stray
+// notifications.db in the process CWD - the suite left one at the repo
+// root. Ephemeral stores simply have no notification stream.
+function hasNotificationStream(storeFile) {
+  return typeof storeFile === 'string' && storeFile.length > 0 && storeFile !== ':memory:';
+}
+
 function openNotificationsDb(storeFile) {
   const db = new DatabaseSync(notificationsDbPath(storeFile));
   db.exec('PRAGMA journal_mode=WAL;');
@@ -56,6 +64,7 @@ function rowToRecord(row) {
 }
 
 export function readNotifications(storeFile, { unreadOnly = false } = {}) {
+  if (!hasNotificationStream(storeFile)) return [];
   let db;
   try {
     db = openNotificationsDb(storeFile);
@@ -75,6 +84,7 @@ export function listUnreadNotifications(storeFile) {
 // The "check mark": mark every row up to upToSeq as read. Returns how
 // many rows were newly checked.
 export function ackNotifications(storeFile, upToSeq) {
+  if (!hasNotificationStream(storeFile)) return 0;
   let db;
   try {
     db = openNotificationsDb(storeFile);
@@ -105,6 +115,7 @@ export function summarizeForNotification(task) {
 }
 
 export function appendNotification(storeFile, { projectId, taskId, taskTitle = '', state, task = null }) {
+  if (!hasNotificationStream(storeFile)) return null;
   const { summary, questions } = task ? summarizeForNotification(task) : { summary: '', questions: [] };
   let db;
   try {
