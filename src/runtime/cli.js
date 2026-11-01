@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { recordRequirementsApproval } from '../v2/project-docs.js';
 import { beginIteration } from '../v2/begin-iteration.js';
+import { readNotifications, readNotificationCursor, writeNotificationCursor } from '../v2/notifications.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
@@ -39,6 +40,8 @@ function usage() {
     '  ariad project slots-install <name> <slot-id>',
     '  ariad project adopt <name> --source-path <dir> [--role-models <json>]',
     '  ariad project status <name> [--projects-root <path>]',
+    '  ariad notifications list [--unread] [--projects-root <path>]',
+    '  ariad notifications ack <project> --up-to <seq> [--projects-root <path>]',
     '',
     'Setup prepares/checks global Pi provider authentication without printing credentials.',
     'begin-iteration requires the project to be STOPPED: it archives the current store, creates a fresh DB-first store seeded with legacy conclusions, and points the project at it. PM/TL then replan inside Ariad.',
@@ -67,7 +70,10 @@ function parse(argv) {
   let features = null;
   let slotId = null;
   let dbFile = null;
+  let upToSeq = null;
+  let unreadOnly = false;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
+  if (scope === 'notifications' && action === 'ack') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'decide') decision = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
@@ -129,6 +135,16 @@ function parse(argv) {
       dbFile = rest[++i];
       continue;
     }
+    if (rest[i] === '--up-to') {
+      if (!rest[i + 1]) throw new Error('--up-to requires a sequence number');
+      upToSeq = Number(rest[++i]);
+      if (!Number.isInteger(upToSeq) || upToSeq < 0) throw new Error('invalid --up-to');
+      continue;
+    }
+    if (rest[i] === '--unread') {
+      unreadOnly = true;
+      continue;
+    }
     if (rest[i] === '--role-models') {
       if (!rest[i + 1]) throw new Error('--role-models requires JSON');
       roleModels = JSON.parse(rest[++i]);
@@ -136,7 +152,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly };
 }
 
 
@@ -234,7 +250,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly } = parse(argv);
   // Install-level role defaults (ariad config guide / assistant /
   // dashboard) are the create fallback: an operator who configured
   // defaults should not have to repeat them on every create. Explicit
@@ -271,6 +287,28 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       const paths = await ensureAriadDaemon(root);
       const ping = await daemonRequest(root, { action: 'ping' });
       return { restarted: true, ...paths, ...ping };
+    }
+    throw new Error(usage());
+  }
+  if (scope === 'notifications') {
+    const manager = new AriadProjectManager({ projectsRoot: root });
+    if (action === 'list') {
+      const projects = manager.list().map(status => {
+        const paths = manager.resolveProjectPaths(status.id);
+        const cursor = readNotificationCursor(paths.db);
+        const notifications = readNotifications(paths.db)
+          .filter(record => !unreadOnly || record.seq > cursor)
+          .map(record => ({ ...record, read: record.seq <= cursor }));
+        return { project: status.id, cursor, notifications };
+      });
+      return { projects };
+    }
+    if (action === 'ack') {
+      if (!name) throw new Error(usage());
+      if (!Number.isInteger(upToSeq) || upToSeq < 0) throw new Error('notifications ack requires --up-to <seq>');
+      const paths = manager.resolveProjectPaths(name);
+      const cursor = writeNotificationCursor(paths.db, upToSeq);
+      return { project: paths.id, ...cursor };
     }
     throw new Error(usage());
   }

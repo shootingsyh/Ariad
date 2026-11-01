@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { notifyHumanAttentionTransition } from './notifications.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -204,7 +205,9 @@ export class SQLiteV2Store {
     this.db.prepare(
       'INSERT INTO v2_tasks (id, project_id, data_json, version, updated_at) VALUES (?, ?, ?, 1, ?)'
     ).run(normalized.id, normalized.projectId, encode(data), now);
-    return this.getTask(normalized.id);
+    const created = this.getTask(normalized.id);
+    notifyHumanAttentionTransition(this.filePath, { projectId: normalized.projectId, task: created, fromState: null });
+    return created;
   }
 
   createTask(task) {
@@ -351,7 +354,9 @@ export class SQLiteV2Store {
       'UPDATE v2_tasks SET data_json = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?'
     ).run(encode(data), version, now, id, expectedVersion);
     if (result.changes !== 1) throw new Error(`task version conflict: ${id}`);
-    return this.getTask(id);
+    const updated = this.getTask(id);
+    notifyHumanAttentionTransition(this.filePath, { projectId: current.projectId, task: updated, fromState: current.state });
+    return updated;
   }
 
   applyExecutorBlockedRoute({ taskId, expectedVersion, patch, transitionHistory, blockedRoute, planningRequest = null }) {
