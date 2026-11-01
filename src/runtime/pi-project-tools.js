@@ -27,7 +27,6 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_session_history',
   'ariad_report_issue',
   'ariad_insert_fix_task',
-  'ariad_recover_legacy_issue_task',
   'ariad_plan_features',
   'ariad_plan_milestones',
   'ariad_build_interfaces',
@@ -35,7 +34,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_tree_patch',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, recoverLegacyIssueBlockedTask = null, requestPlanning = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, requestPlanning = null, taskContext = null }) {
   const resolveFile = file => {
     const path = resolve(workspace, file);
     if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
@@ -253,22 +252,6 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
         return { error: e.code ?? 'TREE_PATCH_FAILED', message: e.message, details: e.details ?? null };
       }
     });
-
-  pi.registerTool({
-    name: 'ariad_recover_legacy_issue_task',
-    label: 'Ariad recover legacy issue-blocked task',
-    description: 'Tech Lead only, explicit operator-requested one-time repair. Restore an idle delivery task to READY only if WAITING_REPLAN was caused by legacy DISCOVERED_BLOCKING_ISSUE and no subsequent Debugger/Replan evidence exists. Preserve Issue and audit trail.',
-    parameters: Type.Object({
-      taskId: Type.String({ minLength: 1 }),
-      reason: Type.String({ minLength: 1 }),
-    }, { additionalProperties: false }),
-    async execute(_id, params) {
-      if (taskContext?.role !== 'tech_lead' || typeof recoverLegacyIssueBlockedTask !== 'function') {
-        throw new Error('TASK_RECOVERY_REQUIRES_TECH_LEAD');
-      }
-      return textResult({ task: recoverLegacyIssueBlockedTask(params) });
-    },
-  });
 
   pi.registerTool({
     name: 'ariad_insert_fix_task',

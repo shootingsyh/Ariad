@@ -53,12 +53,14 @@ export class StandaloneProjectRuntime {
     if (!this.store.getProject(project.id)) {
       this.store.createProject({
         id: project.id,
+        goal: project.goal ?? null,
         spec: project.goal ?? null,
         mode: project.mode ?? 'NEW',
         sourcePath: project.sourcePath ?? null,
         workspace: project.workspace,
         pmBinding: `pm:${project.id}`,
         deliveryEnabled: false,
+        versionedTree: project.versionedTree === true,
         takeoverReviewRequired: (project.mode ?? 'NEW') === 'TAKEOVER',
         projectVersion: project.projectVersion ?? 0,
         activeVersion: project.activeVersion ?? 1,
@@ -108,7 +110,6 @@ export class StandaloneProjectRuntime {
           projectId: project.id, phase, reason, scopeNodeId, nodes, requestedByTaskId,
         }),
       reportIssue: issue => this.openIssue(issue),
-      recoverLegacyIssueBlockedTask: args => this.store.recoverLegacyIssueBlockedTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
       insertTriagedFixTask: args => this.store.insertTriagedFixTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
       projectStoreFile: this.store.filePath ?? null,
     });

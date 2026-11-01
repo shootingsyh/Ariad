@@ -503,7 +503,6 @@ export async function createDefaultPiRunSession(spec) {
         projectStoreFile: spec.projectStoreFile ?? null,
         reportIssue: spec.reportIssue ?? null,
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
-        recoverLegacyIssueBlockedTask: spec.recoverLegacyIssueBlockedTask ?? null,
         requestPlanning: spec.requestPlanning ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null, projectId: spec.projectId ?? null },
       });

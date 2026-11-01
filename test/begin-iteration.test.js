@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
@@ -45,17 +46,24 @@ const baseIssues = [
   { id: 'i-open', data: { title: 'Open bug', severity: 'low' } },
 ];
 
-test('begin-iteration archives, seeds legacy, creates versioned project record, flips pointer', () => {
+test('begin-iteration archives, writes the inventory artifact, creates versioned project record, flips pointer', () => {
   const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks, issues: baseIssues, incidents: 3 });
   const manager = new AriadProjectManager({ projectsRoot });
   const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:00:00.000Z') });
 
   assert.equal(report.newDbFile, 'state2.db');
   assert.equal(report.pointer, 'project-ref.json');
-  assert.equal(report.seeded.doneCards, 1);
-  assert.equal(report.seeded.skippedIdx, 1);
-  assert.equal(report.seeded.resolvedIssues, 1);
-  assert.equal(report.seeded.liveIssuesInserted, 1);
+  assert.equal(report.inventory.tasks, 3);
+  assert.equal(report.inventory.done, 1);
+  assert.equal(report.inventory.openIssues, 1);
+  const inventoryDir = join(workspace, '.ariad', 'artifacts', 'inventory');
+  const inventoryMd = readFileSync(join(inventoryDir, 'INVENTORY.md'), 'utf8');
+  assert.ok(inventoryMd.includes('Done feature'));
+  assert.ok(inventoryMd.includes('Open bug'));
+  assert.ok(existsSync(join(inventoryDir, 'SCHEMA.md')));
+  const dumpedTasks = JSON.parse(readFileSync(join(inventoryDir, 'tasks.json'), 'utf8'));
+  assert.equal(dumpedTasks.length, 4);
+  assert.equal(dumpedTasks.find(t => t.id === 't-done').historyEntries, 2);
 
   const newDbPath = join(workspace, '.ariad', 'state2.db');
   assert.ok(existsSync(newDbPath));
@@ -71,13 +79,10 @@ test('begin-iteration archives, seeds legacy, creates versioned project record, 
 
   const versioned = new VersionedStore(newDbPath);
   assert.equal(versioned.projectId, 'demo');
-  const kinds = versioned.listLegacy().map(e => e.kind).sort();
-  assert.deepEqual(kinds, ['done_card', 'incident_digest', 'issue_resolved', 'project_facts', 'skipped_index']);
-  const card = versioned.getLegacy('done_card', 't-done');
-  assert.equal(card.payload.verdict, 'PASS');
-  const live = versioned.listIssues();
-  assert.equal(live.length, 1);
-  assert.equal(live[0].title, 'Open bug');
+  // Discover model (2026-10-31): nothing is imported into the new store -
+  // the open issue and the finished-work record live only in the
+  // inventory files for the PM/TL to judge from.
+  assert.equal(versioned.listIssues().length, 0);
   versioned.close();
 
   const runtime = new SQLiteV2Store(newDbPath);
@@ -188,21 +193,22 @@ test('begin-iteration starts the new version with the delivery gate closed', () 
   } finally { next.db.close(); }
 });
 
-test('begin-iteration carries the previous store legacy zone forward', () => {
+test('begin-iteration documents the previous legacy zone in the inventory instead of copying it', () => {
   const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
-  const vs = new VersionedStore(join(workspace, '.ariad', 'state.db'));
-  vs.initProject('demo');
-  vs.putLegacyEntries([{ kind: 'done_card', oldId: 'ancient-task', summary: 'Ancient done', payload: { title: 'Ancient done' } }]);
-  vs.close();
+  const raw = new DatabaseSync(join(workspace, '.ariad', 'state.db'));
+  raw.exec('CREATE TABLE legacy_entries (kind TEXT NOT NULL, old_id TEXT NOT NULL, summary TEXT, payload_json TEXT NOT NULL, source_hash TEXT NOT NULL, PRIMARY KEY (kind, old_id))');
+  raw.prepare('INSERT INTO legacy_entries (kind, old_id, summary, payload_json, source_hash) VALUES (?, ?, ?, ?, ?)')
+    .run('done_card', 'ancient-task', 'Ancient done', JSON.stringify({ title: 'Ancient done' }), 'x'.repeat(64));
+  raw.close();
   const manager = new AriadProjectManager({ projectsRoot });
   const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T13:05:00.000Z') });
-  assert.equal(report.seeded.carriedLegacy, 1);
-  const nextVs = new VersionedStore(join(workspace, '.ariad', 'state2.db'));
-  try {
-    const kinds = nextVs.listLegacy().map(e => `${e.kind}:${e.oldId}`);
-    assert.ok(kinds.includes('done_card:ancient-task'), `carried entry missing, got ${kinds.join(', ')}`);
-    assert.ok(kinds.includes('done_card:t-done'), 'freshly distilled cards still seeded');
-  } finally { nextVs.close(); }
+  assert.equal(report.inventory.legacyEntries, 1);
+  const inventoryDir = join(workspace, '.ariad', 'artifacts', 'inventory');
+  const inventoryMd = readFileSync(join(inventoryDir, 'INVENTORY.md'), 'utf8');
+  assert.ok(inventoryMd.includes('ancient-task'));
+  const legacyDump = JSON.parse(readFileSync(join(inventoryDir, 'legacy.json'), 'utf8'));
+  assert.equal(legacyDump[0].old_id, 'ancient-task');
+  assert.equal(legacyDump[0].payload_json.title, 'Ancient done');
 });
 
 test('begin-iteration archives persistent role sessions for a fresh planning start', () => {

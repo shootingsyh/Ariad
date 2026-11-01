@@ -39,7 +39,6 @@ export function createDefaultV2Roles({
   reportIssue = null,
   insertTriagedFixTask = null,
   projectStoreFile = null,
-  recoverLegacyIssueBlockedTask = null,
   requestPlanning = null,
   artifactRoot = null,
   executionCapabilities = [],
@@ -442,7 +441,7 @@ export function createDefaultV2Roles({
             enqueuePlanning?.({
               request: {
                 purpose: 'INITIAL_PLAN',
-                instruction: proj?.goal || 'Replan the project for its new version from the approved requirements and the legacy record.',
+                instruction: proj?.goal || 'Replan the project for its new version from the approved requirements and the previous-generation inventory (.ariad/artifacts/inventory/, when present).',
               },
             });
             return {
@@ -916,7 +915,6 @@ export function createDefaultV2Roles({
       workspace,
       ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
       ...(task.stage === 'tech_lead' && projectStoreFile ? { projectStoreFile } : {}),
-      ...(task.stage === 'tech_lead' && recoverLegacyIssueBlockedTask ? { recoverLegacyIssueBlockedTask } : {}),
       ...(task.stage === 'tech_lead' && requestPlanning ? { requestPlanning } : {}),
       ...(sharedDeliveryContext && reportIssue ? {
         reportIssue: issue => reportIssue(issue),
@@ -1421,7 +1419,7 @@ export function createDefaultV2Roles({
           const prompt = [
             'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
             'Read and investigate the repository as needed. Do not modify any files, planning artifacts, task graph, or implementation.',
-            'Do not initiate Delivery, Replan, or task creation. For an explicitly operator-requested one-off recovery of a legacy issue-induced WAITING_REPLAN task, you MAY use ariad_recover_legacy_issue_task after verifying its provenance. Do not recover genuine Debugger/Replan tasks. Otherwise return findings only.',
+            'Do not initiate Delivery, Replan, or task creation. Return findings only.',
             'Request:', task.input.instruction,
             'Context:', JSON.stringify(task.input.context ?? {}),
             'Return outcome PLANNED with your findings through the structured role-result tool.',
@@ -1686,7 +1684,7 @@ export function createDefaultV2Roles({
             .find(entry => entry?.type === 'HUMAN_DECISION') ?? null;
           const prompt = [
             'You are Ariad\'s PM authoring the project requirements document. This is a requirements stage, not a plan review: no decomposition exists yet, and none may start until the document you produce is finalized and human-approved.',
-            'Write (or revise) .ariad/docs/REQUIREMENTS.md now: read first (the existing documents under .ariad/docs, the legacy record in the project database, and the code), then land the document with your edit/write tools. The document is the single source of truth for what the product must be: high-level, plain language, written for humans, no internal IDs and no provenance annotations \u2014 it does not cite where requirements came from; it is where they live.',
+            'Write (or revise) .ariad/docs/REQUIREMENTS.md now: read first (the existing documents under .ariad/docs, the previous generation\'s inventory under .ariad/artifacts/inventory/ - INVENTORY.md, SCHEMA.md and the JSON dumps, when present - and the code), then land the document with your edit/write tools. The document is the single source of truth for what the product must be: high-level, plain language, written for humans, no internal IDs and no provenance annotations \u2014 it does not cite where requirements came from; it is where they live.',
             'If no requirements document exists, establish what the product actually is today from what the previous version actually implemented, and describe that implemented product, organized under the requirement categories customary for this product domain \u2014 for a game: core experience and gameplay, game systems, content, presentation and art, audio, UI and UX, save and lifecycle, platform and performance, quality floor, release readiness \u2014 using a domain template under .ariad/docs/templates/ when the project provides one, instead of categories invented on the spot. Only what is actually implemented belongs in the document. Write carried-forward content as plain present-tense product description: the document describes the product as it stands; it does not narrate what a previous version did. Cover every category the template lists that applies to this product.',
             'Then fold the human\'s new requirements for the coming version (the request instruction in the payload, plus any HUMAN_DECISION in the task history) into the same document, and close the document with a delta section stating ONLY what this version adds, changes, or removes, plus what is explicitly out of scope - the delta the Tech Lead will plan from. The delta must not recount, list, or summarize what the previous version already implemented. Keep the whole document high-level: no numeric tuning values, no mechanic formulas or constants, no implementation detail; detail belongs to the Tech Lead\'s feature documents, and milestones carry no requirements detail.',
             'Review your own draft twice \u2014 re-read it once against the implemented state and once against the human\'s stated requirements and the writing standards (comprehensive per the template, high-level throughout with no design constants, a delta naming only this version\'s improvements), fixing what you find \u2014 before presenting it.',

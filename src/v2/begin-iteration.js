@@ -5,13 +5,16 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import { basename, join } from 'node:path';
 import { SQLiteV2Store } from './sqlite-store.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
-import { seedLegacyFromOldDb } from './legacy-seed.js';
+import { writeInventoryArtifact } from './inventory-artifact.js';
 import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../runtime/workspace-ignore.js';
 
 // begin-iteration: the system-side head of an iteration (replan) cycle.
 // It archives the project's current store, creates a fresh DB-first
-// store, seeds its legacy zone from the old store, creates the project
-// record in the new store, and flips the project's dbFile pointer.
+// store, writes a plain-file inventory of the old store under
+// .ariad/artifacts/inventory/ (what it holds, what its schema looks
+// like - documentation for the PM/TL to discover from, never an
+// import), creates the project record in the new store, and flips
+// the project's dbFile pointer.
 // The rebuild itself is NOT done here: PM authors/approves the version
 // requirements and TL replans into a draft inside Ariad afterwards.
 //
@@ -139,7 +142,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     }
   }
 
-  let seeded;
+  let inventory;
   try {
     const runtime = new SQLiteV2Store(newDbPath);
     try {
@@ -151,9 +154,16 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     const versioned = new VersionedStore(newDbPath);
     try {
       if (!versioned.projectId) versioned.initProject(project.id);
-      const old = new DatabaseSync(oldDbPath, { readOnly: true });
-      try { seeded = seedLegacyFromOldDb(old, versioned, project.id); } finally { old.close(); }
     } finally { versioned.close(); }
+    // The inventory is documentation, not a migration: its failure must
+    // not block the cutover (the archive still holds the full record),
+    // so a failure is reported in the result instead of thrown.
+    const old = new DatabaseSync(oldDbPath, { readOnly: true });
+    try {
+      inventory = writeInventoryArtifact({ db: old, workspace: paths.workspace, project, oldDbPath, archiveDir: archive.dir, now });
+    } catch (err) {
+      inventory = { dir: '.ariad/artifacts/inventory', error: String(err?.message ?? err) };
+    } finally { old.close(); }
   } catch (err) {
     rmSync(newDbPath, { force: true });
     rmSync(`${newDbPath}-wal`, { force: true });
@@ -190,7 +200,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     newDbFile,
     archiveDir: archive.dir,
     archiveSha256: archive.manifest.sha256,
-    seeded,
+    inventory,
     sessionsArchived,
     plannerArtifactsArchived,
     pointer,

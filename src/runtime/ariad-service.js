@@ -182,9 +182,12 @@ export class AriadService {
       this.manager.setExecutionState(name, 'IDLE');
     }
     // An empty NEW project enters regular planning; only PM may authorize delivery.
+    // Born-DB-first projects are versioned from creation: the versioned
+    // branch below owns their first planning request.
     if (project.mode === 'NEW') {
       const store = this.runtimeFor(project).store;
-      if (store.listTasks(project.id).length === 0 && store.listPlanningRequests(project.id).length === 0) {
+      if (store.getProject(project.id)?.versionedTree !== true
+        && store.listTasks(project.id).length === 0 && store.listPlanningRequests(project.id).length === 0) {
         store.enqueuePlanningRequest({
           id: `initial-plan:${project.id}`,
           projectId: project.id,
@@ -223,7 +226,7 @@ export class AriadService {
             store.enqueuePlanningRequest({
               id: `initial-plan:${project.id}`,
               projectId: project.id,
-              request: { purpose: 'INITIAL_PLAN', instruction: record.goal || 'Replan the project for its new version from the approved requirements and the legacy record.' },
+              request: { purpose: 'INITIAL_PLAN', instruction: record.goal || 'Plan the project version from the approved requirements.' },
               context: { bootstrap: true, iteration: true },
             });
           }

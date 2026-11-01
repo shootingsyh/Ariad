@@ -131,17 +131,8 @@ test('embedded process tasks pass through the effective view', (t) => {
   assert.equal(eff.state, 'WORKING');
 });
 
-test('legacy zone roundtrip and live issues', (t) => {
+test('live issues roundtrip', (t) => {
   const store = makeStore(t);
-  store.putLegacyEntries([
-    { kind: 'done_card', oldId: 'a-task', summary: 'Alpha done', payload: { verdict: 'PASS' } },
-    { kind: 'skipped_index', oldId: 'old-x', summary: 'dropped', payload: { reason: 'superseded' } },
-  ]);
-  assert.equal(store.listLegacy().length, 2);
-  assert.equal(store.listLegacy('done_card').length, 1);
-  const card = store.getLegacy('done_card', 'a-task');
-  assert.equal(card.payload.verdict, 'PASS');
-  assert.ok(card.sourceHash.length === 64);
   const issue = store.createIssue({ id: 'issue-1', title: 'Bug', severity: 'high' });
   assert.equal(issue.state, 'OPEN');
   store.updateIssue('issue-1', { state: 'ASSIGNED' });

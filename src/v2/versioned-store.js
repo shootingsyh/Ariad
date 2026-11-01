@@ -5,7 +5,6 @@ import { createHash } from 'node:crypto';
 // - Task/contract SPECS live in spec_versions (draft -> prod via promotion).
 // - EXECUTION records live in exec_tasks and persist across spec versions.
 // - The scheduler-facing task view is prod specs joined with exec records.
-// - legacy_entries is a read-only reference zone seeded at cutover.
 
 export const DELIVERY_KINDS = ['FEATURE_TASK', 'INTEGRATION_TASK', 'MILESTONE_TASK'];
 const GATE_STATES_FROZEN = ['DONE', 'NEEDS_HUMAN', 'SYSTEM_BLOCKED'];
@@ -80,14 +79,6 @@ export class VersionedStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_exec_tasks_project ON exec_tasks(project_id);
-      CREATE TABLE IF NOT EXISTS legacy_entries (
-        kind TEXT NOT NULL,
-        old_id TEXT NOT NULL,
-        summary TEXT,
-        payload_json TEXT NOT NULL,
-        source_hash TEXT NOT NULL,
-        PRIMARY KEY (kind, old_id)
-      );
       CREATE TABLE IF NOT EXISTS issues (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -491,35 +482,6 @@ export class VersionedStore {
 
   getEffectiveTask(id) {
     return this.effectiveTasks().find(t => t.id === id) ?? null;
-  }
-
-  // ---- legacy zone (read-only after seeding) ------------------------------
-
-  putLegacyEntries(entries) {
-    if (!Array.isArray(entries)) throw new Error('entries must be an array');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      for (const e of entries) {
-        if (!e?.kind || !e?.oldId) throw new Error('legacy entry requires kind and oldId');
-        const payload = e.payload ?? {};
-        this.db.prepare('INSERT INTO legacy_entries (kind, old_id, summary, payload_json, source_hash) VALUES (?, ?, ?, ?, ?) ON CONFLICT(kind, old_id) DO UPDATE SET summary = excluded.summary, payload_json = excluded.payload_json, source_hash = excluded.source_hash')
-          .run(e.kind, e.oldId, e.summary ?? null, encode(payload), sha256(stableStringify(payload)));
-      }
-      this.db.exec('COMMIT');
-    } catch (err) { this.db.exec('ROLLBACK'); throw err; }
-    return entries.length;
-  }
-
-  listLegacy(kind = null) {
-    const rows = kind
-      ? this.db.prepare('SELECT * FROM legacy_entries WHERE kind = ? ORDER BY old_id').all(kind)
-      : this.db.prepare('SELECT * FROM legacy_entries ORDER BY kind, old_id').all();
-    return rows.map(r => ({ kind: r.kind, oldId: r.old_id, summary: r.summary, payload: decode(r.payload_json), sourceHash: r.source_hash }));
-  }
-
-  getLegacy(kind, oldId) {
-    const row = this.db.prepare('SELECT * FROM legacy_entries WHERE kind = ? AND old_id = ?').get(kind, oldId);
-    return row ? { kind: row.kind, oldId: row.old_id, summary: row.summary, payload: decode(row.payload_json), sourceHash: row.source_hash } : null;
   }
 
   // ---- live issues ----------------------------------------------------------

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { normalizeRoleModels, requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { artistEnabled, inspectProjectSlots } from './plugin-slots.js';
 import { ensureAriadGitignore, ensureWorkspaceGitignore, ensureProjectIgnoreDir } from './workspace-ignore.js';
+import { VersionedStore } from '../v2/versioned-store.js';
 
 function slugify(name) {
   const value = String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -121,6 +122,12 @@ export class AriadProjectManager {
     ensureAriadGitignore(ariad);
     ensureWorkspaceGitignore(workspace);
     ensureProjectIgnoreDir(workspace);
+    // Born DB-first (2026-10-31): every project starts life versioned.
+    // The versioned store is initialized on the project database at
+    // creation and the manifest carries the marker; the legacy
+    // file-planner flow no longer births projects.
+    const versioned = new VersionedStore(db);
+    try { versioned.initProject(base.id); } finally { versioned.close(); }
     const createdAt = this.now().toISOString();
     writeJson(manifest, {
       id: base.id,
@@ -132,6 +139,7 @@ export class AriadProjectManager {
       createdAt,
       workspace,
       stateDb: db,
+      versionedTree: true,
       desiredState: 'STOPPED',
       executionState: 'IDLE',
       projectVersion: 0,
@@ -191,6 +199,8 @@ export class AriadProjectManager {
     ensureWorkspaceGitignore(targetWorkspace);
     ensureProjectIgnoreDir(targetWorkspace);
 
+    const adoptedVersioned = new VersionedStore(join(targetAriad, 'state.db'));
+    try { adoptedVersioned.initProject(base.id); } finally { adoptedVersioned.close(); }
     const next = {
       ...current,
       root: undefined,
@@ -199,6 +209,7 @@ export class AriadProjectManager {
       adopted: true,
       workspace: targetWorkspace,
       stateDb: join(targetAriad, 'state.db'),
+      versionedTree: true,
       roleModels: effectiveRoleModels,
     };
     writeJson(targetManifest, next);

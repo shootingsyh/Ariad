@@ -193,7 +193,6 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
 
 
 
-
 test('planning autonomy validator rejects required external human labor unless user explicitly requested it', () => {
   const plan = validateTechLeadPlan({
     version: 2,
@@ -542,7 +541,6 @@ test('supervisor recovers an orphaned WORKING task that already has a sealed rol
   }
 });
 
-
 test('supervisor re-checks durable role-tool result committed during provider poll', async () => {
   const { dir, file } = tempDb();
   try {
@@ -762,7 +760,6 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
   }
 });
 
-
 test('Tech Lead v2 plan validator accepts a tree with precise cross-branch dependencies', () => {
   const plan = {
     version: 2,
@@ -965,7 +962,6 @@ test('split planner artifacts use flat dotted ids and milestone hierarchy derive
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 
 
@@ -1235,7 +1231,6 @@ test('split planner artifact registry rejects subdirectories and filename/id dri
 });
 
 
-
 test('scheduler drains planning batches before dispatching delivery work', async () => {
   const { dir, file } = tempDb();
   try {
@@ -1352,7 +1347,6 @@ test('planning batch atomically snapshots all currently pending requests in arri
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('applyDeliveryPlan atomically preserves completed work and obsoletes removed tasks', () => {
   const { dir, file } = tempDb();
@@ -1495,7 +1489,6 @@ test('scheduler persists a stable attempt identity before provider start', async
   }
 });
 
-
 test('takeover task history survives validation and is persisted without duplicate notes', () => {
   const { dir, file } = tempDb();
   try {
@@ -1572,7 +1565,6 @@ test('default delivery roles are reuse-first but require fresh verification evid
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('delivery scheduler remains gated until PM explicitly enables delivery', async () => {
   const { dir, file } = tempDb();
@@ -1714,7 +1706,6 @@ test('accepted takeover plan pauses at human review until a human decision is re
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('later technical replans in an approved TAKEOVER project do not create another human gate', () => {
   const { dir, file } = tempDb();
@@ -1859,7 +1850,6 @@ test('legacy TAKEOVER projects infer completed review from prior delivery and re
   }
 });
 
-
 test('obsolete takeover recovery preserves a later durable closed delivery gate', () => {
   const { dir, file } = tempDb();
   try {
@@ -1914,7 +1904,6 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('milestone metadata assigns tasks without creating special execution nodes', () => {
   const validated = validateTechLeadPlan({
@@ -2112,7 +2101,6 @@ test('applyDeliveryPlan persists milestone metadata and ordinary task milestoneI
   }
 });
 
-
 test('restart-orphan provider loss requeues without consuming or escalating attempts', async () => {
   const { dir, file } = tempDb();
   try {
@@ -2169,7 +2157,6 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
   }
 });
 
-
 test('restart-orphan unknown legacy provider requeues without consuming an attempt', async () => {
   const { dir, file } = tempDb();
   try {
@@ -2205,7 +2192,6 @@ test('restart-orphan unknown legacy provider requeues without consuming an attem
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('unified Project Debugger routes a system-blocked oversized task to Tech Lead', () => {
   const { dir, file } = tempDb();
@@ -2472,7 +2458,6 @@ test('PM is the only business role that may create a human-decision gate', () =>
   }
 });
 
-
 test('default LLM roles request the shared local-llm resource only for llamacpp models', () => {
   const { dir, file } = tempDb();
   try {
@@ -2680,7 +2665,6 @@ test('issue intake deduplicates sources and tracks triage assignment through pla
   }
 });
 
-
 test('delivery role reports cross-scope issue without blocking source task', async () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
@@ -2721,7 +2705,6 @@ test('delivery role reports cross-scope issue without blocking source task', asy
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('previously reported issue cannot veto source task PASS before TL triage', async () => {
   const { dir, file } = tempDb();
@@ -2784,7 +2767,6 @@ test('assigned issue resolves automatically only after every repair task is DONE
   }
 });
 
-
 test('planner artifact validator rejects human approval gates from Delivery milestones', () => {
   const raw = {
     version: 3,
@@ -2819,7 +2801,6 @@ test('planner artifact validator rejects human approval gates from Delivery mile
     /approval\/human gates belong to the PM control flow/,
   );
 });
-
 
 test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
   const { dir, file } = tempDb();
@@ -2882,24 +2863,4 @@ test('TL routes triaged fix into the issue queue without touching the delivery D
   } finally {
     store.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-test('TL one-off legacy issue recovery preserves issue and refuses genuine replans', () => {
-  const { dir, file } = tempDb();
-  const store = new SQLiteV2Store(file);
-  try {
-    store.createProject({ id: 'P-recover' });
-    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'legacy', projectId: 'P-recover', stage: 'tester', state: 'WAITING_REPLAN' });
-    const issue = store.createIssue({ projectId: 'P-recover', sourceTaskId: 'legacy', title: 'Unrelated defect', description: 'Reported from dev' });
-    const task = store.getTask('legacy');
-    store.appendTaskHistory(task.id, task.version, { type: 'DISCOVERED_BLOCKING_ISSUE', issueIds: [issue.id] });
-    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tester', reason: 'legacy bug' }), /REQUIRES_TECH_LEAD/);
-    const restored = store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'Legacy issue incorrectly blocked AC' });
-    assert.equal(restored.state, 'READY');
-    assert.equal(restored.stage, 'tester');
-    assert.equal(restored.history.at(-1).type, 'TL_LEGACY_ISSUE_BLOCK_RECOVERY');
-    assert.equal(store.getIssue(issue.id).state, 'OPEN');
-    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'legacy', actor: 'tech_lead', reason: 'again' }), /not idle/);
-    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'real', projectId: 'P-recover', state: 'WAITING_REPLAN' });
-    assert.throws(() => store.recoverLegacyIssueBlockedTask({ projectId: 'P-recover', taskId: 'real', actor: 'tech_lead', reason: 'bad' }), /evidence missing/);
-  } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
