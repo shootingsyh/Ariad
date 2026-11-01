@@ -101,6 +101,17 @@ export function planningSkipIds(task, round) {
   return [];
 }
 
+// Three-pass feature pipeline: a clean phase critic skips only its own
+// phase repair task; the next pass then proceeds from the reviewed
+// phase draft.
+export function planningPhaseSkipIds(task) {
+  const batchId = task.input?.planningBatchId;
+  if (!batchId || task.input?.purpose !== 'PLANNER_CRITIC_FEATURES') return [];
+  if (task.input?.phase === 'functional') return [`planner:${batchId}:repair-functional`];
+  if (task.input?.phase === 'nonfunctional') return [`planner:${batchId}:repair-nonfunctional`];
+  return [];
+}
+
 export function planningBatchRequests(store, task) {
   const batchId = task.input?.planningBatchId;
   if (!batchId) return [];

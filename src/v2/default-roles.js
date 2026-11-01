@@ -5,7 +5,7 @@ import { acceptanceCriterionIds } from './acceptance.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { TASK_KINDS, scopeOfTask } from './control-task-policy.js';
-import { docsRegimeAdopted, requirementsStatus } from './project-docs.js';
+import { docsRegimeAdopted, requirementsStatus, validateFeatureDocs } from './project-docs.js';
 import { sealRoleInterfaces } from './interface-seal.js';
 import { roleExecutorBinding } from './role-executor-binding.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 
-import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
+import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -165,7 +165,7 @@ export function createDefaultV2Roles({
               },
             };
           }
-          if (task.input?.purpose === 'PLANNER_DECOMPOSE') {
+          if (task.input?.purpose === 'PLANNER_DECOMPOSE' || task.input?.purpose === 'PLANNER_FEATURES_FUNCTIONAL') {
             const proj = store.getProject?.(task.projectId);
             // Requirements gate (design 2026-10-31): decomposition of a
             // new version starts only from human-approved requirements.
@@ -226,7 +226,7 @@ export function createDefaultV2Roles({
         if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
           return {
             state: 'DONE',
-            skipTaskIds: planningSkipIds(task, task.input?.round),
+            skipTaskIds: [...planningSkipIds(task, task.input?.round), ...planningPhaseSkipIds(task)],
           };
         }
         // Triage-only batches (issue disposition, no plan authorship): the
@@ -686,6 +686,68 @@ export function createDefaultV2Roles({
     };
   };
 
+  // Feature-phase validation (three-pass pipeline): passes 1 and 2 land
+  // feature contracts and documents before any task tree exists, so the
+  // full-draft verdict does not apply yet. A phase draft passes when its
+  // contracts are structurally valid and every contract this draft adds
+  // or changes already carries its feature document and index entry.
+  // Task-tree problems are expected at this point - pass 3 owns the task
+  // tree - and are reported as deferred advisories for the critic, not
+  // failures. The full validation still runs on the finished plan.
+  const validateFeaturePhase = ({ task, validatorProject }) => {
+    const phase = task.input?.phase === 'nonfunctional' ? 'nonfunctional' : 'functional';
+    const fail = (error, errorCode) => ({
+      outcome: 'NOT_PASS',
+      result: { valid: false, plan: null, phase, error, errorCode },
+    });
+    const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
+    try {
+      const draft = draftStore.getOpenDraft();
+      if (!draft) {
+        return fail('NO_OPEN_DRAFT: this is a DB-first (versionedTree) project - author the feature tree into a database draft with the ariad_tree_patch tool (openDraft, then applyOps) before validation', 'NO_OPEN_DRAFT');
+      }
+      const contracts = draftStore.listSpecContracts(draft.version);
+      if (!contracts.length) {
+        return fail('FEATURE_DRAFT_EMPTY: the open DB draft contains no feature contracts - author the feature tree into it with ariad_tree_patch applyOps before validation', 'FEATURE_DRAFT_EMPTY');
+      }
+      const allErrors = draftStore.validateVersion(draft.version);
+      const isContractError = e => e.startsWith('contract ') || e.includes('feature tree cycle');
+      const contractErrors = allErrors.filter(isContractError);
+      if (contractErrors.length) {
+        return fail('DRAFT_INVALID: ' + contractErrors.join('; '), 'DRAFT_INVALID');
+      }
+      try {
+        const diff = draftStore.diffDraft();
+        validateFeatureDocs(validatorProject.workspace, {
+          changedNodeIds: [...diff.contracts.added, ...diff.contracts.changed],
+          removedNodeIds: diff.contracts.removed,
+        });
+      } catch (error) {
+        return fail(error?.message ?? String(error), error?.code ?? 'PROJECT_DOCS_INCOMPLETE');
+      }
+      return {
+        outcome: 'PASS',
+        result: {
+          valid: true,
+          phase,
+          plan: {
+            source: 'db-draft-features',
+            version: draft.version,
+            phase,
+            contractCount: contracts.length,
+            contracts,
+            tasks: draftStore.listSpecTasks(draft.version),
+            taskErrorsDeferredToTaskPass: allErrors.filter(e => !isContractError(e)),
+          },
+          error: null,
+          errorCode: null,
+        },
+      };
+    } finally {
+      draftStore.close();
+    }
+  };
+
   const roleDefinitions = {
     artist: {
       prepare: ({ task }) => {
@@ -1108,6 +1170,9 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: 'REQUIREMENTS_NOT_APPROVED: the requirements document was edited after approval (or never approved) \u2014 a human must approve it (ariad project approve-requirements) before a DB draft can be validated', errorCode: 'REQUIREMENTS_NOT_APPROVED' },
                 };
               }
+            }
+            if (task.input?.purpose === 'PLANNER_VALIDATE_FEATURES') {
+              return validateFeaturePhase({ task, validatorProject });
             }
             const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
             try {

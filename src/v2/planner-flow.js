@@ -4,6 +4,23 @@ function taskId(batchId, name) {
   return `planner:${batchId}:${name}`;
 }
 
+// Three-pass feature pipeline (owner decision, 2026-11-01): a version
+// planning batch no longer authors the feature tree, the interfaces and
+// the task tree in one Tech Lead pass. The work is split into three
+// passes, each closed by the deterministic validator and the critic
+// (there is deliberately no intermediate PM gate); the PM reviews the
+// complete plan once, at the end:
+//   pass 1 PLANNER_FEATURES_FUNCTIONAL    - functional features + docs
+//   pass 2 PLANNER_FEATURES_NONFUNCTIONAL - non-functional features + docs
+//   pass 3 PLANNER_DECOMPOSE              - interfaces + milestone tasks
+// Every other batch purpose (triage, task replan, PM revision loops)
+// keeps the single-pass flow below.
+export const THREE_PASS_REQUEST_PURPOSES = ['INITIAL_PLAN', 'UPDATE_DELIVERY_PLAN'];
+
+export function usesThreePassFlow(requests) {
+  return (requests ?? []).some(item => THREE_PASS_REQUEST_PURPOSES.includes(item?.request?.purpose));
+}
+
 export function plannerFlowTasks(batchId, requests) {
   // Requirements-first flow (design 2026-10-31): a versioned iteration
   // whose requirements document is not yet human-approved starts with
@@ -23,6 +40,14 @@ export function plannerFlowTasks(batchId, requests) {
   const ids = {
     decompose: taskId(batchId, 'decompose'),
     dependencies: taskId(batchId, 'dependencies'),
+    featuresFunctional: taskId(batchId, 'features-functional'),
+    validateFunctional: taskId(batchId, 'validate-functional'),
+    criticFunctional: taskId(batchId, 'critic-functional'),
+    repairFunctional: taskId(batchId, 'repair-functional'),
+    featuresNonfunctional: taskId(batchId, 'features-nonfunctional'),
+    validateNonfunctional: taskId(batchId, 'validate-nonfunctional'),
+    criticNonfunctional: taskId(batchId, 'critic-nonfunctional'),
+    repairNonfunctional: taskId(batchId, 'repair-nonfunctional'),
     validate1: taskId(batchId, 'validate-1'),
     critic1: taskId(batchId, 'critic-1'),
     repair1: taskId(batchId, 'repair-1'),
@@ -38,14 +63,86 @@ export function plannerFlowTasks(batchId, requests) {
 
   const common = { input: { planningBatchId: batchId } };
 
-  return [
+  const threePass = usesThreePassFlow(requests);
+  const featurePassTasks = !threePass ? [] : [
     {
-      id: ids.decompose,
+      id: ids.featuresFunctional,
       stage: 'tech_lead',
       ...common,
       input: {
         ...common.input,
+        purpose: 'PLANNER_FEATURES_FUNCTIONAL',
+        phase: 'functional',
+        requests: structuredClone(requests),
+      },
+    },
+    {
+      id: ids.validateFunctional,
+      stage: 'plan_validator',
+      dependsOn: [ids.featuresFunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_VALIDATE_FEATURES', phase: 'functional' },
+    },
+    {
+      id: ids.criticFunctional,
+      stage: 'tech_lead_critic',
+      dependsOn: [ids.validateFunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_CRITIC_FEATURES', phase: 'functional' },
+    },
+    {
+      id: ids.repairFunctional,
+      stage: 'tech_lead',
+      dependsOn: [ids.criticFunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_REPAIR_FEATURES', phase: 'functional' },
+    },
+    {
+      id: ids.featuresNonfunctional,
+      stage: 'tech_lead',
+      dependsOn: [ids.repairFunctional],
+      ...common,
+      input: {
+        ...common.input,
+        purpose: 'PLANNER_FEATURES_NONFUNCTIONAL',
+        phase: 'nonfunctional',
+        requests: structuredClone(requests),
+      },
+    },
+    {
+      id: ids.validateNonfunctional,
+      stage: 'plan_validator',
+      dependsOn: [ids.featuresNonfunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_VALIDATE_FEATURES', phase: 'nonfunctional' },
+    },
+    {
+      id: ids.criticNonfunctional,
+      stage: 'tech_lead_critic',
+      dependsOn: [ids.validateNonfunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_CRITIC_FEATURES', phase: 'nonfunctional' },
+    },
+    {
+      id: ids.repairNonfunctional,
+      stage: 'tech_lead',
+      dependsOn: [ids.criticNonfunctional],
+      ...common,
+      input: { ...common.input, purpose: 'PLANNER_REPAIR_FEATURES', phase: 'nonfunctional' },
+    },
+  ];
+
+  return [
+    ...featurePassTasks,
+    {
+      id: ids.decompose,
+      stage: 'tech_lead',
+      ...(threePass ? { dependsOn: [ids.repairNonfunctional] } : {}),
+      ...common,
+      input: {
+        ...common.input,
         purpose: 'PLANNER_DECOMPOSE',
+        ...(threePass ? { threePass: true } : {}),
         requests: structuredClone(requests),
       },
     },

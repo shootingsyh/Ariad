@@ -121,10 +121,37 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
     currentDeliveryPlan: currentPlan,
   };
 
+  if (purpose === 'PLANNER_FEATURES_FUNCTIONAL') {
+    return [
+      'You are the Tech Lead for Ariad, running feature pass 1 of 3: FUNCTIONAL FEATURES.',
+      'The planning work is split into three passes (owner decision, 2026-11-01): this pass authors the functional feature tree and its documents; pass 2 adds the non-functional features; pass 3 refines the interfaces and authors the milestone task tree. A critic reviews each pass, and the PM reviews the complete plan once at the end. Do only this pass.',
+      'Work top-down from the human-approved requirements document (.ariad/docs/REQUIREMENTS.md): the top-level functional features align with the structure of that document, and every lower feature refines exactly one parent feature.',
+      'Refine each functional feature until it is unambiguous: a leaf feature carries behavior clauses at tester-decidable granularity - states, action order, preconditions, and exception and silent-failure behavior.',
+      'SUPPORTS DECLARATIONS (plain text in the documents; there is no separate schema for this): every feature document you write or update (.ariad/docs/features/<nodeId>.md) must carry a Supports line. A root feature names the requirements section or direction it supports (for example: Supports: REQUIREMENTS section 5, Presentation and art). A child feature names the parent feature it supports and refines. A feature that supports nothing is not a feature - do not author one.',
+      'Documents move before the database: write or update the feature document and the .ariad/docs/FEATURES.md index entry for every feature you add or change, then land the contract ops with ariad_tree_patch (openDraft, then applyOps).',
+      'Do NOT author or change task-tree entries in this pass, do NOT add non-functional features (infrastructure, environment, build, packaging, compilation, test scaffolding) yet - that is pass 2 - and do NOT refine exportedInterfaces beyond what a contract needs to be structurally valid - interfaces are pass 3.',
+      'Your submitted result must carry the SUPPORTS ACCOUNTING: one line per feature you added or changed, naming the feature and what it supports, plus the final ariad_tree_patch diff output.',
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
+    ].filter(Boolean).join('\n\n');
+  }
+
+  if (purpose === 'PLANNER_FEATURES_NONFUNCTIONAL') {
+    return [
+      'You are the Tech Lead for Ariad, running feature pass 2 of 3: NON-FUNCTIONAL FEATURES.',
+      'Pass 1 (the functional feature tree and its documents) is already in the open draft and has been critic-reviewed. Grow the same tree with the non-functional features the product genuinely needs: infrastructure, runtime environment, build and packaging, compilation, test infrastructure and harnesses, tooling, platform support. Add only what the product needs; ceremony is not a feature.',
+      'A non-functional feature is a feature contract plus a feature document, like any other feature. Its document must carry a Supports line naming the functional feature it serves (for example: Supports: battle-core (functional feature)). A non-functional feature that serves no named functional feature does not belong in the tree.',
+      'Do NOT re-author functional features in this pass - if you spot a genuine defect in one, report it in your result instead. Do NOT author task-tree entries and do NOT refine interfaces - those are pass 3.',
+      'Documents move before the database: feature document and .ariad/docs/FEATURES.md index entry for every feature you add or change, then the contract ops with ariad_tree_patch.',
+      'Your submitted result must carry the SUPPORTS ACCOUNTING for this pass: one line per non-functional feature, naming the feature and the functional feature it serves, plus the final ariad_tree_patch diff output.',
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
+    ].filter(Boolean).join('\n\n');
+  }
+
   if (purpose === 'PLANNER_DECOMPOSE') {
     const issueRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE');
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
+      task.input?.threePass ? 'FEATURE PASS 3 OF 3 - INTERFACES AND TASKS: passes 1 and 2 already authored the functional and non-functional feature tree with documents, and a critic reviewed each pass. Do NOT re-author the feature tree in this pass, except to repair a concrete defect you can name. Your work now: (1) refine every leaf feature contract to final form - exportedInterfaces plus behavior clauses at tester-decidable granularity; (2) author the milestone task tree referencing the features (FEATURE_TASK and INTEGRATION_TASK carry featureId, MILESTONE_TASK never does), including the tasks that build or verify the non-functional features; (3) keep the feature documents, the FEATURES.md index and the Supports declarations consistent with any contract you touch.' : null,
       issueRequests.length ? [
         'ISSUE TRIAGE / ASSIGNMENT',
         'One or more planning requests are issues. Triage each against current repository reality and feature/interface ownership before changing the plan.',
@@ -149,6 +176,18 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
     ].filter(Boolean).join('\n\n');
   }
 
+  if (purpose === 'PLANNER_REPAIR_FEATURES') {
+    const previous = predecessorResults(store, task)[0]?.result ?? null;
+    const phaseName = task.input?.phase === 'nonfunctional' ? 'non-functional' : 'functional';
+    return [
+      'You are the Tech Lead for Ariad, repairing the ' + phaseName + ' feature pass.',
+      'The critic reviewed that pass and returned the findings below. Repair only the affected feature contracts and feature documents in the open database draft, using ariad_tree_patch applyOps and your document tools. Do not rewrite the whole feature tree, do not touch the other pass, and do not add unrelated scope.',
+      'Keep the Supports declarations and the FEATURES.md index consistent with every contract you touch.',
+      JSON.stringify({ context, critic: previous }, null, 2),
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
+    ].join('\n\n');
+  }
+
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     return [
@@ -165,6 +204,34 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
 
 export function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
+  if (task.input?.purpose === 'PLANNER_CRITIC_FEATURES') {
+    const phase = task.input?.phase === 'nonfunctional' ? 'nonfunctional' : 'functional';
+    const shared = [
+      'Return ISSUES only for defects in this pass. Pre-existing plan content this pass did not create or change is out of scope: report such concerns in result.observations only.',
+      'Submit the critic result through the structured role-result mechanism when available. Use outcome CLEAN|MINOR_ONLY|ISSUES and include result.issues plus result.summary. Use MINOR_ONLY when only non-blocking polish remains. Terminal prose or JSON is NOT a result.',
+    ];
+    const lines = phase === 'functional' ? [
+      'You are the delivery-plan critic for Ariad, reviewing feature pass 1 of 3 (functional features) - this pass only, not the whole plan.',
+      'The Tech Lead authored or revised the functional feature contracts and their documents in the open DB draft; the deterministic phase validation result, with the full contract list, is in the payload. There is deliberately no task tree and no interface refinement yet - those are later passes - so their absence is not an issue.',
+      'Judge this pass on five things. (1) ALIGNMENT: the top-level features track the structure of the approved requirements document (.ariad/docs/REQUIREMENTS.md - read it), and every lower feature refines exactly one parent feature. (2) SUPPORTS: every feature document states what the feature supports - a root feature names the requirements section or direction, a child feature names its parent. Read the documents under .ariad/docs/features/; a feature without a Supports declaration, or one naming nothing real, is an ISSUE. (3) NO AMBIGUITY: leaf behavior clauses sit at tester-decidable granularity - states, action order, preconditions, exception and silent-failure behavior; a leaf defined by a vague verb alone is an ISSUE. (4) PURITY: no non-functional features (infrastructure, environment, build, packaging, test scaffolding) and no task-tree work in this pass. (5) DOCUMENTS: every added or changed feature has its document and a FEATURES.md index entry.',
+      'Fidelity granularity applies at this pass too: an enumerated requirement clause buried in the middle of a paragraph still needs a carrying feature; headline-level coverage of a clause-list section is an ISSUE.',
+      ...shared,
+    ] : [
+      'You are the delivery-plan critic for Ariad, reviewing feature pass 2 of 3 (non-functional features) - this pass only, not the whole plan.',
+      'The functional feature tree (pass 1) is already in the draft and was reviewed; the phase validation result with the full contract list is in the payload. Judge only what this pass added or changed.',
+      'Judge this pass on four things. (1) SUPPORTS: every non-functional feature document names the functional feature it serves; one that serves nothing named, or names a feature that does not exist in the draft, is an ISSUE. (2) NECESSITY AND PURITY: each non-functional feature is a real product need - infrastructure, environment, build or packaging, compilation, test infrastructure, tooling, platform - not ceremony; and this pass did not re-author functional behavior, task-tree entries, or interfaces. (3) DOCUMENTS: a feature document and a FEATURES.md index entry for every added or changed feature. (4) INTEGRITY: the pass-1 functional tree is intact - no functional contract was silently rewritten or dropped.',
+      ...shared,
+    ];
+    return [
+      ...lines,
+      JSON.stringify({
+        project: { id: project.id, spec: project.spec ?? null },
+        phase,
+        validation,
+        plan: validation?.plan ?? null,
+      }, null, 2),
+    ].join('\n\n');
+  }
   let batchRequests = [];
   let techLeadResults = [];
   try {
@@ -174,7 +241,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       title: item.request?.issue?.title ?? null,
     }));
     const siblings = flowTasks(store, task);
-    techLeadResults = ['decompose', 'dependencies'].map(name => {
+    techLeadResults = ['features-functional', 'features-nonfunctional', 'decompose', 'dependencies'].map(name => {
       const sibling = siblings.find(item => item.id?.endsWith(`:${name}`));
       const entry = sibling ? latestRoleResult(sibling) : null;
       return entry ? { stage: name, outcome: entry.outcome ?? null, summary: entry.summary ?? null } : null;
@@ -193,6 +260,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
     'FIDELITY TO THE APPROVED REQUIREMENTS: read .ariad/docs/REQUIREMENTS.md - above all its delta - and compare it against the full draft in the validation plan payload. Return ISSUES when a delta addition or change is carried only by verification or regression tasks with no production task and no concrete existing evidence; when an enumerated requirement is diluted into generic acceptance language or covered only in part (a list covered only in part is not covered); or when a visual or media gap has no concrete art task with named deliverables, or visual tasks lack ux.required. The gap-analysis disposition in the Tech Lead result is part of what you review: a missing disposition, or one that rests on asset names and counts alone for enumerated qualities, is an ISSUE. Granularity is part of fidelity: a disposition or acceptance that accounts at section-headline level while the document enumerates individual clauses inside a paragraph (action sets, expression or scar variants, effects lists) is an ISSUE.',
+    'SUPPORTS DECLARATIONS: every feature in the draft must declare what it supports, in its feature document - a root functional feature names the requirements section or direction it supports, a child feature names its parent feature, and a non-functional feature names the functional feature it serves. A feature whose document declares no support target, or a non-functional feature serving no named functional feature, is an ISSUE.',
     'Submit the critic result through the provider\'s structured role-result mechanism when available. Use outcome CLEAN|MINOR_ONLY|ISSUES and include result.issues plus result.summary. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
     JSON.stringify({
