@@ -32,7 +32,7 @@ export const subPlanMachine = defineExecutorMachine({
 export const planMachine = defineExecutorMachine({
   id: 'plan-executor', version: 1, initial: 'PLAN',
   states: {
-    PLAN: { operation: 'runTechLead', transitions: { FINISH: 'COMPLETE', ADVANCE: 'PLAN', REVALIDATE: 'VALIDATE', ESCALATE: 'PM_REVIEW', ROUTE_FEATURE: 'FEATURE_PLAN', ROUTE_MILESTONE: 'MILESTONE_PLAN', ROUTE_INTERFACE: 'INTERFACE_PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
+    PLAN: { operation: 'runTechLead', transitions: { FINISH: 'COMPLETE', ADVANCE: 'PLAN', REVALIDATE: 'VALIDATE', ESCALATE: 'PM_REVIEW', ROUTE_FEATURE: 'FEATURE_PLAN', ROUTE_MILESTONE: 'MILESTONE_PLAN', ROUTE_INTERFACE: 'INTERFACE_PLAN', ROUTE_DEBUG: 'DEBUG', HUMAN_GATE: 'HUMAN_GATE', BLOCKED: 'FAILED' } },
     VALIDATE: { operation: 'runPlanValidator', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
     CRITIQUE: { operation: 'runCritic', transitions: { FINISH: 'COMPLETE', RETRY: 'PLAN', ROUTE_DEBUG: 'DEBUG', BLOCKED: 'FAILED' } },
     PM_REVIEW: { operation: 'runPM', transitions: { FINISH: 'COMPLETE', ESCALATE: 'PLAN', ROUTE_DEBUG: 'DEBUG', HUMAN_GATE: 'HUMAN_GATE', BLOCKED: 'FAILED' } },

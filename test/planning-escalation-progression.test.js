@@ -171,7 +171,17 @@ test('versioned decompose is bounced at submission when requirements are missing
     task: { id: 'd2', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [], input: { purpose: 'PLANNER_DECOMPOSE', planGateRetries: 0 } },
     result: { outcome: 'PLANNED', summary: 'plan ready', result: null },
   });
-  assert.equal(out.input.previousGateFailure.blockedType, 'REQUIREMENTS_GATE');
+  // The requirements gate is a deliberate human channel, not machinery
+  // failure: it parks NEEDS_HUMAN without consuming gate retries, and it
+  // still parks (never routes to the debugger) when retries are spent.
+  assert.equal(out.state, 'NEEDS_HUMAN');
+  assert.equal(out.transitionHistory.type, 'REQUIREMENTS_GATE');
+  const exhausted = roles.tech_lead.transition({
+    task: { id: 'd2b', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', history: [], input: { purpose: 'PLANNER_DECOMPOSE', planGateRetries: 2 } },
+    result: { outcome: 'PLANNED', summary: 'plan ready', result: null },
+  });
+  assert.equal(exhausted.state, 'NEEDS_HUMAN');
+  assert.equal(exhausted.transitionHistory.type, 'REQUIREMENTS_GATE');
 });
 
 test('approved requirements let the decompose submission reach the draft check', () => {
