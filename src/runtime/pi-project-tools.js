@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
+import { searchWeb, fetchWebPage } from './web-research.js';
 import { queryInterfaces } from '../v2/interface-query.js';
 import { VersionedStore } from '../v2/versioned-store.js';
 import { issueAnchor } from '../v2/interface-seal.js';
@@ -27,6 +28,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_report_issue',
   'ariad_insert_fix_task',
   'ariad_tree_patch',
+  'ariad_web_search', 'ariad_web_fetch',
 ]);
 
 export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, requestPlanning = null, taskContext = null }) {
@@ -81,6 +83,10 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
       }) });
     },
   });
+
+  addTool('ariad_web_search', 'Search the public web for external references, benchmarks and prior art (no API key; Bilibili video search primary - results carry thumbnail image URLs - Sogou web search as fallback). Returns results with title, URL and snippet. An empty result set means the search found nothing usable - report that honestly instead of inventing sources.', Type.Object({query: Type.String({ minLength: 1 }), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 }))}), async ({query, limit}) => searchWeb(query, { limit: limit ?? 8 }));
+
+  addTool('ariad_web_fetch', 'Fetch one web page for research: returns the page title, readable text (truncated) and the page image URLs, so visual references can be cited by URL. A binary image URL returns a citation note instead of content.', Type.Object({url: Type.String({ minLength: 1 })}), async ({url}) => fetchWebPage(url));
 
   pi.registerTool({
     name: 'ariad_interface_search',

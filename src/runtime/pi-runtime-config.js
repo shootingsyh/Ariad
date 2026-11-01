@@ -122,6 +122,10 @@ export const ARIAD_PI_PLANNING_WRITE_TOOLS = Object.freeze([
 export const ARIAD_PI_PM_DOC_TOOLS = Object.freeze([
   ...ARIAD_PI_PLANNING_READ_TOOLS,
   'edit', 'write',
+  // The PM also researches externally (benchmarks, prior art) when a
+  // requirement depends on real-world references. Web search/fetch are
+  // read-only; their results are hard-capped in web-research.js.
+  'ariad_web_search', 'ariad_web_fetch',
 ]);
 
 const PI_EXECUTION_ROLES = Object.freeze(['developer', 'test_engineer', 'tester', 'artist']);
