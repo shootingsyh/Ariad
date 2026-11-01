@@ -54,6 +54,28 @@ export function reconcileVersionedDraft({ versionedStore, store, projectId, appr
   const existing = store.listTasks(projectId, { scope: 'delivery' });
   const compiled = versionedStore.listSpecTasks(draft.version)
     .map(spec => ({ ...spec, unifiedTaskSchemaVersion: 1 }));
+  // milestoneId is derived, never authored: DB-first specs carry only
+  // parentId, but the dispatch policy and the boundary-context builder
+  // still key on milestoneId. The legacy compilers stamped it from tree
+  // position (tech-lead-plan / unified-task-tree); that step was lost in
+  // the DB-first move, so restore it here, at materialization: a task's
+  // milestone is its nearest MILESTONE_TASK ancestor by parentId.
+  const specById = new Map(compiled.map(t => [t.id, t]));
+  const deriveMilestoneId = (spec) => {
+    const seen = new Set([spec.id]);
+    let cursor = specById.get(spec.parentId);
+    while (cursor && !seen.has(cursor.id)) {
+      if (cursor.taskKind === 'MILESTONE_TASK') return cursor.id;
+      seen.add(cursor.id);
+      cursor = specById.get(cursor.parentId);
+    }
+    return null;
+  };
+  for (const spec of compiled) {
+    if (spec.taskKind !== 'MILESTONE_TASK' && !spec.milestoneId) {
+      spec.milestoneId = deriveMilestoneId(spec);
+    }
+  }
   const wanted = new Map(compiled.map(t => [t.id, t]));
   const current = new Map(existing.map(t => [t.id, t]));
   const issues = [];
@@ -112,7 +134,7 @@ export function reconcileVersionedDraft({ versionedStore, store, projectId, appr
     for (const spec of updates) {
       const task = current.get(spec.id);
       store.updateTask(task.id, task.version, {
-        parentId: spec.parentId, executionMode: spec.executionMode,
+        parentId: spec.parentId, milestoneId: spec.milestoneId ?? null, executionMode: spec.executionMode,
         title: spec.title, intent: spec.intent,
         acceptanceCriteria: spec.acceptanceCriteria, testStrategy: spec.testStrategy,
         dependsOn: spec.dependsOn, interfaceIds: spec.interfaceIds, logicalRefs: spec.logicalRefs,

@@ -135,3 +135,23 @@ test('promotion skips the requirements gate when the docs regime is not adopted'
   const res = reconcileVersionedDraft({ versionedStore: vs, store: runtime, projectId: 'proj', approvedBy: 'pm', workspace: bare });
   assert.equal(res.version, 1);
 });
+
+test('promotion derives milestoneId from the parent chain (never authored in specs)', (t) => {
+  const { runtime, vs } = makeStores(t);
+  vs.createDraft({ createdBy: 'tl' });
+  const M = { id: 'm-root', taskKind: 'MILESTONE_TASK', title: 'Root milestone', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+  const M1 = { id: 'm-child', taskKind: 'MILESTONE_TASK', title: 'Child milestone', parentId: 'm-root', dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+  const F = { id: 'f-task', taskKind: 'FEATURE_TASK', title: 'Feature under child', parentId: 'm-child', dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+  const G = { id: 'g-task', taskKind: 'FEATURE_TASK', title: 'Feature under root', parentId: 'm-root', dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+  vs.applyTreeOps([
+    { op: 'upsertTask', task: M },
+    { op: 'upsertTask', task: M1 },
+    { op: 'upsertTask', task: F },
+    { op: 'upsertTask', task: G },
+  ]);
+  const res = reconcileVersionedDraft({ versionedStore: vs, store: runtime, projectId: 'proj', approvedBy: 'pm' });
+  assert.equal(res.created.length, 4);
+  assert.equal(runtime.getTask('f-task').milestoneId, 'm-child');
+  assert.equal(runtime.getTask('g-task').milestoneId, 'm-root');
+  assert.equal(runtime.getTask('m-child').milestoneId ?? null, null);
+});
