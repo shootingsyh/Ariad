@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+import { requirementsStatus } from '../src/v2/project-docs.js';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
@@ -312,4 +314,24 @@ test('planner dependencies prompt never reads the disk bundle for DB-first proje
   const prompt = plannerPrompt({ store, project: { id: 'demo', versionedTree: true }, task, artifactRoot: root });
   assert.match(prompt, /ariad_tree_patch/);
   assert.doesNotMatch(prompt, /CANONICAL TASKS/);
+});
+
+test('begin-iteration keeps the requirements document for PM revision but archives its approval', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  const docsDir = join(workspace, '.ariad', 'docs');
+  mkdirSync(docsDir, { recursive: true });
+  const docBody = '# Requirements\n\nSettled product description.\n';
+  writeFileSync(join(docsDir, 'REQUIREMENTS.md'), docBody);
+  const sha = createHash('sha256').update(docBody).digest('hex');
+  writeFileSync(join(docsDir, 'approvals.json'), `${JSON.stringify({ requirements: { path: '.ariad/docs/REQUIREMENTS.md', sha256: sha, approvedBy: 'human-cli', approvedAt: '2026-10-01T00:00:00.000Z', version: null } }, null, 2)}\n`);
+  assert.equal(requirementsStatus(workspace).approved, true);
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T14:00:00.000Z') });
+  assert.equal(report.requirementsApprovalArchived, true);
+  // The document survives untouched for the PM to revise in place...
+  assert.equal(readFileSync(join(docsDir, 'REQUIREMENTS.md'), 'utf8'), docBody);
+  // ...but the previous generation's approval does not carry over.
+  assert.ok(!existsSync(join(docsDir, 'approvals.json')));
+  assert.ok(existsSync(join(report.archiveDir, 'requirements-approvals.json')));
+  assert.equal(requirementsStatus(workspace).approved, false);
 });

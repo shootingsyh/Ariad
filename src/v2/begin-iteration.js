@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { SQLiteV2Store } from './sqlite-store.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { writeInventoryArtifact } from './inventory-artifact.js';
+import { approvalsPath } from './project-docs.js';
 import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../runtime/workspace-ignore.js';
 
 // begin-iteration: the system-side head of an iteration (replan) cycle.
@@ -129,6 +130,20 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     plannerArtifactsArchived = true;
   }
 
+  // The requirements document itself stays in the workspace: the PM
+  // revises the previous version's document in place rather than
+  // regenerating it. Its APPROVAL does not carry across generations -
+  // the record pins the previous document's hash, and an unchanged
+  // document would otherwise read as approved and skip the PM stage
+  // entirely. Archive the record with the store snapshot; the revised
+  // document needs a fresh human approval this iteration.
+  let requirementsApprovalArchived = false;
+  const approvalsFile = approvalsPath(paths.workspace);
+  if (existsSync(approvalsFile)) {
+    renameSync(approvalsFile, join(archive.dir, 'requirements-approvals.json'));
+    requirementsApprovalArchived = true;
+  }
+
   let sessionsArchived = 0;
   const persistentDir = join(paths.workspace, '.ariad', 'pi', 'sessions', 'persistent');
   if (existsSync(persistentDir)) {
@@ -203,6 +218,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     inventory,
     sessionsArchived,
     plannerArtifactsArchived,
+    requirementsApprovalArchived,
     pointer,
     nextSteps: [
       'restart the daemon so it opens the new store',
