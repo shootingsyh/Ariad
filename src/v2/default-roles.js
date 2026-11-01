@@ -1331,6 +1331,37 @@ export function createDefaultV2Roles({
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
         const iteration = iterationRequest(store, task);
+        // Inherited review context: a fresh per-review session must not
+        // lose the record. Assemble, from the store, (a) the previous
+        // review round's verdict and guidance - as a checklist to verify
+        // against the CURRENT draft, never as the reviewer's own memory -
+        // and (b) every human decision recorded on this project's tasks,
+        // which binds this review regardless of which task received it.
+        let priorReview = null;
+        const inheritedHumanDecisions = [];
+        try {
+          const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(task.projectId) : [];
+          for (const other of allTasks) {
+            for (const entry of other.history ?? []) {
+              if (entry?.type === 'HUMAN_DECISION') {
+                inheritedHumanDecisions.push({ taskId: other.id, at: entry.at ?? null, decision: entry.decision ?? null });
+              }
+              if (other.id !== task.id && other.stage === 'pm' && other.input?.purpose === 'PLANNER_PM_REVIEW' && entry?.type === 'ROLE_RESULT') {
+                const candidate = {
+                  taskId: other.id,
+                  outcome: entry.outcome ?? null,
+                  summary: entry.summary ?? null,
+                  guidance: entry.result?.guidance ?? null,
+                  completedAt: entry.completedAt ?? '',
+                };
+                if (!priorReview || String(candidate.completedAt) >= String(priorReview.completedAt)) priorReview = candidate;
+              }
+            }
+          }
+          inheritedHumanDecisions.sort((x, y) => String(x.at ?? '').localeCompare(String(y.at ?? '')));
+        } catch {
+          priorReview = null;
+        }
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain: fold the human\'s latest requirements into it and obtain human approval before any new-version decomposition is planned. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
@@ -1349,6 +1380,7 @@ export function createDefaultV2Roles({
               ? 'This is an existing project (takeover and iteration are one procedure), and the one-time human takeover review has already been satisfied durably at the project level. Do NOT request another takeover/delivery authorization merely because this technical replan changes tasks or scope. If the validated plan preserves user intent and introduces no genuinely new product decision, return PLAN_ACCEPTED and keep normal delivery authorized.'
               : null,
           'HUMAN DECISIONS ARE AUTHORITATIVE: the payload humanDecision field carries the human\'s answer to a parked review (a debug hold or another human gate), when one exists. Follow it exactly. If it asks for any change or correction to the plan, return PLAN_REVISION_REQUIRED and carry the requested changes verbatim in result.guidance - never re-accept the unchanged plan over a correction. Accept the plan only when the decision unconditionally approves or releases it, or when no decision is present and the plan merits acceptance on its own.',
+          'INHERITED CONTEXT: the payload carries priorReview (the previous review round\'s verdict and guidance) and humanDecisions (every human decision recorded on this project\'s tasks). You review in a fresh session by design: judge the CURRENT draft in the payload, not any earlier draft. Treat priorReview strictly as a checklist to verify against the current draft text - an objection whose demanded text is present in the current draft is resolved; never re-demand it. Human decisions are authoritative instructions whenever they were given, not only the decision attached to this task.',
           'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Use NEEDS_HUMAN only when the requirements/goal themselves are the problem (unclear, contradictory, infeasible, or missing a decision only the requirements owner can make); it is honored only with concrete questions in result.questions - a question-less NEEDS_HUMAN is rejected and treated as a revision request. For any plan problem, use PLAN_REVISION_REQUIRED. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
           'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For an existing project whose required human review/requirements approval has not been recorded, delivery must remain gated until it has been; only a later PM review may explicitly start it.',
           JSON.stringify({
@@ -1356,6 +1388,8 @@ export function createDefaultV2Roles({
             takeover,
             plan: validation?.plan ?? null,
             humanDecision,
+            priorReview,
+            humanDecisions: inheritedHumanDecisions,
           }, null, 2),
         ].filter(Boolean).join('\n\n');
         // Plan review judges one specific draft: use a fresh session per
