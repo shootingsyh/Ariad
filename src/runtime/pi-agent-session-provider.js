@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   DefaultResourceLoader,
@@ -440,6 +441,37 @@ export function piSessionManagerForSpec(spec, paths, workspace) {
     : SessionManager.create(workspace, sessionDir);
 }
 
+// The Pi SDK ships a built-in MCP extension, but the package exports do not
+// expose the built-in extension registry, so Ariad loads the extension file
+// from the installed package on disk. If the SDK layout ever changes, MCP
+// support degrades to "no MCP tools" instead of breaking session creation.
+export function bundledPiMcpExtensionPath() {
+  try {
+    const sdkMain = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
+    const candidate = join(dirname(dirname(sdkMain)), 'dist', 'extensions', 'mcp', 'index.js');
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+// Per-project MCP servers live in the project's Pi agent dir (mcp.json,
+// standard mcpServers shape). Ariad registers them with the SDK's MCP
+// extension for the roles that may drive external tools; the extension owns
+// the protocol, the connections and the tool declarations.
+export function readProjectMcpServers(agentDir) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(agentDir, 'mcp.json'), 'utf8'));
+    const servers = parsed?.mcpServers;
+    if (!servers || typeof servers !== 'object') return [];
+    return Object.entries(servers).filter(([, config]) => config && typeof config === 'object');
+  } catch {
+    return [];
+  }
+}
+
+const MCP_ROLES = new Set(['artist']);
+
 export async function createDefaultPiRunSession(spec) {
   const workspace = spec.workspace || process.cwd();
   const roleModels = spec.context?.roleModels ?? {};
@@ -478,6 +510,8 @@ export async function createDefaultPiRunSession(spec) {
     compaction: { enabled: true },
     retry: { enabled: true, maxRetries: 2 },
   });
+  const mcpExtensionPath = bundledPiMcpExtensionPath();
+  const mcpServers = MCP_ROLES.has(spec.role) ? readProjectMcpServers(paths.root) : [];
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir: paths.root,
@@ -486,6 +520,7 @@ export async function createDefaultPiRunSession(spec) {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    ...(mcpExtensionPath ? { additionalExtensionPaths: [mcpExtensionPath] } : {}),
     ...(DELIVERY_ROLES.has(spec.role) ? {
       systemPromptOverride: () => ARIAD_DELIVERY_SYSTEM_PROMPT,
       appendSystemPromptOverride: () => [],
@@ -498,6 +533,13 @@ export async function createDefaultPiRunSession(spec) {
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null, projectId: spec.projectId ?? null },
       });
+      for (const [name, config] of mcpServers) {
+        try {
+          pi.registerMcpServer(name, config);
+        } catch {
+          // A malformed server entry must never break session creation.
+        }
+      }
       if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead') {
         pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace }) ?? undefined);
       }
@@ -553,6 +595,7 @@ export async function createDefaultPiRunSession(spec) {
 
   const sessionManager = piSessionManagerForSpec(spec, paths, workspace);
 
+  const roleTools = piToolsForTask({ role: spec.role, taskKind: spec.taskKind });
   const { session } = await createAgentSession({
     cwd: workspace,
     agentDir: paths.root,
@@ -561,8 +604,15 @@ export async function createDefaultPiRunSession(spec) {
     resourceLoader: loader,
     settingsManager,
     sessionManager,
-    tools: piToolsForTask({ role: spec.role, taskKind: spec.taskKind }),
+    // With MCP servers registered for this role, the session cannot use the
+    // SDK's exact-name allowlist: MCP tool names only exist once the server
+    // connects, and the allowlist would filter them out of the tool registry
+    // for good. Instead the role's tools become the initial active set, and
+    // the MCP tools the project's own mcp.json configured activate as they
+    // register with the session.
+    ...(mcpServers.length ? {} : { tools: roleTools }),
   });
+  if (mcpServers.length) session.setActiveToolsByName(roleTools);
   await session.bindExtensions({ mode: 'json' });
   // A resumed persistent session always runs this run's configured
   // model, whatever model its stored transcript was created with.
