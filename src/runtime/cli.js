@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { recordRequirementsApproval } from '../v2/project-docs.js';
 import { beginIteration } from '../v2/begin-iteration.js';
+import { restoreRequirementsCheckpoint } from '../v2/debug-requirements-checkpoint.js';
 import { readNotifications, ackNotifications } from '../v2/notifications.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
@@ -21,7 +22,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -70,6 +71,8 @@ function parse(argv) {
   let features = null;
   let slotId = null;
   let dbFile = null;
+  let expectedSha256 = null;
+  let discardPlanning = false;
   let upToSeq = null;
   let unreadOnly = false;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
@@ -135,6 +138,15 @@ function parse(argv) {
       dbFile = rest[++i];
       continue;
     }
+    if (rest[i] === '--sha') {
+      if (!rest[i + 1]) throw new Error('--sha requires a sha256 hex digest');
+      expectedSha256 = rest[++i];
+      continue;
+    }
+    if (rest[i] === '--discard-planning') {
+      discardPlanning = true;
+      continue;
+    }
     if (rest[i] === '--up-to') {
       if (!rest[i + 1]) throw new Error('--up-to requires a sequence number');
       upToSeq = Number(rest[++i]);
@@ -152,7 +164,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning };
 }
 
 
@@ -420,7 +432,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
 }
 
 export function runAriadCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, slotId, dbFile } = parse(argv);
+  const { scope, action, name, projectsRoot, slotId, dbFile, expectedSha256, discardPlanning } = parse(argv);
 
   if (scope === 'setup') {
     return {
@@ -429,7 +441,7 @@ export function runAriadCli(argv = process.argv.slice(2)) {
     };
   }
 
-  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install', 'approve-requirements', 'begin-iteration'].includes(action)) {
+  if (scope !== 'project' || !name || !['status', 'slots', 'slots-install', 'approve-requirements', 'begin-iteration', 'debug-restore-requirements'].includes(action)) {
     throw new Error(usage());
   }
 
@@ -456,6 +468,11 @@ export function runAriadCli(argv = process.argv.slice(2)) {
   if (action === 'begin-iteration') {
     const report = beginIteration({ manager, name, dbFile });
     return { action, project: name, iteration: report };
+  }
+
+  if (action === 'debug-restore-requirements') {
+    const report = restoreRequirementsCheckpoint({ manager, name, expectedSha256, discardPlanning });
+    return { action, project: name, checkpoint: report };
   }
 
   const project = manager.status(name);
