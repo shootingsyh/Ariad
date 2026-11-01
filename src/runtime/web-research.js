@@ -148,7 +148,7 @@ async function curlRequest(url, extraHeaders = {}, { cookieJar = null } = {}) {
   const metaMarker = '\n__ARIAD_META__';
   const headerArgs = Object.entries(extraHeaders).flatMap(([name, value]) => ['-H', `${name}: ${value}`]);
   const { stdout } = await execFileAsync('curl', [
-    '-sS', '-L', '--max-time', '20',
+    '-sS', '-L', '--compressed', '--max-time', '20',
     '-A', USER_AGENT,
     '-H', 'accept: text/html,application/xhtml+xml,application/json',
     '-H', 'accept-language: zh-CN,zh;q=0.9,en;q=0.6',
