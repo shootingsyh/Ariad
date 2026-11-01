@@ -90,6 +90,7 @@ export class StandaloneProjectRuntime {
       workspace: project.workspace,
       sourceControl,
       uxReviewEnabled: project.uxReview?.enabled === true,
+      debugHoldAfterPlanReview: project.debug?.holdAfterPlanReview === true,
       artifactRoot: this.artifactRoot,
       executionCapabilities,
       executionProvenance,

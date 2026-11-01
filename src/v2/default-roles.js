@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 
-import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest } from './planning-helpers.js';
+import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -27,6 +27,7 @@ export function createDefaultV2Roles({
   workspace,
   sourceControl = null,
   uxReviewEnabled = false,
+  debugHoldAfterPlanReview = false,
   enqueuePlanning = null,
   reportIssue = null,
   insertTriagedFixTask = null,
@@ -378,6 +379,19 @@ export function createDefaultV2Roles({
               summary: result.result?.reason ?? 'Review the reconstructed project before delivery begins.',
               questions: result.result?.questions?.length ? result.result.questions : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
               guidance: result.result?.guidance ?? null,
+              at: new Date().toISOString(),
+            } };
+          }
+          // Debug hold (operator flag, default off): with the plan
+          // accepted but not yet landed, park for the human when the
+          // project asks for it. The human releases through the
+          // decision channel; the re-review then sees the decision
+          // after the DEBUG_HOLD entry and lands normally.
+          if (debugHoldAfterPlanReview && debugHoldPending(task)) {
+            return { state: 'NEEDS_HUMAN', transitionHistory: {
+              type: 'DEBUG_HOLD', role: 'pm',
+              summary: (result.result?.reason ?? 'PM accepted the plan.') + ' Debug hold is ON for this project: the accepted plan is not landed and delivery stays closed until the human reviews it and replies with a decision.',
+              questions: ['Open delivery for this accepted plan? Reply with a decision to proceed, or give corrections for the plan.'],
               at: new Date().toISOString(),
             } };
           }

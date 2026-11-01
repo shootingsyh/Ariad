@@ -246,6 +246,7 @@ export class AriadProjectManager {
       frontdeskBinding,
       roleModels: normalizeRoleModels(manifest.roleModels ?? {}),
       uxReview: manifest.uxReview?.enabled === true ? { enabled: true } : { enabled: false },
+      debug: { holdAfterPlanReview: manifest.debug?.holdAfterPlanReview === true },
       features: { artist: { enabled: manifest.features?.artist?.enabled !== false } },
       executionState: manifest.executionState ?? 'IDLE',
       stateDb: p.db,
@@ -288,6 +289,13 @@ export class AriadProjectManager {
     const project = this.status(name);
     if (project.desiredState !== 'STOPPED') throw new Error('UX_REVIEW_CONFIGURATION_REQUIRES_STOPPED_PROJECT');
     return this.writeManifest(name, { uxReview: { enabled } });
+  }
+
+  setDebugHold(name, { enabled }) {
+    if (typeof enabled !== 'boolean') throw new Error('debug.holdAfterPlanReview must be boolean');
+    const project = this.status(name);
+    if (project.desiredState !== 'STOPPED') throw new Error('DEBUG_HOLD_CONFIGURATION_REQUIRES_STOPPED_PROJECT');
+    return this.writeManifest(name, { debug: { holdAfterPlanReview: enabled } });
   }
 
   setDesiredState(name, desiredState, audit = {}) {

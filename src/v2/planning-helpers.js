@@ -117,3 +117,19 @@ export function iterationRequest(store, task) {
   return planningBatchRequests(store, task).find(item => item.request?.purpose === 'UPDATE_DELIVERY_PLAN') ?? null;
 }
 
+
+// Debug hold (project flag debug.holdAfterPlanReview): after PM
+// accepts a plan, the landing pauses at NEEDS_HUMAN until the human
+// replies. The hold is pending when it has not fired yet, or when the
+// latest DEBUG_HOLD entry has no HUMAN_DECISION after it. A decision
+// recorded after the hold releases it; a fresh planning task starts
+// with an empty history, so a revised plan holds again.
+export function debugHoldPending(task) {
+  const history = task?.history ?? [];
+  let lastHold = -1;
+  for (let i = 0; i < history.length; i += 1) {
+    if (history[i]?.type === 'DEBUG_HOLD') lastHold = i;
+  }
+  if (lastHold < 0) return true;
+  return !history.slice(lastHold + 1).some(h => h?.type === 'HUMAN_DECISION');
+}
