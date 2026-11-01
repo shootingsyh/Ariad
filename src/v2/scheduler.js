@@ -1,5 +1,4 @@
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
-import { advanceNodePlanningWorkflows } from './node-planning-workflow-executor.js';
 import { RoleResultDispatcher } from './role-result-dispatcher.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
@@ -51,7 +50,6 @@ export class V2Scheduler {
     const initialProject = this.store.getProject(projectId);
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     await this.resultExecutor.advanceResults(projectId, { adhocOnly });
-    if (!adhocOnly) advanceNodePlanningWorkflows(this.store, projectId);
     if (!adhocOnly) {
       this.store.reconcileAssignedIssues?.(projectId);
       this.#settlePlanningBatches(projectId);

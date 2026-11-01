@@ -13,18 +13,26 @@ test('UX reviewer is dormant unless both project binding and task opt-in exist',
 });
 
 
-test('UX opt-in survives TL plan validation and stays separate from art', async () => {
-  const { validateTechLeadPlan } = await import('../src/v2/tech-lead-plan.js');
-  const plan = { version: 2, projectSummary: 'UX iteration', rootTaskId: 'root', tasks: [{
-    id: 'root', title: 'UX review task', intent: 'Review a screen', parentId: null,
-    dependsOn: [], acceptanceCriteria: ['Screenshot meets brief'], testStrategy: 'render',
-    ux: { required: true },
-  }] };
-  const result = validateTechLeadPlan(plan);
-  assert.equal(result.plan.tasks[0].ux.required, true);
-  assert.equal(result.plan.tasks[0].art, null);
+test('UX opt-in survives DB draft authoring and stays separate from art', async () => {
+  const { VersionedStore } = await import('../src/v2/versioned-store.js');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-ux-spec-'));
+  try {
+    const vs = new VersionedStore(join(dir, 'state.db'));
+    vs.initProject('ux-proj');
+    vs.createDraft({ createdBy: 'tl' });
+    vs.applyTreeOps([
+      { op: 'upsertContract', contract: { id: 'screen', nodeType: 'feature', behavior: ['The screen renders.'] } },
+      { op: 'upsertTask', task: { id: 'root', taskKind: 'FEATURE_TASK', featureId: 'screen', title: 'UX review task', intent: 'Review a screen', dependsOn: [], acceptanceCriteria: ['Screenshot meets brief'], testStrategy: 'render', ux: { required: true } } },
+    ]);
+    const spec = vs.listSpecTasks(vs.getOpenDraft().version).find(task => task.id === 'root');
+    assert.equal(spec.ux.required, true);
+    assert.equal(spec.art ?? null, null);
+    vs.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-
 test('project UX flag defaults off and requires STOPPED to change', async () => {
   const { AriadProjectManager } = await import('../src/runtime/project-manager.js');
   const { ARIAD_MODEL_ROLES } = await import('../src/runtime/role-models.js');

@@ -29,12 +29,12 @@ test('planning gate failures retry at the tech lead twice, then route to the deb
   const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
   const base = { id: 'v', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', history: [] };
   const fail = { outcome: 'FAIL', result: { error: 'bad plan' } };
-  const first = roles.plan_validator.transition({ task: { ...base, input: { purpose: 'PLANNING_ROUTE_VALIDATE', planGateRetries: 0 } }, result: fail });
+  const first = roles.plan_validator.transition({ task: { ...base, input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 0 } }, result: fail });
   assert.equal(first.state, 'READY');
   assert.equal(first.stage, 'tech_lead');
   assert.equal(first.transitionHistory.type, 'PLAN_GATE_RETRY');
   assert.equal(first.input.planGateRetries, 1);
-  const exhausted = roles.plan_validator.transition({ task: { ...base, input: { purpose: 'PLANNING_ROUTE_VALIDATE', planGateRetries: 2 } }, result: fail });
+  const exhausted = roles.plan_validator.transition({ task: { ...base, input: { purpose: 'PLANNER_FINAL_VALIDATE', planGateRetries: 2 } }, result: fail });
   assert.equal(exhausted.state, 'READY');
   assert.equal(exhausted.stage, 'project_debugger');
   assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
@@ -81,71 +81,6 @@ test('dispatcher persists a planning debugger diagnosis as SYSTEM_BLOCKED', asyn
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a planning result is bounced when the session left invalid planner artifacts on disk', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ariad-artifact-guard-'));
-  try {
-    const artifactRoot = join(dir, '.ariad', 'artifacts');
-    const expand = { kind: 'expand', reason: 'r' };
-    const leaf = { kind: 'leaf', reason: 'r' };
-    const skeleton = { version: 1, nodeType: 'feature', interfaces: [], imports: [], integrationScenarios: [] };
-    const entry = { id: 't1', title: 'T', intent: 'i', acceptanceCriteria: ['a'], testStrategy: 's', verification: [], interfaceIds: [], issueRefs: [] };
-    mkdirSync(join(artifactRoot, 'planner', 'logical'), { recursive: true });
-    mkdirSync(join(artifactRoot, 'planner', 'interfaces', 'features'), { recursive: true });
-    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.json'), JSON.stringify({ ...skeleton, id: 'x', nodeId: 'x', parentId: null, decomposition: expand }));
-    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.y.json'), JSON.stringify({ ...skeleton, id: 'x.y', nodeId: 'x.y', parentId: 'x', decomposition: leaf }));
-    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.json'), JSON.stringify({ ...skeleton, nodeId: 'x', decomposition: expand }));
-    const contractPath = join(artifactRoot, 'planner', 'interfaces', 'features', 'x.y.json');
-    writeFileSync(contractPath, JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [entry] }));
-    const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
-    const task = { id: 'g', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', input: { purpose: 'PLANNING_ROUTE' }, history: [] };
-    const routed = { outcome: 'PLANNING_ROUTE', result: { stages: {} } };
-    const accepted = roles.tech_lead.transition({ task, result: routed });
-    assert.equal(accepted.state, 'DONE');
-    // The writer now leaves a key the strict loader rejects (the
-    // 2026-10-29 incident shape); acceptance must bounce it back to the
-    // tech lead through the gate ladder instead of sealing it.
-    writeFileSync(contractPath, JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [{ ...entry, history: [] }] }));
-    const bounced = roles.tech_lead.transition({ task, result: routed });
-    assert.equal(bounced.state, 'READY');
-    assert.equal(bounced.stage, 'tech_lead');
-    assert.equal(bounced.transitionHistory.type, 'PLAN_GATE_RETRY');
-    assert.equal(bounced.input.previousGateFailure.blockedType, 'ARTIFACT_VALIDATION_FAILED');
-    assert.match(bounced.input.previousGateFailure.summary, /history: unexpected property/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('gate bounce names the unparseable artifact in history and routed summary', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ariad-artifact-guard-json-'));
-  try {
-    const artifactRoot = join(dir, '.ariad', 'artifacts');
-    const expand = { kind: 'expand', reason: 'r' };
-    const leaf = { kind: 'leaf', reason: 'r' };
-    const skeleton = { version: 1, nodeType: 'feature', interfaces: [], imports: [], integrationScenarios: [] };
-    const entry = { id: 't1', title: 'T', intent: 'i', acceptanceCriteria: ['a'], testStrategy: 's', verification: [], interfaceIds: [], issueRefs: [] };
-    mkdirSync(join(artifactRoot, 'planner', 'logical'), { recursive: true });
-    mkdirSync(join(artifactRoot, 'planner', 'interfaces', 'features'), { recursive: true });
-    mkdirSync(join(artifactRoot, 'planner', 'milestones'), { recursive: true });
-    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.json'), JSON.stringify({ ...skeleton, id: 'x', nodeId: 'x', parentId: null, decomposition: expand }));
-    writeFileSync(join(artifactRoot, 'planner', 'logical', 'x.y.json'), JSON.stringify({ ...skeleton, id: 'x.y', nodeId: 'x.y', parentId: 'x', decomposition: leaf }));
-    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.json'), JSON.stringify({ ...skeleton, nodeId: 'x', decomposition: expand }));
-    writeFileSync(join(artifactRoot, 'planner', 'interfaces', 'features', 'x.y.json'), JSON.stringify({ ...skeleton, nodeId: 'x.y', decomposition: leaf, featureTasks: [entry] }));
-    // A milestone artifact with a missing comma (the 2026-10-30 batch-48 shape):
-    // the guard's feedback must name the file, not just report a bare parse error.
-    writeFileSync(join(artifactRoot, 'planner', 'milestones', 'M1.json'), '{ "id": "M1", "tasks": [] "logicalRefs": [] }');
-    const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
-    const task = { id: 'g2', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', input: { purpose: 'PLANNING_ROUTE' }, history: [] };
-    const routed = { outcome: 'PLANNING_ROUTE', result: { stages: {} } };
-    const bounced = roles.tech_lead.transition({ task, result: routed });
-    assert.equal(bounced.transitionHistory.type, 'PLAN_GATE_RETRY');
-    assert.match(bounced.input.previousGateFailure.summary, /M1\.json/);
-    assert.match(bounced.transitionHistory.summary, /M1\.json/);
-    const exhausted = roles.tech_lead.transition({ task: { ...task, input: { purpose: 'PLANNING_ROUTE', planGateRetries: 2 } }, result: routed });
-    assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
-    assert.equal(exhausted.stage, 'project_debugger');
-    assert.match(exhausted.transitionHistory.summary, /M1\.json/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
 test('planning debugger prepare surfaces the gate failure detail', () => {
   const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
   const task = {
@@ -157,62 +92,6 @@ test('planning debugger prepare surfaces the gate failure detail', () => {
   assert.match(JSON.stringify(prepared), /M1\.json/);
 });
 
-test('frontier pass validation failure enters the gate ladder instead of throwing', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ariad-frontier-gate-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const artifactRoot = join(dir, 'artifacts');
-  const layout = ensureInterfaceArtifactLayout(artifactRoot);
-  const write = (file, value) => {
-    mkdirSync(join(file, '..'), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-  };
-  // One feature node whose contract predates the behavior layer: its
-  // integration scenario carries no acceptanceCriteria. When a frontier
-  // pass targets this node, finishFrontierPass throws - the transition
-  // must convert that into the planning gate progression, not let it
-  // escape and fail the whole project.
-  write(join(artifactRoot, 'planner', 'logical', 'project.json'), {
-    id: 'project', title: 'project', summary: 'root', parentId: null,
-  });
-  write(join(layout.featureDir, 'project.json'), {
-    version: 1, nodeId: 'project', nodeType: 'feature',
-    decomposition: { kind: 'leaf', reason: 'single node fixture' },
-    interfaces: [{
-      id: 'run', kind: 'executor', visibility: 'exported',
-      contract: { input: [], output: ['run result'], sideEffects: [] },
-    }],
-    imports: [],
-    integrationScenarios: [{ id: 'legacy-scenario', description: 'Pre-behavior-layer scenario without acceptance criteria.', uses: [] }],
-    bindings: [], featureTasks: [], behavior: ['The project runs.'],
-  });
-  write(layout.activeFrontierPath, {
-    version: 1, nodeType: 'feature', bootstrap: false,
-    targetNodeId: 'project', existingNodeParents: { project: null },
-  });
-  const roles = createDefaultV2Roles({ store: {}, workspace: dir, artifactRoot });
-  const task = {
-    id: 'tl-1', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead',
-    flowId: 'planner:P:b1', history: [],
-    input: { purpose: 'PLANNER_DECOMPOSE', frontierPhase: 'feature', planGateRetries: 0 },
-  };
-  const first = roles.tech_lead.transition({ task, result: { outcome: 'PLANNED' } });
-  assert.equal(first.state, 'READY');
-  assert.equal(first.stage, 'tech_lead');
-  assert.equal(first.transitionHistory.type, 'PLAN_GATE_RETRY');
-  assert.match(first.input.previousGateFailure.summary, /legacy-scenario/);
-  const exhausted = roles.tech_lead.transition({
-    task: { ...task, input: { ...task.input, planGateRetries: 2 } },
-    result: { outcome: 'PLANNED' },
-  });
-  assert.equal(exhausted.state, 'READY');
-  assert.equal(exhausted.stage, 'project_debugger');
-  assert.equal(exhausted.transitionHistory.type, 'PLAN_DEBUGGER_ROUTED');
-});
-
-// Regression (2026-10-31, iterprobe): gate repairs must be re-verified.
-// A tech-lead PLANNED reply on a bounced gate task (final validation /
-// PM review) used to close the gate DONE with no re-check, so an empty
-// repair silently landed an unlandable plan.
 test('final validation failure enters the counted gate ladder', () => {
   const roles = createDefaultV2Roles({ store: {}, workspace: '/tmp' });
   const base = { id: 'fv', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', history: [] };

@@ -303,14 +303,8 @@ test('planner dependencies prompt never reads the disk bundle for DB-first proje
     input: { purpose: 'PLANNER_DEPENDENCIES', planningBatchId: 'b', requests: [] },
   };
   const store = { listTasks: () => [], getProject: () => null };
-  // Control: the legacy path still compiles from the bundle and therefore
-  // still trips over its dangling taskLink.
-  assert.throws(
-    () => plannerPrompt({ store, project: { id: 'demo', versionedTree: false }, task, artifactRoot: root }),
-    /taskLink references unknown feature task ghost-task/,
-  );
   // DB-first: the prompt is built for the draft flow and never touches
-  // the stale bundle.
+  // the stale bundle (the legacy compile-from-bundle path is retired).
   const prompt = plannerPrompt({ store, project: { id: 'demo', versionedTree: true }, task, artifactRoot: root });
   assert.match(prompt, /ariad_tree_patch/);
   assert.doesNotMatch(prompt, /CANONICAL TASKS/);

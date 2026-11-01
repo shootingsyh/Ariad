@@ -5,7 +5,6 @@ import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { queryInterfaces } from '../v2/interface-query.js';
-import { applyPlannerPatch } from '../v2/planner-patch.js';
 import { VersionedStore } from '../v2/versioned-store.js';
 import { issueAnchor } from '../v2/interface-seal.js';
 import { sessionHistory } from './session-history.js';
@@ -27,10 +26,6 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_session_history',
   'ariad_report_issue',
   'ariad_insert_fix_task',
-  'ariad_plan_features',
-  'ariad_plan_milestones',
-  'ariad_build_interfaces',
-  'ariad_planner_patch',
   'ariad_tree_patch',
 ]);
 
@@ -183,22 +178,6 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
     },
   });
 
-  for (const [name, phase, downstream] of [
-    ['ariad_plan_features', 'feature', ['milestone', 'interface']],
-    ['ariad_plan_milestones', 'milestone', ['interface']],
-    ['ariad_build_interfaces', 'interface', []],
-  ]) {
-    addTool(name, `Tech Lead only. Request deterministic ${phase} node planning; downstream dependency validation: ${downstream.join(', ') || 'none'}. This only queues work, never declares completion.`, Type.Object({
-      reason: Type.String({ minLength: 1 }),
-      scopeNodeId: Type.String({ minLength: 1 }),
-      nodes: Type.Array(Type.Object({ id: Type.String({ minLength: 1 }), parentId: Type.Union([Type.String(), Type.Null()]) }), { minItems: 1 }),
-    }, { additionalProperties: false }), async params => {
-      if (taskContext?.role !== 'tech_lead') throw new Error('PLANNING_REQUIRES_TECH_LEAD');
-      if (typeof requestPlanning !== 'function') throw new Error('PLANNING_SCHEDULER_NOT_CONNECTED');
-      return requestPlanning({ phase, downstream, ...params, requestedByTaskId: taskContext.taskId });
-    });
-  }
-
   let treeStore = null;
   const resolveTreeStoreFile = () => {
     if (projectStoreFile) return projectStoreFile;
@@ -215,20 +194,6 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
     }
     return treeStore;
   };
-
-  addTool('ariad_planner_patch',
-    'Tech Lead only. Change an EXISTING planner artifact (milestone delivery tree or boundary contract JSON) with structured operations instead of editing file text. Ariad applies the ops, strictly validates the whole planner tree on a staged copy, and only then atomically replaces the live file; a rejected patch leaves the live file untouched and returns the validation error. Ops: {op:"addItem",array,item} (duplicate id/taskId rejected), {op:"updateItem",array,match,set,addToList,removeFromList} (match must hit exactly one item), {op:"removeItem",array,match}, {op:"setTop",set,addToList,removeFromList}, or {op:"createDocument",document} as the first op for a file that does not exist yet. file is relative to .ariad/artifacts, e.g. "planner/milestones/V2.2.json". When several artifacts are only valid together (for example two contracts whose imports must change together), pass patches: [{file, ops}, ...] instead of file/ops: the batch is staged, validated as one tree, and committed atomically - a single-file patch against a still-invalid tree can never pass validation. Use this for dependsOn edges, taskLinks, featureTasks, integrationTasks and task field updates; never use edit/write on these files.',
-    Type.Object({
-      file: Type.Optional(Type.String({ minLength: 1 })),
-      ops: Type.Optional(Type.Array(Type.Any(), { minItems: 1, maxItems: 200 })),
-      patches: Type.Optional(Type.Array(Type.Object({
-        file: Type.String({ minLength: 1 }),
-        ops: Type.Array(Type.Any(), { minItems: 1, maxItems: 200 }),
-      }, { additionalProperties: false }), { minItems: 1, maxItems: 8 })),
-    }, { additionalProperties: false }), async (params) => {
-      if (taskContext?.role !== 'tech_lead') throw new Error('PLANNER_PATCH_REQUIRES_TECH_LEAD');
-      return applyPlannerPatch({ artifactRoot: join(workspace, '.ariad', 'artifacts'), file: params.file, ops: params.ops, patches: params.patches });
-    });
 
   addTool('ariad_tree_patch',
     'Tech Lead only. DB-first planning: author the task tree and boundary contracts in the open DRAFT version of the project database (state2.db) with structured operations; nothing here touches the production version or the running delivery queue. Actions: "openDraft" (start a new draft copied from prod; fails if one is already open), "applyOps" (ops: {op:"upsertTask",task} / {op:"removeTask",taskId} / {op:"upsertContract",contract} / {op:"removeContract",contractId}; the whole draft is validated after each call - dependency existence and acyclicity, contract behavior clauses, interface references - and a rejected call changes nothing), "diff" (draft vs prod change summary for review), "discardDraft". Promotion to prod is PM-only and never happens through this tool. Task spec (upsertTask): {id, taskKind - required, one of "FEATURE_TASK"|"INTEGRATION_TASK"|"MILESTONE_TASK", title - required, parentId (optional parent task id; the task tree hierarchy uses parentId - there is no milestoneId field), dependsOn (optional array of task ids), interfaceIds (optional array of exported interface ids), featureId (FEATURE_TASK: required - the feature-tree contract this task implements; INTEGRATION_TASK: the feature it verifies; MILESTONE_TASK: never set), intent, acceptanceCriteria, testStrategy}. Contract spec (upsertContract): contracts form the FEATURE tree, the reference source of truth: {id, nodeType - required, "feature", parentId (optional parent feature contract id; builds the feature tree), behavior (non-empty array of clause strings, unless integrationScenarios carry acceptanceCriteria), exportedInterfaces, integrationScenarios}. There are no milestone contracts: milestones live only in the task tree. A rejected call returns {error, message, details} listing every validation problem - fix the named fields and resubmit; never resubmit an unchanged payload.',

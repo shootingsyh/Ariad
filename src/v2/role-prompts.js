@@ -1,12 +1,9 @@
 /** Role prompt fragments and planner/critic prompt builders,
  * extracted from default-roles.js. */
 import { acceptanceCriterionIds } from './acceptance.js';
-import { beginFrontierPass, buildOwnedExecutionTasks, frontierArtifactInstructions, hasBoundaryContracts } from './interface-contracts.js';
-import { plannerArtifactInstructions } from './planner-artifacts.js';
-import { TECH_LEAD_PLAN_SCHEMA } from './tech-lead-plan.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { resolve } from 'node:path';
-import { flowTasks, latestPlanInFlow, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
+import { flowTasks, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
 
 export const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
@@ -109,7 +106,7 @@ export function plannerPublicPlan(plan) {
 
 export function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
-  const currentPlan = plannerPublicPlan(latestPlanInFlow(store, task, artifactRoot));
+  const currentPlan = null; // DB-first: the plan lives in the DB draft; the TL reads it via ariad_tree_patch.
   const context = {
     project: {
       id: project.id,
@@ -125,130 +122,49 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   };
 
   if (purpose === 'PLANNER_DECOMPOSE') {
-    const nodeType = task.input?.frontierPhase ?? 'feature';
     const issueRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE');
-    const frontier = beginFrontierPass(artifactRoot, nodeType);
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       issueRequests.length ? [
         'ISSUE TRIAGE / ASSIGNMENT',
         'One or more planning requests are issues. Triage each against current repository reality and feature/interface ownership before changing the plan.',
-        'Reject duplicates/non-defects by leaving delivery unchanged and documenting the disposition in planning artifacts/history.',
-        'For a valid issue, assign repair to the correct existing owning Feature/interface when possible; revise boundaries only when ownership is genuinely missing or wrong.',
-        'Create or update the smallest bounded delivery repair task. Preserve issueRefs:[issueId] on every delivery task created specifically to resolve that issue so Ariad can track assignment.',
-        'Make the assignment by patching artifacts with ariad_planner_patch (add the repair task, then updateItem addToList dependsOn where a gate must wait for it). Never edit planner JSON files directly.',
-        'The reporting task is NOT automatically blocked. Judge whether a later READY task or integration gate must depend on the fix; if the source task is WORKING or already completed, do not mutate it. Do not request a pause: PM alone decides stopping policy.',
+        'Reject duplicates/non-defects by leaving delivery unchanged and documenting the disposition in the issue record.',
+        'For a valid issue, route the repair through the issue queue with ariad_insert_fix_task (the fix task runs ahead of milestone work; it does not join the task tree). Only when the fix genuinely changes the planned tree itself, reflect it in the open draft with ariad_tree_patch.',
+        'The reporting task is NOT automatically blocked. Do not request a pause: PM alone decides stopping policy.',
         JSON.stringify({ issueRequests }, null, 2),
       ].join('\n\n') : null,
-      frontierArtifactInstructions(artifactRoot, nodeType),
-      nodeType === 'feature'
-        ? 'FEATURE FRONTIER PHASE: define product/behavior decomposition, boundary contracts, and the canonical implementation/local-test tasks owned by every node created or finalized in this round. Do not defer task intent to a later global pass.'
-        : 'MILESTONE FRONTIER PHASE: define delivery/integration decomposition, feature interface uses, additive links to feature tasks, and milestone-owned integration/E2E tasks for every node created or finalized in this round. Do not defer integration test ownership to a later global pass.',
-      frontier.bootstrap
-        ? frontier.instruction
-        : [
-            frontier.instruction,
-            'The current node already has a parent-facing contract. Preserve every exported interface exactly.',
-            'If expanding, define each direct child completely enough to expose its own stable parent-facing contract and decomposition decision.',
-            'Then update the current node imports and integrationScenarios so they use only those direct-child exported interfaces.',
-          ].join(' '),
-      JSON.stringify({
-        frontierPhase: nodeType,
-        frontier,
-      }, null, 2),
-      nodeType === 'milestone'
-        ? 'Milestone artifacts may keep legacy tasks=[] as a compatibility view; canonical task ownership now lives in the milestone boundary contract (featureUses/taskLinks/integrationTasks).'
-        : 'A leaf Feature that requires implementation should own its canonical featureTasks now. A pure composition node may own no implementation task and instead express integrationScenarios.'
     ].filter(Boolean).join('\n\n');
   }
 
   if (purpose === 'PLANNER_DEPENDENCIES') {
-    // DB-first (versionedTree) projects keep the whole plan in the database
-    // draft: dependency compilation edits the draft with ariad_tree_patch.
-    // The on-disk planner artifacts are a legacy medium for these projects
-    // and must not even be read here - a stale bundle from a previous
-    // generation otherwise fails prompt preparation itself and parks the
-    // project before the tech lead can work (SRPG, 2026-10-31).
-    if (project?.versionedTree === true) {
-      return [
-        'You are Ariad\'s Tech Lead dependency compilation pass.',
-        'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. The decomposition pass already owns task definition in the open database draft.',
-        'This is a DB-first project: the plan lives in the database draft, not in planner artifact files. Compile dependencies directly into the draft with the ariad_tree_patch tool (read the draft tasks, then applyOps updateTask to set dependsOn). Do not create or edit planner artifact files.',
-        'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass; only dependency edges (dependsOn) and milestone placement may change.',
-        'Logical parentage is semantic only and never creates an execution dependency.',
-        'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
-        'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
-        buildTechLeadPrompt({ projectContext: context, schema: null }),
-      ].filter(Boolean).join('\n\n');
-    }
-    const canonicalTasks = hasBoundaryContracts(artifactRoot)
-      ? buildOwnedExecutionTasks(artifactRoot)
-      : [];
     return [
       'You are Ariad\'s Tech Lead dependency compilation pass.',
-      'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. Feature and milestone frontier passes already own task definition.',
-      'Compile the already-defined canonical featureTasks, milestone taskLinks, and milestone integrationTasks into the legacy milestone/tasks compatibility artifacts and add only precise dependency edges required for execution ordering.',
-      'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass.',
-      'Milestone taskLinks may only add dependencies and verification. Milestone integrationTasks are already defined and must remain milestone-owned.',
-      'Apply every artifact change with the ariad_planner_patch tool (addItem for new compiled tasks, updateItem with addToList dependsOn for new edges). Do not edit milestone or contract files as text: runtime policy blocks it, and unvalidated text edits are how planner JSON gets corrupted.',
-      'Developer owns implementation, system wiring and cheap deterministic __tests__ including mock-based integration CI. Tester owns real-system integration, UI journeys, E2E and regression-only verification in __integration_tests__. Automatic CI selects only current-directory and direct-parent __tests__; no sibling or recursive ancestor sweep.',
+      'DO NOT invent, rename, rewrite, broaden, or reinterpret task intent here. The decomposition pass already owns task definition in the open database draft.',
+      'This is a DB-first project: the plan lives in the database draft, not in planner artifact files. Compile dependencies directly into the draft with the ariad_tree_patch tool (read the draft tasks, then applyOps updateTask to set dependsOn). Do not create or edit planner artifact files.',
+      'Feature task title, intent, acceptanceCriteria, testStrategy, issueRefs, and feature ownership are immutable in this pass; only dependency edges (dependsOn) and milestone placement may change.',
       'Logical parentage is semantic only and never creates an execution dependency.',
       'Milestone parentage is execution structure: child milestones complete before parent integration/E2E work. Do not repeat that implicit ordering in dependsOn.',
       'Use milestone dependsOn only for additional prerequisite milestones and task dependsOn only for precise extra task prerequisites.',
-      canonicalTasks.length
-        ? 'ARIAD CANONICAL TASKS (copy semantics exactly; only compile dependency/milestone placement):\n' + JSON.stringify(canonicalTasks, null, 2)
-        : null,
       buildTechLeadPrompt({ projectContext: context, schema: null }),
-      plannerArtifactInstructions(artifactRoot),
     ].filter(Boolean).join('\n\n');
-  }
-
-  if (purpose === 'PLANNER_FRONTIER_REPAIR') {
-    const previous = predecessorResults(store, task)[0] ?? null;
-    const frontier = latestFrontierCompletion(store, task);
-    return [
-      "You are Ariad's Tech Lead repairing exactly one migration frontier.",
-      'Repair only the current frontier artifacts identified below. Do not alter already-frozen ancestor exports or unrelated siblings.',
-      'Address only concrete critic issues. Preserve accepted node identity and product intent.',
-      JSON.stringify({
-        context,
-        frontier,
-        critic: previous?.result ?? previous ?? null,
-      }, null, 2),
-      frontierArtifactInstructions(artifactRoot, task.input?.frontierPhase ?? 'feature'),
-    ].join('\n\n');
   }
 
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     return [
       'You are Ariad\'s Tech Lead repair pass.',
-      'Repair only the affected planner artifacts using the critic findings below. Do not rewrite or re-emit the complete project plan.',
+      'Repair only the affected parts of the open database draft using the critic findings below, with ariad_tree_patch applyOps. Do not rewrite or re-emit the complete project plan.',
       'Do not add unrelated scope.',
       JSON.stringify({ context, critic: previous }, null, 2),
-      plannerArtifactInstructions(artifactRoot),
+      buildTechLeadPrompt({ projectContext: context, schema: null }),
     ].join('\n\n');
   }
 
-  return buildTechLeadPrompt({ projectContext: context, schema: TECH_LEAD_PLAN_SCHEMA });
+  return buildTechLeadPrompt({ projectContext: context, schema: null });
 }
 
 export function criticPrompt({ store, project, task, artifactRoot }) {
   const validation = predecessorResults(store, task)[0]?.result ?? null;
-  if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
-    const frontier = latestFrontierCompletion(store, task);
-    return [
-      "You are Ariad's semantic critic for exactly one top-down migration frontier.",
-      'Review only the frontier just produced, plus the parent contract needed to judge it.',
-      'Check: correct abstraction level, interface quality, Executor/Provider semantics where applicable, stable parent boundary, sensible child decomposition, task/interface ownership, and whether the frontier preserves project intent.',
-      'Do not request unrelated tree-wide cleanup. Return CLEAN when this frontier is acceptable; otherwise ISSUES with precise, locally repairable findings.',
-      JSON.stringify({
-        project: { id: project.id, spec: project.spec ?? null },
-        frontier,
-        validation,
-      }, null, 2),
-    ].join('\n\n');
-  }
   let batchRequests = [];
   let techLeadResults = [];
   try {
@@ -284,7 +200,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       validation,
       batchRequests,
       techLeadResults,
-      plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
+      plan: validation?.plan ?? null,
     }, null, 2),
   ].join('\n\n');
 }

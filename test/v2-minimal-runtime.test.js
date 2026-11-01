@@ -6,25 +6,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
+import { VersionedStore } from '../src/v2/versioned-store.js';
 import { RoleRegistry } from '../src/v2/role-registry.js';
 import { ProviderRegistry } from '../src/v2/provider-registry.js';
 import { ResourcePool, ScopedResourcePool } from '../src/v2/resource-pool.js';
 import { V2Scheduler, partitionGraphs } from '../src/v2/scheduler.js';
 import { buildExecutionGraph } from '../src/v2/execution-graph.js';
 import { V2Supervisor } from '../src/v2/supervisor.js';
-import { TECH_LEAD_PLAN_SCHEMA, validateTechLeadPlan } from '../src/v2/tech-lead-plan.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
 import { aggregateTesterSubmission } from '../src/v2/acceptance.js';
 import { validatePlanAutonomy } from '../src/v2/autonomy.js';
 import { ensureTakeoverReviewState, recoverObsoleteTakeoverHumanGates } from '../src/v2/takeover-gate.js';
-import {
-  ensurePlannerArtifactLayout,
-  applyFeatureTreeDiff,
-  loadPlannerArtifactPlan,
-  validatePlannerArtifactPlan,
-} from '../src/v2/planner-artifacts.js';
-
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-v2-'));
   return { dir, file: path.join(dir, 'state.db') };
@@ -194,10 +187,7 @@ test('scheduler follows dependency topology and one-GPU capacity', async () => {
 
 
 test('planning autonomy validator rejects required external human labor unless user explicitly requested it', () => {
-  const plan = validateTechLeadPlan({
-    version: 2,
-    projectSummary: 'Autonomous game',
-    rootTaskId: 'ROOT',
+  const plan = {
     tasks: [{
       id: 'ROOT',
       title: 'Complete game',
@@ -207,7 +197,7 @@ test('planning autonomy validator rejects required external human labor unless u
       acceptanceCriteria: ['10 external human players must play CH1 and 8/10 must pass.'],
       testStrategy: 'Recruit external human players and collect manual results.',
     }],
-  }).plan;
+  };
 
   assert.throws(
     () => validatePlanAutonomy(plan, [{ request: { purpose: 'INITIAL_PLAN', instruction: 'Build and verify the game autonomously.' } }]),
@@ -278,27 +268,24 @@ test('runtime acceptance cannot be satisfied by static or proxy evidence', () =>
   assert.equal(executed.result.criteria[0].status, 'SATISFIED');
 });
 
-test('verification metadata survives plan validation', () => {
-  const plan = validateTechLeadPlan({
-    version: 2,
-    projectSummary: 'Runtime evidence project',
-    rootTaskId: 'ROOT',
-    tasks: [{
-      id: 'ROOT',
-      title: 'Runtime root',
-      intent: 'Verify runtime behavior.',
-      parentId: null,
-      dependsOn: [],
-      acceptanceCriteria: ['Windows runtime starts.'],
-      testStrategy: 'Launch Windows build through WSL host interop.',
-      verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' }],
-    }],
-  }).plan;
-  assert.deepEqual(plan.tasks[0].verification, [
-    { criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' },
-  ]);
+test('verification metadata survives DB draft authoring', () => {
+  const { dir, file } = tempDb();
+  try {
+    const vs = new VersionedStore(file);
+    vs.initProject('verify-proj');
+    vs.createDraft({ createdBy: 'tl' });
+    vs.applyTreeOps([
+      { op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Runtime root', intent: 'Verify runtime behavior.', dependsOn: [], acceptanceCriteria: ['Windows runtime starts.'], testStrategy: 'Launch Windows build through WSL host interop.', verification: [{ criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' }] } },
+    ]);
+    const spec = vs.listSpecTasks(vs.getOpenDraft().version).find(task => task.id === 'ROOT');
+    assert.deepEqual(spec.verification, [
+      { criterionId: 'AC1', mode: 'runtime', target: 'windows.host-via-wsl' },
+    ]);
+    vs.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
-
 test('tester aggregate verdict is computed from required criterion statuses', () => {
   const task = {
     acceptanceCriteria: ['Windows runtime smoke passes', 'Full playthrough clears every required map'],
@@ -760,477 +747,6 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
   }
 });
 
-test('Tech Lead v2 plan validator accepts a tree with precise cross-branch dependencies', () => {
-  const plan = {
-    version: 2,
-    projectSummary: 'Todo app',
-    rootTaskId: 'project-done',
-    tasks: [
-      {
-        id: 'project-done',
-        title: 'Todo app complete',
-        intent: 'Integrate all major areas and validate whole-project completion.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['Whole app passes final acceptance.'],
-        testStrategy: 'Run project-wide E2E and acceptance checks.',
-      },
-      {
-        id: 'backend',
-        title: 'Backend',
-        intent: 'Provide durable data access.',
-        parentId: 'project-done',
-        dependsOn: [],
-        acceptanceCriteria: ['Backend integration is complete.'],
-        testStrategy: 'Run backend integration tests.',
-      },
-      {
-        id: 'dao-interface',
-        title: 'DAO interface',
-        intent: 'Define the stable data-access contract.',
-        parentId: 'backend',
-        dependsOn: [],
-        acceptanceCriteria: ['Consumers can compile against the contract.'],
-        testStrategy: 'Run contract tests against fake and real implementations.',
-      },
-      {
-        id: 'ui',
-        title: 'UI',
-        intent: 'Provide user-facing todo workflows.',
-        parentId: 'project-done',
-        dependsOn: [],
-        acceptanceCriteria: ['Primary UI flows work.'],
-        testStrategy: 'Run UI integration tests.',
-      },
-      {
-        id: 'list-backend',
-        title: 'List backend integration',
-        intent: 'Connect list behavior to the DAO contract.',
-        parentId: 'ui',
-        dependsOn: ['dao-interface'],
-        acceptanceCriteria: ['List loads through the DAO contract.'],
-        testStrategy: 'Run list integration against fake DAO.',
-      },
-    ],
-  };
-
-  const result = validateTechLeadPlan(plan);
-  assert.equal(result.ok, true);
-  assert.equal(result.plan.tasks.length, 5);
-  assert.equal(result.plan.rootTaskId, 'project-done');
-});
-
-test('Tech Lead v2 plan validator rejects multiple logical roots', () => {
-  const plan = {
-    version: 2,
-    projectSummary: 'bad',
-    rootTaskId: 'A',
-    tasks: [
-      { id: 'A', title: 'A', intent: 'A', parentId: null, dependsOn: [], acceptanceCriteria: ['a'], testStrategy: 'a' },
-      { id: 'B', title: 'B', intent: 'B', parentId: null, dependsOn: [], acceptanceCriteria: ['b'], testStrategy: 'b' },
-    ],
-  };
-  assert.throws(() => validateTechLeadPlan(plan), /exactly one logical root/);
-});
-
-test('Tech Lead v2 plan validator rejects redundant parent dependency', () => {
-  const plan = {
-    version: 2,
-    projectSummary: 'bad',
-    rootTaskId: 'ROOT',
-    tasks: [
-      { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
-      { id: 'CHILD', title: 'Child', intent: 'child', parentId: 'ROOT', dependsOn: ['ROOT'], acceptanceCriteria: ['child'], testStrategy: 'child' },
-    ],
-  };
-  assert.throws(() => validateTechLeadPlan(plan), /must not repeat parent\/child ordering/);
-});
-
-test('Tech Lead v2 plan validator catches explicit execution cycles independently of logical hierarchy', () => {
-  const plan = {
-    version: 2,
-    projectSummary: 'cycle',
-    rootTaskId: 'ROOT',
-    tasks: [
-      { id: 'ROOT', title: 'Root', intent: 'root', parentId: null, dependsOn: [], acceptanceCriteria: ['root'], testStrategy: 'root' },
-      { id: 'A', title: 'A', intent: 'a', parentId: 'ROOT', dependsOn: ['B'], acceptanceCriteria: ['a'], testStrategy: 'a' },
-      { id: 'B', title: 'B', intent: 'b', parentId: 'ROOT', dependsOn: ['A'], acceptanceCriteria: ['b'], testStrategy: 'b' },
-    ],
-  };
-  assert.throws(() => validateTechLeadPlan(plan), /execution graph contains a cycle/);
-});
-
-test('Tech Lead prompt explains Ariad model and all planning scenarios', () => {
-  const prompt = buildTechLeadPrompt({
-    projectContext: { goal: 'Build a todo app' },
-    schema: TECH_LEAD_PLAN_SCHEMA,
-  });
-  assert.match(prompt, /ARIAD MODEL/);
-  assert.match(prompt, /GREENFIELD/);
-  assert.match(prompt, /EXISTING PROJECT/);
-  assert.match(prompt, /Takeover and iteration are the same procedure/);
-  assert.match(prompt, /Logical tree/i);
-  assert.match(prompt, /Milestones/i);
-  assert.match(prompt, /TAKEOVER_NOTE/);
-  assert.match(prompt, /fresh verification/i);
-  assert.match(prompt, /stop for human review/i);
-  assert.match(prompt, /children complete before parent integration work/i);
-  assert.match(prompt, /another TL could pick this project up/i);
-  assert.match(prompt, /project-wide, not milestone-local/i);
-  assert.match(prompt, /complete currently-known route to project completion/i);
-  assert.match(prompt, /should normally allow Ariad to continue into the next already-planned milestone/i);
-  assert.match(prompt, /Do not create routine human gates between milestones/i);
-  assert.match(prompt, /plan reaches the project root/i);
-  assert.match(prompt, /actually winnable\/clearable/i);
-  assert.match(prompt, /Do not confuse gameplay coverage with gameplay success/i);
-  assert.match(prompt, /normal player entry point/i);
-  assert.match(prompt, /actually complete the required game content/i);
-  assert.match(prompt, /Every important feature and every milestone/i);
-  assert.match(prompt, /real supported user entry point/i);
-  assert.match(prompt, /without bypassing required intermediate steps/i);
-  assert.match(prompt, /one continuous realistic journey/i);
-  assert.match(prompt, /project\/root acceptance must include a product-level E2E journey/i);
-});
-
-test('split planner artifacts use flat dotted ids and milestone hierarchy derives execution prerequisites', () => {
-  const { dir } = tempDb();
-  try {
-    const artifactRoot = path.join(dir, 'artifacts');
-    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
-
-    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
-      id: 'game',
-      title: 'Game',
-      summary: 'Complete game',
-      parentId: null,
-    }));
-    fs.writeFileSync(path.join(logicalDir, 'game.battle.json'), JSON.stringify({
-      id: 'game.battle',
-      title: 'Battle',
-      summary: 'Battle capability',
-      parentId: 'game',
-    }));
-
-    fs.writeFileSync(path.join(milestoneDir, 'M1.json'), JSON.stringify({
-      id: 'M1',
-      title: 'Integrated slice',
-      goal: 'Integrate the child battle slice.',
-      parentId: null,
-      dependsOn: [],
-      logicalRefs: ['game'],
-      acceptanceCriteria: ['Whole slice works end to end.'],
-      testStrategy: 'Run whole-slice E2E.',
-      tasks: [{
-        id: 'T-INTEGRATE',
-        title: 'Integrate slice',
-        intent: 'Verify the whole slice.',
-        dependsOn: [],
-        logicalRefs: ['game'],
-        acceptanceCriteria: ['Integration passes.'],
-        testStrategy: 'Run E2E.',
-      }],
-    }));
-    fs.writeFileSync(path.join(milestoneDir, 'M1.1.json'), JSON.stringify({
-      id: 'M1.1',
-      title: 'Battle slice',
-      goal: 'Deliver battle capability.',
-      parentId: 'M1',
-      dependsOn: [],
-      logicalRefs: ['game.battle'],
-      acceptanceCriteria: ['Battle works.'],
-      testStrategy: 'Run battle tests.',
-      tasks: [{
-        id: 'T-BATTLE',
-        title: 'Battle implementation',
-        intent: 'Deliver battle.',
-        dependsOn: [],
-        logicalRefs: ['game.battle'],
-        acceptanceCriteria: ['Battle is usable.'],
-        testStrategy: 'Run battle test.',
-        issueRefs: ['issue:P:battle-1'],
-      }],
-    }));
-
-    const raw = loadPlannerArtifactPlan(artifactRoot);
-    const validated = validatePlannerArtifactPlan(raw).plan;
-    assert.equal(validated.version, 3);
-    assert.equal(validated.logicalRootId, 'game');
-    assert.deepEqual(validated.tasks.find(task => task.id === 'T-BATTLE').dependsOn, []);
-    assert.deepEqual(validated.tasks.find(task => task.id === 'T-BATTLE').issueRefs, ['issue:P:battle-1']);
-    assert.deepEqual(validated.tasks.find(task => task.id === 'T-INTEGRATE').dependsOn, ['T-BATTLE']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-
-
-test('feature-tree diff deterministically materializes the next living tree', () => {
-  const previous = [
-    { id: 'product', title: 'Product', summary: 'Root product', parentId: null },
-    { id: 'product.a', title: 'A', summary: 'Feature A', parentId: 'product' },
-    { id: 'product.b', title: 'B', summary: 'Feature B', parentId: 'product' },
-  ];
-  const next = applyFeatureTreeDiff(previous, {
-    version: 1,
-    targetVersion: 2,
-    operations: [
-      { op: 'update', id: 'product.a', patch: { summary: 'Feature A revised' }, reason: 'New v2 behavior.' },
-      { op: 'remove', id: 'product.b', reason: 'Feature B is intentionally removed.' },
-      { op: 'add', node: { id: 'product.c', title: 'C', summary: 'Feature C', parentId: 'product' }, reason: 'New v2 feature.' },
-    ],
-  });
-
-  assert.deepEqual(next.map(node => node.id), ['product', 'product.a', 'product.c']);
-  assert.equal(next.find(node => node.id === 'product').revision.kind, 'unchanged');
-  assert.equal(next.find(node => node.id === 'product.a').revision.kind, 'revised');
-  assert.equal(next.find(node => node.id === 'product.a').summary, 'Feature A revised');
-  assert.equal(next.find(node => node.id === 'product.c').revision.kind, 'added');
-  assert.equal(next.every(node => node.revision.version === 2), true);
-});
-
-test('iteration logical revisions derive implementation versus regression task modes', () => {
-  const { dir, file } = tempDb();
-  try {
-    const artifactRoot = path.join(dir, 'artifacts');
-    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
-
-    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
-      id: 'game',
-      title: 'Game',
-      summary: 'Complete game',
-      parentId: null,
-      revision: { version: 2, kind: 'unchanged', reason: 'Top-level product definition is unchanged.' },
-    }));
-    fs.writeFileSync(path.join(logicalDir, 'game.battle.json'), JSON.stringify({
-      id: 'game.battle',
-      title: 'Battle',
-      summary: 'Revised battle capability',
-      parentId: 'game',
-      revision: { version: 2, kind: 'revised', reason: 'Battle behavior changes in v2.' },
-    }));
-    fs.writeFileSync(path.join(logicalDir, 'game.menu.json'), JSON.stringify({
-      id: 'game.menu',
-      title: 'Menu',
-      summary: 'Main menu capability',
-      parentId: 'game',
-      revision: { version: 2, kind: 'unchanged', reason: 'Menu behavior is unchanged.' },
-    }));
-
-    fs.writeFileSync(path.join(milestoneDir, 'M2.json'), JSON.stringify({
-      id: 'M2',
-      title: 'Version 2',
-      goal: 'Deliver and regress version 2.',
-      parentId: null,
-      dependsOn: [],
-      logicalRefs: ['game'],
-      acceptanceCriteria: ['Version 2 works end to end.'],
-      testStrategy: 'Run version 2 E2E.',
-      tasks: [
-        {
-          id: 'T-BATTLE-V2',
-          title: 'Revise battle',
-          intent: 'Implement revised battle behavior.',
-          dependsOn: [],
-          logicalRefs: ['game.battle'],
-          acceptanceCriteria: ['Battle v2 works.'],
-          testStrategy: 'Run battle tests.',
-        },
-        {
-          id: 'T-MENU-REGRESSION',
-          title: 'Regress menu',
-          intent: 'Verify unchanged menu behavior.',
-          dependsOn: [],
-          logicalRefs: ['game.menu'],
-          acceptanceCriteria: ['Menu still works.'],
-          testStrategy: 'Reuse and rerun menu E2E.',
-        },
-        {
-          id: 'T-V2-INTEGRATION',
-          title: 'Integrate v2',
-          intent: 'Verify changed battle with the unchanged product shell.',
-          dependsOn: ['T-BATTLE-V2', 'T-MENU-REGRESSION'],
-          logicalRefs: ['game'],
-          acceptanceCriteria: ['Whole game integrates.'],
-          testStrategy: 'Run product E2E.',
-        },
-      ],
-    }));
-
-    const plan = validatePlannerArtifactPlan(loadPlannerArtifactPlan(artifactRoot)).plan;
-    assert.equal(plan.tasks.find(task => task.id === 'T-BATTLE-V2').revisionMode, 'implementation');
-    assert.equal(plan.tasks.find(task => task.id === 'T-MENU-REGRESSION').revisionMode, 'regression');
-    assert.equal(plan.tasks.find(task => task.id === 'T-V2-INTEGRATION').revisionMode, 'implementation');
-
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-revision-modes' });
-    legacyApplyDeliveryPlan(store,'P-revision-modes', plan);
-    assert.equal(store.getTask('T-BATTLE-V2').stage, 'developer');
-    assert.equal(store.getTask('T-MENU-REGRESSION').stage, 'tester');
-    assert.equal(store.getTask('T-V2-INTEGRATION').stage, 'developer');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('final validator reloads raw v3 filesystem artifacts instead of revalidating compiled predecessor plan', async () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-v3-final', mode: 'TAKEOVER' });
-    const artifactRoot = path.join(dir, 'artifacts');
-    const { logicalDir, milestoneDir } = ensurePlannerArtifactLayout(artifactRoot);
-
-    fs.writeFileSync(path.join(logicalDir, 'game.json'), JSON.stringify({
-      id: 'game',
-      title: 'Game',
-      summary: 'Recovered game',
-      parentId: null,
-    }));
-    fs.writeFileSync(path.join(milestoneDir, 'M0.json'), JSON.stringify({
-      id: 'M0',
-      title: 'Baseline',
-      goal: 'Establish a runnable recovered baseline.',
-      parentId: null,
-      dependsOn: [],
-      logicalRefs: ['game'],
-      acceptanceCriteria: ['Baseline is runnable.'],
-      testStrategy: 'Run baseline integration.',
-      tasks: [{
-        id: 'm0-baseline-integ',
-        title: 'Baseline integration',
-        intent: 'Assemble and run the recovered baseline.',
-        dependsOn: [],
-        logicalRefs: ['game'],
-        acceptanceCriteria: ['Recovered baseline runs.'],
-        testStrategy: 'Run the baseline E2E.',
-      }],
-    }));
-
-    const compiled = validatePlannerArtifactPlan(loadPlannerArtifactPlan(artifactRoot)).plan;
-    assert.equal(compiled.milestones[0].tasks, undefined);
-
-    store.createControlFlow({
-      projectId: 'P-v3-final',
-      flowId: 'planner-flow',
-      tasks: [
-        {
-          id: 'prior-validator',
-          stage: 'plan_validator',
-          state: 'DONE',
-          history: [{
-            type: 'ROLE_RESULT',
-            role: 'plan_validator',
-            outcome: 'PASS',
-            result: { valid: true, plan: compiled, error: null },
-          }],
-        },
-        {
-          id: 'final-validator',
-          stage: 'plan_validator',
-          dependsOn: ['prior-validator'],
-          input: { purpose: 'PLANNER_FINAL_VALIDATE' },
-        },
-      ],
-    });
-
-    const definitions = createDefaultV2Roles({
-      store,
-      workspace: dir,
-      artifactRoot,
-      providerId: 'fake',
-      codeProviderId: 'ariad-code',
-    });
-    const task = store.getTask('final-validator');
-    const prepared = definitions.plan_validator.prepare({ task });
-    const result = await prepared.execute();
-    assert.equal(result.outcome, 'PASS');
-    assert.equal(result.result.valid, true);
-    assert.equal(result.result.plan.tasks[0].id, 'm0-baseline-integ');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('bad legacy planner artifact is isolated and recorded once instead of crashing plan lookup', async () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-bad-artifact' });
-    const artifactRoot = path.join(dir, 'artifacts');
-    fs.mkdirSync(path.join(artifactRoot, 'planner'), { recursive: true });
-    fs.writeFileSync(path.join(artifactRoot, 'planner', 'broken.json'), '{"version":2,"tasks":[');
-
-    store.createControlFlow({
-      projectId: 'P-bad-artifact',
-      flowId: 'planner-flow',
-      tasks: [
-        {
-          id: 'legacy-plan',
-          stage: 'tech_lead',
-          state: 'DONE',
-          history: [{
-            type: 'ROLE_RESULT',
-            role: 'tech_lead',
-            outcome: 'PLANNED',
-            result: { artifactRef: 'planner/broken.json' },
-          }],
-        },
-        {
-          id: 'validate-bad',
-          stage: 'plan_validator',
-          dependsOn: ['legacy-plan'],
-          input: { purpose: 'PLANNER_FINAL_VALIDATE' },
-        },
-      ],
-    });
-
-    const definitions = createDefaultV2Roles({
-      store,
-      workspace: dir,
-      artifactRoot,
-      providerId: 'fake',
-      codeProviderId: 'ariad-code',
-    });
-    const task = store.getTask('validate-bad');
-    const first = await definitions.plan_validator.prepare({ task }).execute();
-    const second = await definitions.plan_validator.prepare({ task }).execute();
-    assert.equal(first.outcome, 'NOT_PASS');
-    assert.equal(first.result.error, 'NO_CANDIDATE_PLAN');
-    assert.equal(second.outcome, 'NOT_PASS');
-    const incidents = store.listIncidents('P-bad-artifact');
-    assert.equal(incidents.length, 1);
-    assert.equal(incidents[0].type, 'PLANNER_ARTIFACT_INVALID');
-    assert.equal(incidents[0].artifactRef, 'planner/broken.json');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('split planner artifact registry rejects subdirectories and filename/id drift', () => {
-  const { dir } = tempDb();
-  try {
-    const artifactRoot = path.join(dir, 'artifacts');
-    const { logicalDir } = ensurePlannerArtifactLayout(artifactRoot);
-    fs.mkdirSync(path.join(logicalDir, 'nested'));
-    assert.throws(() => loadPlannerArtifactPlan(artifactRoot), /subdirectories are not allowed/);
-    fs.rmSync(path.join(logicalDir, 'nested'), { recursive: true, force: true });
-    fs.writeFileSync(path.join(logicalDir, 'wrong.json'), JSON.stringify({
-      id: 'game',
-      title: 'Game',
-      summary: 'Game',
-      parentId: null,
-    }));
-    assert.throws(() => loadPlannerArtifactPlan(artifactRoot), /must equal filename id wrong/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-
 test('scheduler drains planning batches before dispatching delivery work', async () => {
   const { dir, file } = tempDb();
   try {
@@ -1489,52 +1005,6 @@ test('scheduler persists a stable attempt identity before provider start', async
   }
 });
 
-test('takeover task history survives validation and is persisted without duplicate notes', () => {
-  const { dir, file } = tempDb();
-  try {
-    const plan = {
-      version: 2,
-      projectSummary: 'Recovered project',
-      rootTaskId: 'ROOT',
-      tasks: [{
-        id: 'ROOT',
-        title: 'Recovered project',
-        intent: 'Preserve and finish the existing project.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['Current project behavior is freshly verified.'],
-        testStrategy: 'Run the current project acceptance suite.',
-        history: [{
-          type: 'TAKEOVER_NOTE',
-          summary: 'Existing implementation is present; inspect and reuse it before replacing code.',
-          existingCode: ['src/existing.js'],
-        }],
-      }],
-    };
-    const validated = validateTechLeadPlan(plan).plan;
-    assert.equal(validated.tasks[0].history[0].type, 'TAKEOVER_NOTE');
-
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-take-history' });
-    legacyApplyDeliveryPlan(store,'P-take-history', validated);
-    assert.equal(store.getTask('ROOT').history.length, 1);
-
-    legacyApplyDeliveryPlan(store,'P-take-history', validated);
-    assert.equal(store.getTask('ROOT').history.length, 1);
-
-    const revised = structuredClone(validated);
-    revised.tasks[0].history.push({
-      type: 'TAKEOVER_NOTE',
-      summary: 'Existing tests were found and should be freshly rerun.',
-    });
-    legacyApplyDeliveryPlan(store,'P-take-history', revised);
-    assert.equal(store.getTask('ROOT').history.length, 2);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('default delivery roles are reuse-first but require fresh verification evidence', () => {
   const { dir, file } = tempDb();
   try {
@@ -1615,27 +1085,18 @@ test('accepted takeover plan pauses at human review until a human decision is re
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-take-gate', pmBinding: 'pm:P-take-gate', mode: 'TAKEOVER', sourcePath: '/tmp/existing-repo' });
+    store.createProject({ id: 'P-take-gate', pmBinding: 'pm:P-take-gate', mode: 'TAKEOVER', sourcePath: '/tmp/existing-repo', workspace: dir, versionedTree: true });
+    const vs = new VersionedStore(file);
+    vs.initProject('P-take-gate');
+    vs.createDraft({ createdBy: 'tl' });
+    const draft = vs.getOpenDraft();
+    vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Recovered root', intent: 'Finish the recovered project.', acceptanceCriteria: ['Recovered project is freshly verified.'], testStrategy: 'Run current acceptance checks.' } }]);
+    vs.close();
     store.enqueuePlanningRequest({
       id: 'restore-1',
       projectId: 'P-take-gate',
       request: { purpose: 'INITIAL_PLAN' },
     });
-    const plan = validateTechLeadPlan({
-      version: 2,
-      projectSummary: 'Recovered',
-      rootTaskId: 'ROOT',
-      tasks: [{
-        id: 'ROOT',
-        title: 'Recovered root',
-        intent: 'Finish the recovered project.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['Recovered project is freshly verified.'],
-        testStrategy: 'Run current acceptance checks.',
-        history: [{ type: 'TAKEOVER_NOTE', summary: 'Reuse existing implementation.' }],
-      }],
-    }).plan;
     store.createPlanningBatch({
       projectId: 'P-take-gate',
       batchId: 'batch-take',
@@ -1649,7 +1110,7 @@ test('accepted takeover plan pauses at human review until a human decision is re
             type: 'ROLE_RESULT',
             role: 'tech_lead',
             outcome: 'PLANNED',
-            result: { plan },
+            result: { plan: { source: 'db-draft', version: draft.version } },
           }],
         },
         {
@@ -1668,20 +1129,6 @@ test('accepted takeover plan pauses at human review until a human decision is re
       codeProviderId: 'ariad-code',
     });
     let pmTask = store.getTask('PM-take');
-    const pmPrompt = definitions.pm.prepare({
-      project: store.getProject('P-take-gate'),
-      task: pmTask,
-    }).context.v2Prompt;
-    assert.match(pmPrompt, /maps\/levels were launched, traversed, or exercised/i);
-    assert.match(pmPrompt, /play through the required progression to an actual win\/clear/i);
-    assert.match(pmPrompt, /without relying on external human players/i);
-    assert.match(pmPrompt, /good enough to ship, deliver, or sell/i);
-    assert.match(pmPrompt, /Every important feature and every milestone/i);
-    assert.match(pmPrompt, /real supported product entry point/i);
-    assert.match(pmPrompt, /Do not accept fake E2E/i);
-    assert.match(pmPrompt, /project\/root plan must culminate in a product-level end-to-end journey/i);
-    assert.match(pmPrompt, /directly opening the final level/i);
-
     const first = definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Reconstruction is coherent.', startDelivery: true } },
@@ -1690,23 +1137,27 @@ test('accepted takeover plan pauses at human review until a human decision is re
     assert.equal(first.transitionHistory.role, 'pm');
     assert.equal(first.transitionHistory.type, 'PM_HUMAN_DECISION');
     assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'takeover human gate must override PM start request');
-    assert.equal(store.getTask('ROOT'), null, 'takeover review must not create legacy Delivery tasks');
+    const stillDraft = new VersionedStore(file);
+    assert.equal(stillDraft.getOpenDraft()?.version, draft.version, 'takeover review must not promote the draft before the human decides');
+    stillDraft.close();
 
     pmTask = store.appendTaskHistory('PM-take', pmTask.version, {
       type: 'HUMAN_DECISION',
       decision: 'accept',
     });
-    assert.throws(() => definitions.pm.transition({
+    const second = definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true } },
-    }), /PM_PLAN_ARTIFACTS_MISSING/, 'no migration gate remains: without planner artifacts the approval fails loudly');
-    assert.notEqual(store.getProject('P-take-gate').deliveryEnabled, true, 'delivery stays locked when no artifact plan exists');
+    });
+    assert.equal(second.state, 'DONE');
+    assert.equal(second.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED');
+    assert.equal(store.getProject('P-take-gate').deliveryEnabled, true);
+    assert.equal(store.getProject('P-take-gate').takeoverReviewRequired, false);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('later technical replans in an approved TAKEOVER project do not create another human gate', () => {
   const { dir, file } = tempDb();
   try {
@@ -1716,28 +1167,22 @@ test('later technical replans in an approved TAKEOVER project do not create anot
       pmBinding: 'pm:P-take-replan',
       mode: 'TAKEOVER',
       sourcePath: '/tmp/existing-repo',
+      workspace: dir,
+      versionedTree: true,
       takeoverReviewRequired: false,
       deliveryEnabled: true,
     });
+    const vs = new VersionedStore(file);
+    vs.initProject('P-take-replan');
+    vs.createDraft({ createdBy: 'tl' });
+    const draft = vs.getOpenDraft();
+    vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Recovered root', intent: 'Finish the recovered project.', acceptanceCriteria: ['Project still completes.'], testStrategy: 'Run project E2E.' } }]);
+    vs.close();
     store.enqueuePlanningRequest({
       id: 'replan-1',
       projectId: 'P-take-replan',
       request: { purpose: 'REPLAN_TASK', taskId: 'BIG', diagnosis: { outcome: 'TASK_TOO_LARGE' } },
     });
-    const plan = validateTechLeadPlan({
-      version: 2,
-      projectSummary: 'Smaller slices',
-      rootTaskId: 'ROOT',
-      tasks: [{
-        id: 'ROOT',
-        title: 'Recovered root',
-        intent: 'Finish the recovered project.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['Project still completes.'],
-        testStrategy: 'Run project E2E.',
-      }],
-    }).plan;
     store.createPlanningBatch({
       projectId: 'P-take-replan',
       batchId: 'batch-replan',
@@ -1751,7 +1196,7 @@ test('later technical replans in an approved TAKEOVER project do not create anot
             type: 'ROLE_RESULT',
             role: 'tech_lead',
             outcome: 'PLANNED',
-            result: { plan },
+            result: { plan: { source: 'db-draft', version: draft.version } },
           }],
         },
         {
@@ -1777,10 +1222,12 @@ test('later technical replans in an approved TAKEOVER project do not create anot
     assert.match(prompt, /one-time human takeover review has already been satisfied durably/);
     assert.match(prompt, /Do NOT request another takeover\/delivery authorization/);
 
-    assert.throws(() => definitions.pm.transition({
+    const landed = definitions.pm.transition({
       task: pmTask,
       result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true } },
-    }), /PM_PLAN_ARTIFACTS_MISSING/, 'no human gate remains: without planner artifacts the approval fails loudly');
+    });
+    assert.equal(landed.state, 'DONE');
+    assert.equal(landed.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED');
     assert.equal(store.getProject('P-take-replan').takeoverReviewRequired, false);
     assert.equal(store.getProject('P-take-replan').deliveryEnabled, true);
     store.close();
@@ -1788,7 +1235,6 @@ test('later technical replans in an approved TAKEOVER project do not create anot
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('legacy TAKEOVER projects infer completed review from prior delivery and recover obsolete repeat gates', () => {
   const { dir, file } = tempDb();
   try {
@@ -1899,202 +1345,6 @@ test('obsolete takeover recovery preserves a later durable closed delivery gate'
     const recovered = recoverObsoleteTakeoverHumanGates(store, 'P-take-closed');
     assert.deepEqual(recovered, ['PM-obsolete']);
     assert.equal(store.getProject('P-take-closed').deliveryEnabled, false);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('milestone metadata assigns tasks without creating special execution nodes', () => {
-  const validated = validateTechLeadPlan({
-    version: 2,
-    projectSummary: 'Milestone project',
-    rootTaskId: 'ROOT',
-    tasks: [
-      {
-        id: 'ROOT',
-        title: 'Project complete',
-        intent: 'Complete the whole product.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['Whole product works.'],
-        testStrategy: 'Run project acceptance.',
-      },
-      {
-        id: 'FEATURE_A',
-        title: 'Feature A',
-        intent: 'Provide feature A.',
-        parentId: 'ROOT',
-        dependsOn: [],
-        acceptanceCriteria: ['Feature A works.'],
-        testStrategy: 'Run feature A tests.',
-      },
-      {
-        id: 'FEATURE_B',
-        title: 'Feature B',
-        intent: 'Integrate feature B with A.',
-        parentId: 'ROOT',
-        dependsOn: ['FEATURE_A'],
-        milestoneId: 'M2',
-        acceptanceCriteria: ['Feature B works.'],
-        testStrategy: 'Run feature B integration tests.',
-      },
-      {
-        id: 'INTEGRATE_AB',
-        title: 'Integrate A and B',
-        intent: 'Reconcile A/B state and wiring for the second milestone.',
-        parentId: 'ROOT',
-        dependsOn: ['FEATURE_A', 'FEATURE_B'],
-        milestoneId: 'M2',
-        acceptanceCriteria: ['A and B work together.'],
-        testStrategy: 'Run integration smoke tests.',
-      },
-    ],
-    milestones: [
-      {
-        id: 'M1',
-        title: 'First usable slice',
-        goal: 'Feature A is usable.',
-        parentId: null,
-        dependsOn: [],
-        logicalTaskIds: ['FEATURE_A'],
-        acceptanceCriteria: ['Feature A is usable.'],
-        testStrategy: 'Run feature A acceptance.',
-      },
-      {
-        id: 'M2',
-        title: 'Second integrated slice',
-        goal: 'Feature B is integrated with A.',
-        parentId: null,
-        dependsOn: ['M1'],
-        logicalTaskIds: ['FEATURE_B', 'INTEGRATE_AB'],
-        acceptanceCriteria: ['A and B form a usable integrated slice.'],
-        testStrategy: 'Run A/B milestone acceptance.',
-      },
-    ],
-  }).plan;
-
-  const byId = new Map(validated.tasks.map(task => [task.id, task]));
-  assert.equal(byId.get('FEATURE_A').milestoneId, 'M1');
-  assert.equal(byId.get('FEATURE_B').milestoneId, 'M2');
-  assert.equal(byId.get('INTEGRATE_AB').milestoneId, 'M2');
-  assert.equal(validated.tasks.length, 4);
-  assert.deepEqual(validated.milestones.map(item => item.id), ['M1', 'M2']);
-});
-
-test('milestone validator rejects an earlier milestone depending on future milestone work', () => {
-  const plan = {
-    version: 2,
-    projectSummary: 'Bad milestone direction',
-    rootTaskId: 'ROOT',
-    tasks: [
-      {
-        id: 'ROOT',
-        title: 'Root',
-        intent: 'Complete project.',
-        parentId: null,
-        dependsOn: [],
-        acceptanceCriteria: ['done'],
-        testStrategy: 'e2e',
-      },
-      {
-        id: 'A',
-        title: 'A',
-        intent: 'A',
-        parentId: 'ROOT',
-        dependsOn: ['B'],
-        milestoneId: 'M1',
-        acceptanceCriteria: ['a'],
-        testStrategy: 'a',
-      },
-      {
-        id: 'B',
-        title: 'B',
-        intent: 'B',
-        parentId: 'ROOT',
-        dependsOn: [],
-        milestoneId: 'M2',
-        acceptanceCriteria: ['b'],
-        testStrategy: 'b',
-      },
-    ],
-    milestones: [
-      {
-        id: 'M1',
-        title: 'M1',
-        goal: 'first',
-        parentId: null,
-        dependsOn: [],
-        logicalTaskIds: ['A'],
-        acceptanceCriteria: ['m1'],
-        testStrategy: 'm1',
-      },
-      {
-        id: 'M2',
-        title: 'M2',
-        goal: 'second',
-        parentId: null,
-        dependsOn: ['M1'],
-        logicalTaskIds: ['B'],
-        acceptanceCriteria: ['m2'],
-        testStrategy: 'm2',
-      },
-    ],
-  };
-
-  assert.throws(
-    () => validateTechLeadPlan(plan),
-    /cross-milestone dependency.*not allowed/i
-  );
-});
-
-test('applyDeliveryPlan persists milestone metadata and ordinary task milestoneId', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-milestone' });
-    const validated = validateTechLeadPlan({
-      version: 2,
-      projectSummary: 'Milestone apply',
-      rootTaskId: 'ROOT',
-      tasks: [
-        {
-          id: 'ROOT',
-          title: 'Root',
-          intent: 'Complete project.',
-          parentId: null,
-          dependsOn: [],
-          acceptanceCriteria: ['done'],
-          testStrategy: 'e2e',
-        },
-        {
-          id: 'FEATURE',
-          title: 'Feature',
-          intent: 'Feature.',
-          parentId: 'ROOT',
-          dependsOn: [],
-          acceptanceCriteria: ['feature'],
-          testStrategy: 'feature',
-        },
-      ],
-      milestones: [{
-        id: 'M1',
-        title: 'M1',
-        goal: 'usable feature',
-        parentId: null,
-        dependsOn: [],
-        logicalTaskIds: ['FEATURE'],
-        acceptanceCriteria: ['usable'],
-        testStrategy: 'smoke',
-      }],
-    }).plan;
-
-    legacyApplyDeliveryPlan(store,'P-milestone', validated);
-    const feature = store.getTask('FEATURE');
-    assert.equal(feature.milestoneId, 'M1');
-    assert.equal(feature.stage, 'developer');
-    assert.equal(store.listTasks('P-milestone', { scope: 'delivery' }).length, 2);
-    assert.equal(store.getProject('P-milestone').milestones[0].id, 'M1');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2761,70 +2011,6 @@ test('assigned issue resolves automatically only after every repair task is DONE
     store.updateTask('R2', r2.version, { state: 'DONE' });
     assert.deepEqual(store.reconcileAssignedIssues('P-resolve-issue'), [issue.id]);
     assert.equal(store.getIssue(issue.id).state, 'RESOLVED');
-  } finally {
-    store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('planner artifact validator rejects human approval gates from Delivery milestones', () => {
-  const raw = {
-    version: 3,
-    logicalNodes: [{
-      id: 'product',
-      title: 'Product',
-      summary: 'Product root.',
-      parentId: null,
-    }],
-    milestones: [{
-      id: 'V2.GATE',
-      title: 'Human gate',
-      goal: 'Collect takeover approval.',
-      parentId: null,
-      dependsOn: [],
-      logicalRefs: ['product'],
-      acceptanceCriteria: ['Human approves delivery.'],
-      testStrategy: 'Ask human.',
-      tasks: [{
-        id: 'approval-task',
-        title: 'Approval',
-        intent: 'Persist a human approval.',
-        dependsOn: [],
-        logicalRefs: ['product'],
-        acceptanceCriteria: ['Approval recorded.'],
-        testStrategy: 'Human decision.',
-      }],
-    }],
-  };
-  assert.throws(
-    () => validatePlannerArtifactPlan(raw),
-    /approval\/human gates belong to the PM control flow/,
-  );
-});
-
-test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
-  const { dir, file } = tempDb();
-  const store = new SQLiteV2Store(file);
-  try {
-    store.createProject({ id: 'P-issue-apply' });
-    legacyApplyDeliveryPlan(store,'P-issue-apply', {
-      version: 3,
-      tasks: [{
-        id: 'repair-one',
-        title: 'Repair issue',
-        intent: 'Repair a triaged defect.',
-        dependsOn: [],
-        logicalRefs: ['feature.one'],
-        milestoneId: 'M1',
-        acceptanceCriteria: ['Defect is repaired.'],
-        testStrategy: 'Focused regression.',
-        verification: [],
-        issueRefs: ['issue:P-issue-apply:1'],
-      }],
-    });
-    const task = store.getTask('repair-one');
-    assert.deepEqual(task.issueRefs, ['issue:P-issue-apply:1']);
-    assert.deepEqual(task.input.issueRefs, ['issue:P-issue-apply:1']);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });

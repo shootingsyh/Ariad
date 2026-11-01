@@ -5,22 +5,6 @@ function taskId(batchId, name) {
 }
 
 export function plannerFlowTasks(batchId, requests) {
-  // Explicit opt-in: preserve the existing planner flow until its semantic
-  // artifact formats move to the specialist architecture.
-  if (requests.length === 1 && requests[0]?.request?.purpose === 'PLANNING_ROUTE') {
-    const id = name => taskId(batchId, name);
-    return [
-      { id: id('route'), stage: 'tech_lead', input: {
-        planningBatchId: batchId, purpose: 'PLANNING_ROUTE',
-        requests: structuredClone(requests),
-      } },
-      { id: id('route-validate'), stage: 'plan_validator', dependsOn: [id('route')],
-        input: { planningBatchId: batchId, purpose: 'PLANNING_ROUTE_VALIDATE' } },
-      { id: id('route-critic'), stage: 'tech_lead_critic', dependsOn: [id('route-validate')],
-        input: { planningBatchId: batchId, purpose: 'PLANNING_ROUTE_CRITIC' } },
-    ];
-  }
-
   // Requirements-first flow (design 2026-10-31): a versioned iteration
   // whose requirements document is not yet human-approved starts with
   // a single PM authoring task, not a decomposition. The PM writes or

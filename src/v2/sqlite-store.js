@@ -1,6 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { nodePlanningSchedule } from './node-planning-algorithm.js';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
@@ -468,49 +467,6 @@ export class SQLiteV2Store {
     return this.getIssue(id);
   }
 
-  createNodePlanningWorkflow({ id, projectId, phase, reason, scopeNodeId = null, nodes = null, requestedByTaskId = null }) {
-    if (!id || !projectId || !['feature', 'milestone', 'interface'].includes(phase) || !String(reason ?? '').trim()) {
-      throw new Error('INVALID_NODE_PLANNING_WORKFLOW');
-    }
-    if (nodes !== null) {
-      nodePlanningSchedule({ phase, nodes, rootId: scopeNodeId });
-      for (const node of nodes) {
-        if (phase === 'interface' && !['feature', 'milestone'].includes(node.nodeType)) throw new Error('WORKFLOW_NODE_TYPE_REQUIRED');
-        if (phase !== 'interface' && node.nodeType != null && node.nodeType !== phase) throw new Error('WORKFLOW_NODE_TYPE_MISMATCH');
-      }
-    }
-    if (!this.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
-    return this.createTask({
-      id, projectId, flowId: `workflow:${projectId}:${id}`,
-      stage: 'tech_lead', taskKind: 'WORKFLOW',
-      input: { phase, reason, scopeNodeId, nodes, requestedByTaskId },
-      workflowState: { cursor: 0, completedNodes: [], activeChildTaskId: null },
-    });
-  }
-
-  advanceNodePlanningWorkflow({ parentTaskId, expectedVersion, childTask, workflowState }) {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const parent = this.getTask(parentTaskId);
-      if (!parent || parent.taskKind !== 'WORKFLOW') throw new Error('INVALID_WORKFLOW_PARENT');
-      if (['DONE', 'SKIPPED', 'SYSTEM_BLOCKED'].includes(parent.state)) throw new Error('WORKFLOW_NOT_ACTIVE');
-      if (parent.version !== expectedVersion) throw new Error('WORKFLOW_VERSION_CONFLICT');
-      if (!workflowState || !Number.isInteger(workflowState.cursor)) throw new Error('INVALID_WORKFLOW_CHECKPOINT');
-      let child = null;
-      if (childTask) {
-        if (childTask.parentTaskId !== parent.id || childTask.projectId !== parent.projectId || childTask.flowId !== parent.flowId || scopeOfTask(childTask) !== 'control' || !['NODE_PLANNING', 'GLOBAL_REVIEW'].includes(childTask.taskKind)) throw new Error('INVALID_WORKFLOW_CHILD');
-        child = this.#insertTask(childTask);
-      }
-      const updated = this.updateTask(parent.id, parent.version, { workflowState });
-      this.db.exec('COMMIT');
-      return { parent: updated, child };
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-  }
-
-  // Workflow state and child tasks live in v2_tasks; no parallel job queue.
   hasActiveNodePlanningJobs(projectId) {
     return this.listTasks(projectId, { scope: 'control' }).some(task =>
       task.taskKind === 'WORKFLOW' && !['DONE', 'SKIPPED'].includes(task.state));

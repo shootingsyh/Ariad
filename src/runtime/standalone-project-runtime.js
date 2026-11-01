@@ -95,7 +95,7 @@ export class StandaloneProjectRuntime {
       executionProvenance,
       codeIntelligence,
       resolveRoleExecutionMetadata: role => ({
-        modelRef: this.resolveRoleModel(['feature_planner', 'milestone_planner', 'interface_architect'].includes(role) ? 'tech_lead' : role === 'ux_reviewer' ? 'reviewer' : role === 'test_engineer' ? 'tester' : role) ?? null,
+        modelRef: this.resolveRoleModel(role === 'ux_reviewer' ? 'reviewer' : role === 'test_engineer' ? 'tester' : role) ?? null,
       }),
       enqueuePlanning: ({ request }) => {
         this.store.enqueuePlanningRequest({
@@ -104,11 +104,6 @@ export class StandaloneProjectRuntime {
           request,
         });
       },
-      requestPlanning: ({ phase, reason, scopeNodeId = null, nodes = null, requestedByTaskId = null }) =>
-        this.store.createNodePlanningWorkflow({
-          id: `${project.id}:node-plan:${Date.now()}:${++this.requestSequence}`,
-          projectId: project.id, phase, reason, scopeNodeId, nodes, requestedByTaskId,
-        }),
       reportIssue: issue => this.openIssue(issue),
       insertTriagedFixTask: args => this.store.insertTriagedFixTask({ ...args, projectId: this.projectId, actor: 'tech_lead' }),
       projectStoreFile: this.store.filePath ?? null,

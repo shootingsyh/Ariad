@@ -2,22 +2,14 @@ import { runAutomatedRegression } from '../runtime/automated-regression.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildTaskContextArtifact, writeTaskContextArtifact } from '../runtime/task-context-artifact.js';
 import { acceptanceCriterionIds } from './acceptance.js';
-import { acceptInitialTaskTree } from './approved-task-tree.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { TASK_KINDS, scopeOfTask } from './control-task-policy.js';
-import { validateFeatureDecompositionIteration } from './feature-decomposition-validator.js';
 import { docsRegimeAdopted, requirementsStatus } from './project-docs.js';
-import { finishFrontierPass, hasBoundaryContracts, loadBoundaryContracts, loadPlannerHierarchy, validateBoundaryContracts, validateTaskOwnershipCompilation } from './interface-contracts.js';
 import { sealRoleInterfaces } from './interface-seal.js';
-import { ensurePlannerArtifactLayout, loadFeatureTreeDiff, loadPlannerArtifactPlan, validatePlannerArtifactPlan } from './planner-artifacts.js';
-import { buildRoleBoundaryContext } from './role-boundary-context.js';
 import { roleExecutorBinding } from './role-executor-binding.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
 import { completeTakeoverReview } from './takeover-gate.js';
-import { reconcileApprovedTaskTree } from './task-tree-reconciliation.js';
-import { validateTechLeadPlan } from './tech-lead-plan.js';
-import { loadPreparedUnifiedTaskTree, reconcileUnifiedTaskTree, verifyUnifiedCompilerAgainstStore } from './unified-task-compiler.js';
 import { VersionedStore } from './versioned-store.js';
 import { promoteVersionedDraft } from './versioned-promotion.js';
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
@@ -25,8 +17,8 @@ import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 
-import { pmEscalationHasQuestions, flowTasks, predecessorResults, latestLegacyPlanInFlow, latestPlanInFlow, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningBatchRequests, isTakeoverPlanningTask, latestFrontierCompletion, iterationRequest, materializeIterationFeatureTree } from './planning-helpers.js';
-import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPublicPlan, plannerPrompt, criticPrompt } from './role-prompts.js';
+import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest } from './planning-helpers.js';
+import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
   providerId = 'pi-agent-session',
@@ -39,7 +31,6 @@ export function createDefaultV2Roles({
   reportIssue = null,
   insertTriagedFixTask = null,
   projectStoreFile = null,
-  requestPlanning = null,
   artifactRoot = null,
   executionCapabilities = [],
   executionProvenance = {},
@@ -82,18 +73,6 @@ export function createDefaultV2Roles({
     // Reporting an issue never changes the source task's acceptance outcome.
     // Only TL triage may establish cross-task or milestone dependencies.
     return null;
-  };
-
-  const specialistTransition = (task, result, current) => {
-    if (result.outcome !== 'PASS') return { state: 'NEEDS_HUMAN', transitionHistory: {
-      type: 'PLANNING_SPECIALIST_BLOCKED', specialist: current,
-      reason: result.summary ?? null, at: new Date().toISOString(),
-    } };
-    const stages = task.input?.planningRoute?.stages ?? {};
-    const order = ['feature', 'milestone', 'interface'];
-    const roleNames = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
-    const next = order.slice(order.indexOf(current) + 1).find(name => stages[name] === 'RUN');
-    return next ? { stage: roleNames[next], state: 'READY' } : { state: 'DONE' };
   };
 
   const techLeadDeliveryTransition = (task, result) => {
@@ -158,14 +137,6 @@ export function createDefaultV2Roles({
   };
   const planTransitionBodies = {
     tech_lead: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE') {
-          if (result.outcome !== 'PLANNING_ROUTE') return { state: 'NEEDS_HUMAN' };
-          const route = result.result;
-          const next = ['feature', 'milestone', 'interface'].find(name => route.stages[name] === 'RUN');
-          const roles = { feature: 'feature_planner', milestone: 'milestone_planner', interface: 'interface_architect' };
-          return next ? { stage: roles[next], state: 'READY', input: { ...task.input, planningRoute: route } }
-            : { state: 'DONE', input: { ...task.input, planningRoute: route } };
-        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           return {
             state: 'DONE',
@@ -195,114 +166,44 @@ export function createDefaultV2Roles({
           }
           if (task.input?.purpose === 'PLANNER_DECOMPOSE') {
             const proj = store.getProject?.(task.projectId);
-            if (proj?.versionedTree === true) {
-              // Requirements gate (design 2026-10-31): decomposition of a
-              // new version starts only from human-approved requirements.
-              // Bounce at submission, before any draft check, so the
-              // failure names the missing foundation instead of sending
-              // the batch through gates built on unfinalized ground. PM
-              // authors the document; a human approves it (hash-pinned).
-              if (docsRegimeAdopted(proj.workspace)) {
-                const reqStatus = requirementsStatus(proj.workspace);
-                if (!reqStatus.approved) {
-                  return {
-                    state: 'NEEDS_HUMAN',
-                    transitionHistory: {
-                      type: 'REQUIREMENTS_GATE',
-                      role: 'tech_lead',
-                      summary: reqStatus.exists
-                        ? 'REQUIREMENTS_NOT_APPROVED: .ariad/docs/REQUIREMENTS.md exists but is not human-approved (or was edited after approval) \u2014 a human must approve it (ariad project approve-requirements) before decomposition begins.'
-                        : 'REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing \u2014 PM must author the version requirements document (reverse-engineering a baseline from the implemented state when none exists), review it, and a human must approve it (ariad project approve-requirements) before decomposition begins.',
-                      at: new Date().toISOString(),
-                    },
-                  };
-                }
-              }
-              let draftOpen = false;
-              try {
-                const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state2.db'));
-                try { draftOpen = Boolean(vs.getOpenDraft()); } finally { vs.close(); }
-              } catch { draftOpen = false; }
-              if (!draftOpen) {
+            // Requirements gate (design 2026-10-31): decomposition of a
+            // new version starts only from human-approved requirements.
+            // Bounce at submission, before any draft check, so the
+            // failure names the missing foundation instead of sending
+            // the batch through gates built on unfinalized ground. PM
+            // authors the document; a human approves it (hash-pinned).
+            if (docsRegimeAdopted(proj.workspace)) {
+              const reqStatus = requirementsStatus(proj.workspace);
+              if (!reqStatus.approved) {
                 return {
                   state: 'NEEDS_HUMAN',
                   transitionHistory: {
-                    type: 'TL_PLAN_WITHOUT_DRAFT',
+                    type: 'REQUIREMENTS_GATE',
                     role: 'tech_lead',
-                    summary: 'Versioned (DB-first) project: author the plan into a database draft with ariad_tree_patch (openDraft, then applyOps) before submitting it. No open draft exists, so this result carries no landable plan.',
+                    summary: reqStatus.exists
+                      ? 'REQUIREMENTS_NOT_APPROVED: .ariad/docs/REQUIREMENTS.md exists but is not human-approved (or was edited after approval) \u2014 a human must approve it (ariad project approve-requirements) before decomposition begins.'
+                      : 'REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing \u2014 PM must author the version requirements document (reverse-engineering a baseline from the implemented state when none exists), review it, and a human must approve it (ariad project approve-requirements) before decomposition begins.',
                     at: new Date().toISOString(),
                   },
                 };
               }
             }
-          }
-          if (scopeOfTask(task) === 'control' && task.input?.purpose === 'PLANNER_DECOMPOSE') {
-            const nodeType = task.input?.frontierPhase ?? 'feature';
-            let pass;
+            let draftOpen = false;
             try {
-              pass = finishFrontierPass(artifactRoot, nodeType);
-            } catch (error) {
-              // A frontier validation failure is a planning gate failure,
-              // not a project failure: route it through the same
-              // ARTIFACT_VALIDATION_FAILED bridge as every other artifact
-              // problem, so the tech lead can repair it (gate retries,
-              // then the debugger) instead of the throw escaping the
-              // scheduler tick and latching the whole project FAILED
-              // (SRPG, 2026-10-31: a pre-behavior-layer integration
-              // scenario without acceptanceCriteria in the frontier
-              // target contract parked the entire project).
+              const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state2.db'));
+              try { draftOpen = Boolean(vs.getOpenDraft()); } finally { vs.close(); }
+            } catch { draftOpen = false; }
+            if (!draftOpen) {
               return {
                 state: 'NEEDS_HUMAN',
                 transitionHistory: {
-                  type: 'ARTIFACT_VALIDATION_FAILED',
-                  summary: error instanceof Error ? error.message : String(error),
-                  at: new Date().toISOString(),
-                },
-              };
-            }
-            const frontierHistory = {
-              type: 'PLANNER_FRONTIER_LAYER_COMPLETE',
-              role: 'tech_lead',
-              nodeType,
-              nodeId: pass.targetNodeId,
-              disposition: pass.targetDisposition,
-              childIds: pass.childIds,
-              nextNodeId: pass.next?.node?.id ?? null,
-              at: new Date().toISOString(),
-            };
-            if (task.input?.singleFrontier === true) {
-              return {
-                state: 'DONE',
-                transitionHistory: frontierHistory,
-              };
-            }
-            if (pass.next) {
-              return {
-                state: 'READY',
-                input: {
-                  ...task.input,
-                  frontierPhase: nodeType,
-                },
-                transitionHistory: frontierHistory,
-              };
-            }
-            if (nodeType === 'feature') {
-              return {
-                state: 'READY',
-                input: {
-                  ...task.input,
-                  frontierPhase: 'milestone',
-                },
-                transitionHistory: {
-                  type: 'PLANNER_FRONTIER_PHASE_COMPLETE',
+                  type: 'TL_PLAN_WITHOUT_DRAFT',
                   role: 'tech_lead',
-                  nodeType: 'feature',
-                  nextPhase: 'milestone',
+                  summary: 'Versioned (DB-first) project: author the plan into a database draft with ariad_tree_patch (openDraft, then applyOps) before submitting it. No open draft exists, so this result carries no landable plan.',
                   at: new Date().toISOString(),
                 },
               };
             }
-            return { state: 'DONE' };
           }
           return scopeOfTask(task) === 'control'
             ? { state: 'DONE' }
@@ -321,43 +222,6 @@ export function createDefaultV2Roles({
         };
     },
     tech_lead_critic: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE_CRITIC') {
-          return ['CLEAN', 'MINOR_ONLY'].includes(result.outcome)
-            ? { state: 'DONE' }
-            : { state: 'NEEDS_HUMAN', transitionHistory: {
-              type: 'PLANNING_ROUTE_CRITIC_FAILED', at: new Date().toISOString() } };
-        }
-        if (task.input?.purpose === 'PLANNER_FRONTIER_CRITIC') {
-          const batchId = task.input?.planningBatchId;
-          const round = task.input?.round ?? 1;
-          if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
-            const skipByRound = {
-              1: [
-                `planner:${batchId}:frontier-repair-1`,
-                `planner:${batchId}:frontier-validate-2`,
-                `planner:${batchId}:frontier-critic-2`,
-                `planner:${batchId}:frontier-repair-2`,
-                `planner:${batchId}:frontier-validate-3`,
-                `planner:${batchId}:frontier-critic-3`,
-                `planner:${batchId}:frontier-debugger`,
-              ],
-              2: [
-                `planner:${batchId}:frontier-repair-2`,
-                `planner:${batchId}:frontier-validate-3`,
-                `planner:${batchId}:frontier-critic-3`,
-                `planner:${batchId}:frontier-debugger`,
-              ],
-              3: [
-                `planner:${batchId}:frontier-debugger`,
-              ],
-            };
-            return {
-              state: 'DONE',
-              skipTaskIds: skipByRound[round] ?? [],
-            };
-          }
-          return { state: 'DONE' };
-        }
         if (result.outcome === 'CLEAN' || result.outcome === 'MINOR_ONLY') {
           return {
             state: 'DONE',
@@ -388,32 +252,7 @@ export function createDefaultV2Roles({
         return { state: 'DONE' };
     },
     plan_validator: ({ task, result }) => {
-        if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
-          return result.outcome === 'PASS' ? { state: 'DONE' } : { state: 'NEEDS_HUMAN',
-            transitionHistory: { type: 'PLANNING_ROUTE_VALIDATION_FAILED',
-              reason: result.result?.error ?? 'Validation failed', at: new Date().toISOString() } };
-        }
         if (task.input?.purpose === 'PLANNER_FINAL_VALIDATE' && result.outcome !== 'PASS') {
-          if (result.result?.errorCode === 'INVALID_AUTONOMY_REQUIREMENT') {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'AUTONOMY_REPLAN',
-                diagnosis: result.result,
-                instruction: 'Replace required external/manual human work with an autonomous verification strategy. Do not weaken the acceptance requirement.',
-              },
-            });
-            return { state: 'DONE' };
-          }
-          if (['ITERATION_LOGICAL_REVISION_REQUIRED', 'ITERATION_FEATURE_TREE_DIFF_REQUIRED'].includes(result.result?.errorCode)) {
-            enqueuePlanning?.({
-              request: {
-                purpose: 'ITERATION_REVISION_REPLAN',
-                diagnosis: result.result,
-                instruction: 'Repair feature-tree-diff.json against the immutable previous-version snapshot/current durable logical tree. Use add/update/remove operations with stable ids; Ariad will deterministically materialize the next living feature tree. Do not hand-edit the generated logical tree as the authoritative change description.',
-              },
-            });
-            return { state: 'DONE' };
-          }
           return {
             state: 'NEEDS_HUMAN',
             transitionHistory: {
@@ -524,170 +363,58 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'PLAN_ACCEPTED') {
-          // DB-first projects (project.versionedTree): PM approval promotes
-          // the open DB draft to prod; there are no planner files to land.
+          // DB-first landing (the only landing since 2026-10-31): PM
+          // approval promotes the open DB draft to prod; there are no
+          // planner files to land.
           const versionedProject = store.getProject(task.projectId);
-          if (versionedProject?.versionedTree === true) {
-            let vlanded;
-            let versionedStore = null;
-            try {
-              versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state2.db'));
-              vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace });
-            } catch (error) {
-              if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
-              return {
-                state: 'NEEDS_HUMAN',
-                transitionHistory: {
-                  type: 'VERSIONED_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                  summary: 'Versioned tree plan could not be landed: ' + error.message + '. Delivery remains unchanged.',
-                  reconcileIssues: error.issues ?? null, at: new Date().toISOString(),
-                },
-              };
-            } finally {
-              versionedStore?.close();
-            }
-            const vchanged = vlanded.created.length + vlanded.updated.length + vlanded.obsoleted.length;
-            const startDelivery = result.result?.startDelivery === true;
-            if (startDelivery) {
-              const freshProject = store.getProject(task.projectId);
-              if (freshProject && freshProject.deliveryEnabled !== true) {
-                store.updateProject(task.projectId, freshProject.version, { deliveryEnabled: true });
-              }
-            }
-            return { state: 'DONE', transitionHistory: {
-              type: 'VERSIONED_TREE_PLAN_ACCEPTED', role: 'pm',
-              summary: vchanged
-                ? 'Accepted DB draft and promoted v' + vlanded.version + ' to prod: ' + vlanded.created.length + ' created, ' + vlanded.updated.length + ' updated, ' + vlanded.obsoleted.length + ' obsoleted.'
-                : 'Accepted DB draft and promoted v' + vlanded.version + ' to prod without task changes.',
-              taskCount: vlanded.total, landed: vlanded, deliveryGateOpened: startDelivery, at: new Date().toISOString(),
-            } };
-          }
-          // A migrated unified tree must not pass through the legacy plan writer.
-          // PM approval lands the approved plan instead: reconcile the compiled
-          // artifact tree into the store in place (new tasks created, unfinished
-          // tasks updated, accepted or in-flight work never rewritten). A typed
-          // in-flight error defers this result to a later tick, unchanged.
-          if (store.listTasks(task.projectId, { scope: 'delivery' }).some(t => t.unifiedTaskSchemaVersion === 1)) {
-            const project = store.getProject(task.projectId);
-            if (project?.unifiedTaskCompilerVersion !== 1) {
-              const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
-              return {
-                state: 'NEEDS_HUMAN',
-                transitionHistory: {
-                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                  summary: 'Unified Task Tree verified; legacy PLAN_ACCEPTED writer is not supported. Delivery remains unchanged.',
-                  compatibility, at: new Date().toISOString(),
-                },
-              };
-            }
-            let landed;
-            try {
-              landed = reconcileUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
-            } catch (error) {
-              if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
-              return {
-                state: 'NEEDS_HUMAN',
-                transitionHistory: {
-                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                  summary: `Unified Task Tree plan could not be landed: ${error.message}. Delivery remains unchanged.`,
-                  reconcileIssues: error.issues ?? null, at: new Date().toISOString(),
-                },
-              };
-            }
-            const compatibility = verifyUnifiedCompilerAgainstStore({artifactRoot,store,projectId:task.projectId});
-            if (!compatibility.ok) {
-              return {
-                state: 'NEEDS_HUMAN',
-                transitionHistory: {
-                  type: 'UNIFIED_TASK_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
-                  summary: 'Unified Task Tree compiler/store mismatch after landing; delivery remains unchanged.',
-                  compatibility, landed, at: new Date().toISOString(),
-                },
-              };
-            }
-            const loaded = loadPreparedUnifiedTaskTree({artifactRoot,store,projectId:task.projectId});
-            const changed = landed.created.length + landed.updated.length + landed.obsoleted.length;
-            return {state:'DONE',transitionHistory:{
-              type:'UNIFIED_TASK_TREE_PLAN_ACCEPTED',role:'pm',
-              summary: changed
-                ? `Accepted unified tree and landed the approved plan: ${landed.created.length} created, ${landed.updated.length} updated, ${landed.obsoleted.length} obsoleted.`
-                : 'Accepted existing prepared unified tree without rewriting tasks or enabling delivery.',
-              taskCount:loaded.tasks.length, landed, at:new Date().toISOString(),
-            }};
-          }
-          // Preserve the one-time human takeover review.
-          if (isTakeoverPlanningTask(store, task) && !(task.history ?? []).some(h => h?.type === 'HUMAN_DECISION')) {
+          // Preserve the one-time human takeover review: a reconstructed
+          // project parks for the human BEFORE anything is promoted, so
+          // the draft stays open and unlanded until the human decides.
+          const takeoverGate = isTakeoverPlanningTask(store, task);
+          const hasHumanDecision = (task.history ?? []).some(h => h?.type === 'HUMAN_DECISION');
+          if (takeoverGate && !hasHumanDecision) {
             return { state: 'NEEDS_HUMAN', transitionHistory: {
               type: 'PM_HUMAN_DECISION', role: 'pm',
-              summary: result.result?.reason ?? 'Review the reconstructed project before migrating legacy delivery state.',
+              summary: result.result?.reason ?? 'Review the reconstructed project before delivery begins.',
+              questions: result.result?.questions?.length ? result.result.questions : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
+              guidance: result.result?.guidance ?? null,
               at: new Date().toISOString(),
             } };
           }
-          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
-          if (!rawArtifactPlan) {
-            // One flow, one plan format: PM approval consumes the planner
-            // artifact plan. An inline tech-lead plan in flow history is a
-            // planning input, never a tree source - there is no legacy
-            // fallback and no migration gate behind this error.
-            throw new Error('PM_PLAN_ARTIFACTS_MISSING: PM approval requires the planner artifact plan');
-          }
-          const validated = validatePlannerArtifactPlan(rawArtifactPlan);
-          // Initial NEW project: persist the approved planner's tree nodes directly.
-          // Never let a legacy replan rewrite an already approved Task Tree.
-          const existingDelivery = store.listTasks(task.projectId, { scope: 'delivery' });
-          if (existingDelivery.some(t => t.taskTreeSchemaVersion === 1)) {
-            try {
-              reconcileApprovedTaskTree(store, task.projectId, validated.plan, { artifactRoot });
-            } catch (error) {
-              return { state: 'NEEDS_HUMAN', transitionHistory: {
-                type: 'TASK_TREE_REPLAN_BLOCKED', role: 'pm',
-                summary: String(error?.message ?? error), at: new Date().toISOString(),
-              } };
-            }
-          } else {
-            // No legacy-format gate: a validated plan is accepted as the
-            // project's tree, whatever flow produced it. If delivery tasks
-            // already exist, acceptInitialTaskTree itself refuses
-            // (APPROVED_TASK_TREE_EXISTING_TASKS) - a loud failure, never a
-            // silent acceptance and never a human park.
-            acceptInitialTaskTree(store, task.projectId, validated.plan, { artifactRoot });
-          }
-          // Canonical tree writes are complete; legacy plan writer is absent.
-          const takeover = isTakeoverPlanningTask(store, task);
-          const hasHumanDecision = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
-          const setDeliveryEnabled = (enabled) => {
-            const current = store.getProject(task.projectId);
-            if (current?.deliveryEnabled === enabled) return current;
-            return store.updateProject(task.projectId, current.version, { deliveryEnabled: enabled });
-          };
-          if (takeover && !hasHumanDecision) {
-            setDeliveryEnabled(false);
+          let vlanded;
+          let versionedStore = null;
+          try {
+            versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state2.db'));
+            vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace });
+          } catch (error) {
+            if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
             return {
               state: 'NEEDS_HUMAN',
               transitionHistory: {
-                type: 'PM_HUMAN_DECISION',
-                role: 'pm',
-                summary: result.result?.reason ?? 'Existing project reconstructed and ready for human takeover review.',
-                guidance: result.result?.guidance ?? null,
-                questions: result.result?.questions?.length
-                  ? result.result.questions
-                  : ['Approve the reconstructed current state and delivery plan, or provide corrections.'],
-                at: new Date().toISOString(),
+                type: 'VERSIONED_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                summary: 'Versioned tree plan could not be landed: ' + error.message + '. Delivery remains unchanged.',
+                reconcileIssues: error.issues ?? null, at: new Date().toISOString(),
               },
             };
+          } finally {
+            versionedStore?.close();
           }
-          if (takeover && hasHumanDecision) completeTakeoverReview(store, task.projectId);
-          setDeliveryEnabled(result.result?.startDelivery === true);
-          return {
-            state: 'DONE',
-            transitionHistory: {
-              type: 'DELIVERY_GATE',
-              role: 'pm',
-              enabled: result.result?.startDelivery === true,
-              reason: result.result?.reason ?? null,
-              at: new Date().toISOString(),
-            },
-          };
+          if (takeoverGate) completeTakeoverReview(store, task.projectId);
+          const vchanged = vlanded.created.length + vlanded.updated.length + vlanded.obsoleted.length;
+          const startDelivery = result.result?.startDelivery === true;
+          if (startDelivery) {
+            const freshProject = store.getProject(task.projectId);
+            if (freshProject && freshProject.deliveryEnabled !== true) {
+              store.updateProject(task.projectId, freshProject.version, { deliveryEnabled: true });
+            }
+          }
+          return { state: 'DONE', transitionHistory: {
+            type: 'VERSIONED_TREE_PLAN_ACCEPTED', role: 'pm',
+            summary: vchanged
+              ? 'Accepted DB draft and promoted v' + vlanded.version + ' to prod: ' + vlanded.created.length + ' created, ' + vlanded.updated.length + ' updated, ' + vlanded.obsoleted.length + ' obsoleted.'
+              : 'Accepted DB draft and promoted v' + vlanded.version + ' to prod without task changes.',
+            taskCount: vlanded.total, landed: vlanded, deliveryGateOpened: startDelivery, at: new Date().toISOString(),
+          } };
         }
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
           enqueuePlanning?.({
@@ -723,13 +450,10 @@ export function createDefaultV2Roles({
           },
         };
     },
-    feature_planner: ({ task, result }) => specialistTransition(task, result, 'feature'),
-    milestone_planner: ({ task, result }) => specialistTransition(task, result, 'milestone'),
-    interface_architect: ({ task, result }) => specialistTransition(task, result, 'interface'),
   };
 
   const PLAN_SIGNALS = {
-    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:plan_validator': 'REVALIDATE', 'READY:pm': 'ESCALATE', 'READY:feature_planner': 'ROUTE_FEATURE', 'READY:milestone_planner': 'ROUTE_MILESTONE', 'READY:interface_architect': 'ROUTE_INTERFACE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
+    PLAN: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ADVANCE', 'READY:plan_validator': 'REVALIDATE', 'READY:pm': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     VALIDATE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     CRITIQUE: { 'DONE:': 'FINISH', 'READY:tech_lead': 'RETRY', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
     PM_REVIEW: { 'DONE:': 'FINISH', 'READY:tech_lead': 'ESCALATE', 'READY:project_debugger': 'ROUTE_DEBUG', 'NEEDS_HUMAN:': 'BLOCKED' },
@@ -784,64 +508,12 @@ export function createDefaultV2Roles({
   // instead (the 2026-10-30 batch-48 halt: a missing comma in
   // milestones/V2.4.json stayed invisible through two retries and a debugger
   // pass). Name the unparseable planner artifacts in the guard's feedback.
-  const unparseablePlannerArtifacts = () => {
-    const bad = [];
-    const walk = (dir) => {
-      if (bad.length >= 5) return;
-      let entries;
-      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        if (bad.length >= 5) return;
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile() && entry.name.endsWith('.json')) {
-          try { JSON.parse(readFileSync(full, 'utf8')); }
-          catch { bad.push(full.slice(artifactRoot.length + 1)); }
-        }
-      }
-    };
-    walk(join(artifactRoot, 'planner'));
-    return bad;
-  };
-
-  const plannerArtifactError = (task) => {
-    if (!artifactRoot) return null;
-    // DB-first projects keep the plan in the database draft; the on-disk
-    // planner bundle is a legacy medium there and its health must not gate
-    // planning results (a stale bundle from a previous generation bounced
-    // every result against an error the writer could not fix, SRPG 2026-10-31).
-    if (typeof store.getProject === 'function' && store.getProject(task.projectId)?.versionedTree === true) return null;
-    try {
-      validateBoundaryContracts(artifactRoot, 'feature');
-      validateBoundaryContracts(artifactRoot, 'milestone');
-      loadPlannerArtifactPlan(artifactRoot);
-      return null;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const broken = unparseablePlannerArtifacts();
-      return broken.length ? `${message} | unparseable planner artifacts: ${broken.join(', ')}` : message;
-    }
-  };
-
   const planResultTransition = (task, result) => {
     if (task.taskKind !== TASK_KINDS.PLANNING) return null;
     const body = planTransitionBodies[task.stage];
     if (!body) return null;
     let legacy = body({ task, result });
     if (!legacy) return null;
-    if (task.stage !== 'pm' && task.stage !== 'project_debugger') {
-      const artifactError = plannerArtifactError(task);
-      if (artifactError) {
-        legacy = {
-          state: 'NEEDS_HUMAN',
-          transitionHistory: {
-            type: 'ARTIFACT_VALIDATION_FAILED',
-            summary: artifactError,
-            at: new Date().toISOString(),
-          },
-        };
-      }
-    }
     // Escalation whitelist: a planning-stage failure is machinery, not a
     // human decision. Bodies still report it as NEEDS_HUMAN; the bridge
     // converts it into the executor's recovery progression - back to the
@@ -887,12 +559,7 @@ export function createDefaultV2Roles({
   const prepareLlm = (task, v2Prompt, extra = {}) => {
     const executionMetadata = executionMetadataFor(task);
     const sharedDeliveryContext = ['developer', 'test_engineer', 'tester', 'reviewer'].includes(task.stage);
-    const roleBoundaryContext = buildRoleBoundaryContext({
-      artifactRoot,
-      task,
-      role: sharedDeliveryContext ? 'delivery' : task.stage,
-      workspace,
-    });
+    const roleBoundaryContext = null; // file-bundle boundary context retired with the legacy pipeline; contracts live in the DB spec.
     const taskArtifact = sharedDeliveryContext
       ? buildTaskContextArtifact({ task, boundaryContext: roleBoundaryContext, artifactRoot })
       : null;
@@ -915,7 +582,6 @@ export function createDefaultV2Roles({
       workspace,
       ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
       ...(task.stage === 'tech_lead' && projectStoreFile ? { projectStoreFile } : {}),
-      ...(task.stage === 'tech_lead' && requestPlanning ? { requestPlanning } : {}),
       ...(sharedDeliveryContext && reportIssue ? {
         reportIssue: issue => reportIssue(issue),
       } : {}),
@@ -1189,7 +855,6 @@ export function createDefaultV2Roles({
     project_debugger: {
       sessionPolicy: 'persistent',
       prepare: ({ task }) => {
-        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') return prepareLlm(task, ['Diagnose this node planning failure without changing artifacts.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Failure:', JSON.stringify(task.input.previousGateFailure), 'Distinguish artifact, requirement, and model failures. If a bounded repair is viable, return RETRY_WITH_GUIDANCE and a concrete result.guidance string. Otherwise submit a structured diagnosis; never override validator or critic.'].join('\n'));
         return prepareLlm(task, task.input?.blockedTaskId ? [
           "You are Ariad's unified Project Debugger.",
           'Automatic execution retry has been exhausted for the blocked business task below.',
@@ -1360,61 +1025,9 @@ export function createDefaultV2Roles({
       },
     },
 
-    feature_planner: {
-      prepare: ({ task }) => prepareLlm(task, [
-        'You are the Feature Planner. Work only on product feature semantics, feature hierarchy, and acceptance intent.',
-        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
-        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
-        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
-        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
-      ].join('\n')),
-      transition: ({ task, result }) => planResultTransition(task, result),
-    },
-    milestone_planner: {
-      prepare: ({ task }) => prepareLlm(task, [
-        'You are the Milestone Planner. Work only on delivery semantics, milestone hierarchy, scenarios, and task intent/dependencies.',
-        'Do not define interface IDs, imports, exports, anchors, or implementation contracts.',
-        'Use the approved planning route and existing project artifacts. Preserve unchanged semantics.',
-        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
-        'Submit outcome PASS through ariad_role_result with a summary of semantic changes and artifacts.',
-      ].join('\n')),
-      transition: ({ task, result }) => planResultTransition(task, result),
-    },
-    interface_architect: {
-      prepare: ({ task }) => prepareLlm(task, [
-        'You are the Interface Architect. Translate existing Feature and Milestone semantics into strict interface contracts and exact task interface bindings.',
-        'Process child Feature nodes before parents, then resolve Milestone interface dependencies. Do not alter product or delivery semantics.',
-        'If upstream semantics are insufficient, report NOT_PASS with a concrete upstream revision request. Never invent product behavior.',
-        'Planning route:', JSON.stringify(task.input?.planningRoute ?? {}),
-        'Existing interface artifact layout:', String(artifactRoot ?? ''),
-        'Submit outcome PASS or NOT_PASS through ariad_role_result with evidence and changed artifact paths.',
-      ].join('\n')),
-      transition: ({ task, result }) => planResultTransition(task, result),
-    },
-
     tech_lead: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
-        if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
-          return prepareLlm(task, [
-            'You are the node-level Tech Lead. Work ONLY on the specified planning node.',
-            'Phase:', task.input.phase, 'Node:', task.input.nodeId,
-            'Planning context:', JSON.stringify(task.input.planningContext),
-            'Previous validation failure:', JSON.stringify(task.input.previousGateFailure ?? null),
-            'Do not change ancestors or sibling nodes. Apply direct-child-only changes and preserve existing unrelated semantics.',
-            'Before PLANNED, materialize the current node in the feature/milestone logical tree with the exact id, parentId and planningContext.current.nodeType. Ensure its boundary contract has the same nodeType; do not guess.',
-            'Return PLANNED through ariad_role_result only after saving verifiable artifacts.',
-          ].join('\n'), { sessionKey: `workflow:${task.id}:planner` });
-        }
-        if (task.input?.purpose === 'PLANNING_ROUTE') {
-          return prepareLlm(task, [
-            'You are the Overall Tech Lead. Triage the request and choose a controlled planning route.',
-            'Do not edit Feature, Milestone, Interface or delivery artifacts yourself.',
-            'Use ariad_role_result with outcome PLANNING_ROUTE and a strict result containing requestType, reason, scope, stages and constraints.',
-            'Stage order is feature -> milestone -> interface. RUN only affected stages, SKIP unchanged stages.',
-            'Planning requests:', JSON.stringify(task.input.requests ?? []),
-          ].join('\n'));
-        }
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           const prompt = [
             'You are the Ariad Tech Lead carrying out an isolated ad-hoc analysis.',
@@ -1426,13 +1039,12 @@ export function createDefaultV2Roles({
           ].join('\n');
           return prepareLlm(task, prompt, { sessionKey: 'adhoc:' + task.projectId + ':' + task.id });
         }
-        if (artifactRoot) ensurePlannerArtifactLayout(artifactRoot);
         const prompt = [
           plannerPrompt({ store, project, task, artifactRoot }),
           ...(task.input?.previousGateFailure ? [
             '',
             'PREVIOUS GATE FAILURE',
-            'Your previous result was rejected by the artifact write-path guard. Fix exactly this first, and verify the fix by re-parsing the named artifacts before resubmitting:',
+            'Your previous submission was rejected at a planning gate. Fix exactly this first before resubmitting:',
             JSON.stringify(task.input.previousGateFailure, null, 2),
           ] : []),
           '',
@@ -1445,15 +1057,7 @@ export function createDefaultV2Roles({
     },
 
     tech_lead_critic: {
-      prepare: ({ project, task }) => prepareLlm(task,
-        task.input?.purpose === 'NODE_PLANNING_WORKFLOW'
-          ? ['Review the node planning artifacts without editing them.', 'Phase:', task.input.phase, 'Node:', task.input.nodeId, 'Scope:', JSON.stringify(task.input.planningContext), 'Reject missing evidence, invalid direct-child changes, or broken cross-node contracts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.'].join('\n')
-          : task.input?.purpose === 'PLANNING_ROUTE_CRITIC'
-          ? ['Review the completed controlled planning route and current artifacts.',
-             'Verify no unrequested semantic changes and that interface bindings are precise.',
-             'Do not modify artifacts. Return CLEAN, MINOR_ONLY, or ISSUES via ariad_role_result.',
-             'Route result:', JSON.stringify(flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE')?.input?.planningRoute ?? {})].join('\n')
-          : criticPrompt({ store, project, task, artifactRoot })),
+      prepare: ({ project, task }) => prepareLlm(task, criticPrompt({ store, project, task, artifactRoot })),
       transition: ({ task, result }) => planResultTransition(task, result),
     },
 
@@ -1462,84 +1066,9 @@ export function createDefaultV2Roles({
         provider: codeProviderId,
         executionProvenance: executionProvenanceFor(task),
         execute: async () => {
-          if (task.input?.purpose === 'NODE_PLANNING_WORKFLOW') {
-            try {
-              if (!artifactRoot) throw new Error('WORKFLOW_ARTIFACT_ROOT_MISSING');
-              const isGlobal = task.taskKind === 'GLOBAL_REVIEW';
-              const phase = task.input.phase;
-              if (!['feature', 'milestone', 'interface'].includes(phase)) throw new Error('WORKFLOW_PHASE_UNSUPPORTED');
-              const declaredType = task.input.nodes?.find(node => node.id === task.input.nodeId)?.nodeType;
-              const matchingTypes = (phase === 'interface' ? ['feature', 'milestone'] : [phase])
-                .filter(type => loadPlannerHierarchy(artifactRoot, type).byId.has(task.input.nodeId));
-              const nodeType = declaredType ?? (phase !== 'interface' ? phase : matchingTypes.length === 1 ? matchingTypes[0] : null);
-              if (!nodeType || (phase === 'interface' && !matchingTypes.includes(nodeType))) throw new Error('WORKFLOW_NODE_TYPE_AMBIGUOUS_OR_MISSING');
-              const hierarchy = loadPlannerHierarchy(artifactRoot, nodeType);
-              const target = hierarchy.byId.get(task.input.nodeId);
-              if (!target) throw new Error(`WORKFLOW_NODE_MISSING: ${task.input.nodeId}`);
-              const expected = task.input.nodes?.find(node => node.id === task.input.nodeId);
-              if (!expected || (target.parentId ?? null) !== (expected.parentId ?? null)) {
-                throw new Error(`WORKFLOW_NODE_SCOPE_MISMATCH: ${task.input.nodeId}`);
-              }
-              const contracts = loadBoundaryContracts(artifactRoot, nodeType);
-              if (!contracts.has(task.input.nodeId)) throw new Error(`WORKFLOW_CONTRACT_MISSING: ${task.input.nodeId}`);
-              const validation = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: !isGlobal, ...(!isGlobal ? { targetNodeId: task.input.nodeId } : {}) });
-              if (isGlobal && phase === 'interface') {
-                for (const type of ['feature', 'milestone']) {
-                  const tree = loadPlannerHierarchy(artifactRoot, type);
-                  if (tree.items.length) validateBoundaryContracts(artifactRoot, type, { allowFrontier: false });
-                }
-              }
-              if (!validation.ok || validation.count === 0 || (isGlobal && !validation.complete)) {
-                throw new Error('WORKFLOW_BOUNDARY_INCOMPLETE');
-              }
-              return { outcome: 'PASS', result: { nodeId: task.input.nodeId, validated: true, global: isGlobal } };
-            } catch (error) {
-              return { outcome: 'NOT_PASS', result: { nodeId: task.input.nodeId, error: error.message } };
-            }
-          }
-          if (task.input?.purpose === 'PLANNING_ROUTE_VALIDATE') {
-            const routeTask = flowTasks(store, task).find(t => t.input?.purpose === 'PLANNING_ROUTE');
-            const route = routeTask?.input?.planningRoute;
-            if (!route) return { outcome: 'NOT_PASS', result: { error: 'MISSING_PLANNING_ROUTE' } };
-            try {
-              if (route.stages.interface === 'RUN') {
-                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
-                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
-              }
-              return { outcome: 'PASS', result: { valid: true, route } };
-            } catch (error) {
-              return { outcome: 'NOT_PASS', result: { valid: false, error: error.message } };
-            }
-          }
-          if (task.input?.purpose === 'PLANNER_FRONTIER_VALIDATE') {
-            const frontier = latestFrontierCompletion(store, task);
-            const nodeType = task.input?.frontierPhase ?? frontier?.nodeType ?? 'feature';
-            try {
-              const validated = validateBoundaryContracts(artifactRoot, nodeType, { allowFrontier: true });
-              return {
-                outcome: 'PASS',
-                result: {
-                  valid: true,
-                  frontier,
-                  boundary: validated,
-                  error: null,
-                  errorCode: null,
-                },
-              };
-            } catch (error) {
-              return {
-                outcome: 'NOT_PASS',
-                result: {
-                  valid: false,
-                  frontier,
-                  error: error?.message ?? String(error),
-                  errorCode: error?.code ?? null,
-                },
-              };
-            }
-          }
           const validatorProject = store.getProject(task.projectId);
-          if (validatorProject?.versionedTree === true) {
+          // DB-first validation (the only validation since 2026-10-31):
+          // the verdict rests on the open DB draft alone.
             // Requirements gate, front-moved from promotion (design
             // 2026-10-31): a DB draft is validated only against
             // human-approved requirements, so a decomposition can no
@@ -1582,6 +1111,17 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: 'DRAFT_INVALID: ' + draftErrors.join('; '), errorCode: 'DRAFT_INVALID' },
                 };
               }
+              // Autonomy policy, carried into the DB-first validator: a
+              // plan may not require external/manual human labor unless
+              // the human explicitly requested it.
+              try {
+                validatePlanAutonomy({ tasks: draftStore.listSpecTasks(draft.version) }, planningBatchRequests(store, task));
+              } catch (error) {
+                return {
+                  outcome: 'NOT_PASS',
+                  result: { valid: false, plan: null, error: error?.message ?? String(error), errorCode: error?.code ?? 'INVALID_AUTONOMY_REQUIREMENT' },
+                };
+              }
               // DB-first verdict rests on the draft alone: do not fall
               // through to the on-disk planner bundle below - it is a
               // legacy medium for versioned projects and a stale bundle
@@ -1593,83 +1133,6 @@ export function createDefaultV2Roles({
             } finally {
               draftStore.close();
             }
-          }
-          try {
-            materializeIterationFeatureTree(store, task, artifactRoot);
-          } catch (error) {
-            return {
-              outcome: 'NOT_PASS',
-              result: { valid: false, plan: null, error: error?.message ?? String(error), errorCode: error?.code ?? null },
-            };
-          }
-          const rawArtifactPlan = loadPlannerArtifactPlan(artifactRoot);
-          if (rawArtifactPlan) {
-            try {
-              const validated = validatePlannerArtifactPlan(rawArtifactPlan);
-              if (hasBoundaryContracts(artifactRoot)) {
-                validateBoundaryContracts(artifactRoot, 'feature', { allowFrontier: false });
-                validateBoundaryContracts(artifactRoot, 'milestone', { allowFrontier: false });
-                validateTaskOwnershipCompilation(artifactRoot, validated.plan.tasks);
-              }
-              const decomp = iterationRequest(store, task);
-              if (decomp?.request?.changeType === 'FEATURE_DECOMPOSITION') {
-                // Document system gate (design 2026-10-30/31): TL decomposition
-                // for a new version starts only from human-finalized
-                // requirements. PM finalizes the version requirements
-                // document with the human first; the approval is pinned by
-                // hash, so editing the document re-opens the gate.
-                if (docsRegimeAdopted(workspace)) {
-                  const status = requirementsStatus(workspace);
-                  if (!status.exists) {
-                    throw new Error('REQUIREMENTS_NOT_FINALIZED: .ariad/docs/REQUIREMENTS.md is missing — PM must finalize the version requirements document with the human before TL decomposition begins');
-                  }
-                  if (!status.approved) {
-                    throw new Error('REQUIREMENTS_NOT_APPROVED: the requirements document was edited after approval (or never approved) — a human must re-approve it (ariad project approve-requirements) before TL decomposition begins');
-                  }
-                }
-                if (!hasBoundaryContracts(artifactRoot, 'feature')) {
-                  throw new Error('FEATURE_DECOMPOSITION_INCOMPLETE: missing Feature Interface Graph');
-                }
-                validateFeatureDecompositionIteration(
-                  artifactRoot,
-                  loadFeatureTreeDiff(artifactRoot),
-                  validated.plan.tasks,
-                  { workspace },
-                );
-              }
-              validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
-              return {
-                outcome: 'PASS',
-                result: { valid: true, plan: validated.plan, error: null, errorCode: null },
-              };
-            } catch (error) {
-              return {
-                outcome: 'NOT_PASS',
-                result: { valid: false, plan: rawArtifactPlan, error: error?.message ?? String(error), errorCode: error?.code ?? null },
-              };
-            }
-          }
-
-          const candidate = latestLegacyPlanInFlow(store, task, artifactRoot);
-          if (!candidate) {
-            return {
-              outcome: 'NOT_PASS',
-              result: { valid: false, error: 'NO_CANDIDATE_PLAN', plan: null },
-            };
-          }
-          try {
-            const validated = validateTechLeadPlan(candidate);
-            validatePlanAutonomy(validated.plan, planningBatchRequests(store, task));
-            return {
-              outcome: 'PASS',
-              result: { valid: true, plan: validated.plan, error: null, errorCode: null },
-            };
-          } catch (error) {
-            return {
-              outcome: 'NOT_PASS',
-              result: { valid: false, plan: candidate, error: error?.message ?? String(error), errorCode: error?.code ?? null },
-            };
-          }
         },
       }),
       transition: ({ task, result }) => planResultTransition(task, result),
@@ -1748,7 +1211,6 @@ export function createDefaultV2Roles({
         const validation = predecessorResults(store, task)[0]?.result ?? null;
         const takeover = isTakeoverPlanningTask(store, task);
         const iteration = iterationRequest(store, task);
-        const featureTreeDiff = iteration ? loadFeatureTreeDiff(artifactRoot) : null;
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain: fold the human\'s latest requirements into it and obtain human approval before any new-version decomposition is planned. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
@@ -1770,8 +1232,7 @@ export function createDefaultV2Roles({
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
-            featureTreeDiff,
-            plan: plannerPublicPlan(validation?.plan ?? latestPlanInFlow(store, task, artifactRoot)),
+            plan: validation?.plan ?? null,
           }, null, 2),
         ].filter(Boolean).join('\n\n');
         return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });

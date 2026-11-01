@@ -70,10 +70,7 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
     'MODEL_CAPABILITY_MISMATCH',
     'UNKNOWN_PROJECT_CAUSE',
   ],
-  tech_lead: ['PLANNED', 'REPLANNED', 'PLANNING_ROUTE'],
-  feature_planner: ['PASS', 'NOT_PASS'],
-  milestone_planner: ['PASS', 'NOT_PASS'],
-  interface_architect: ['PASS', 'NOT_PASS'],
+  tech_lead: ['PLANNED', 'REPLANNED'],
   tech_lead_critic: ['CLEAN', 'MINOR_ONLY', 'ISSUES'],
   pm: ['PLAN_ACCEPTED', 'PLAN_REVISION_REQUIRED', 'PRODUCT_DECISION', 'NEEDS_HUMAN'],
   memory_curator: ['PASS', 'NOT_PASS'],
@@ -226,11 +223,7 @@ export function piRoleResultToolSchema(role) {
   }
 
   if (role === 'tech_lead') {
-    const routeSchema = result.anyOf[0];
-    return Type.Union([
-      Type.Object({ outcome: Type.Literal('PLANNING_ROUTE'), ...commonFields, result: routeSchema }, { additionalProperties: false }),
-      Type.Object({ outcome: Type.Union([Type.Literal('PLANNED'), Type.Literal('REPLANNED')]), ...commonFields, result: Type.Optional(openResult()) }, { additionalProperties: false }),
-    ]);
+    return Type.Object({ outcome: Type.Union([Type.Literal('PLANNED'), Type.Literal('REPLANNED')]), ...commonFields, result: Type.Optional(openResult()) }, { additionalProperties: false });
   }
   return Type.Object({
     outcome,
@@ -503,7 +496,6 @@ export async function createDefaultPiRunSession(spec) {
         projectStoreFile: spec.projectStoreFile ?? null,
         reportIssue: spec.reportIssue ?? null,
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
-        requestPlanning: spec.requestPlanning ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null, projectId: spec.projectId ?? null },
       });
       if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead') {
