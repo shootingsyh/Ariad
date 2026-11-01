@@ -2850,7 +2850,7 @@ test('applyDeliveryPlan persists issueRefs for triaged repair tasks', () => {
   }
 });
 
-test('TL inserts triaged fix into live delivery DAG without touching active roles or plan version', () => {
+test('TL routes triaged fix into the issue queue without touching the delivery DAG', () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);
   try {
@@ -2861,23 +2861,28 @@ test('TL inserts triaged fix into live delivery DAG without touching active role
     const issue = store.createIssue({ projectId: 'P-insert', title: 'Independent regression', description: 'Needs fix' });
     const before = store.getTask('active');
     assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tester', task: { id: 'fix' } }), /REQUIRES_TECH_LEAD/);
-    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', dependsOn: ['next'] }, beforeTaskIds: ['next'] }), /cycle/);
-    assert.equal(store.getTask('fix'), null);
+    // Former cycle case: a fix may depend on 'next' without creating a
+    // cycle, because nothing in the tree is rewired to depend on the fix.
+    store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix2', title: 'Dependent fix', dependsOn: ['next'] }, beforeTaskIds: ['next'] });
     assert.deepEqual(store.getTask('next').dependsOn, ['active']);
-    assert.throws(() => store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix' }, beforeTaskIds: ['active'] }), /idle READY/);
+    // A WORKING task named in beforeTaskIds no longer blocks insertion:
+    // it is a triage record, not a gate.
     const projectVersion = store.getProject('P-insert').version;
-    store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', title: 'Fix regression', dependsOn: ['done'] }, beforeTaskIds: ['next'] });
-    assert.deepEqual(store.getTask('next').dependsOn, ['active', 'fix']);
+    store.insertTriagedFixTask({ projectId: 'P-insert', issueId: issue.id, actor: 'tech_lead', task: { id: 'fix', title: 'Fix regression', dependsOn: ['done'] }, beforeTaskIds: ['active'] });
+    assert.deepEqual(store.getTask('next').dependsOn, ['active']);
     assert.equal(store.getTask('active').version, before.version);
     assert.equal(store.getProject('P-insert').version, projectVersion);
     assert.equal(store.getIssue(issue.id).state, 'ASSIGNED');
-    assert.deepEqual(store.getIssue(issue.id).assignedTaskIds, ['fix']);
-    assert.deepEqual(store.getTask('fix').issueRefs, [issue.id]);
+    assert.deepEqual(store.getIssue(issue.id).assignedTaskIds, ['fix2', 'fix']);
+    const fix = store.getTask('fix');
+    assert.deepEqual(fix.issueRefs, [issue.id]);
+    assert.equal(fix.queue, 'issue');
+    assert.equal(fix.parentId, null);
+    assert.equal(fix.milestoneId, null);
   } finally {
     store.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('TL one-off legacy issue recovery preserves issue and refuses genuine replans', () => {
   const { dir, file } = tempDb();
   const store = new SQLiteV2Store(file);

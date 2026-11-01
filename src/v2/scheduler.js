@@ -6,7 +6,7 @@ import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure } from './developer-task-policy.js';
-import { controlTaskPolicyFailure, isAdhocAnalysis, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
+import { controlTaskPolicyFailure, isAdhocAnalysis, queueOfTask, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
@@ -115,10 +115,14 @@ export class V2Scheduler {
       }
     }
 
-    // Prefer work that can unblock the largest unfinished downstream region.
-    // Stable deterministic tie-breakers keep scheduling reproducible.
+    // The issue queue drains first: triaged fixes are standalone work
+    // parallel to the milestone tree and take dispatch priority over it.
+    // Within a queue, prefer work that can unblock the largest unfinished
+    // downstream region; stable tie-breakers keep scheduling reproducible.
+    const queueRank = candidate => (queueOfTask(candidate.task) === 'issue' ? 0 : 1);
     candidates.sort((a, b) =>
-      b.impact - a.impact
+      queueRank(a) - queueRank(b)
+      || b.impact - a.impact
       || a.graphKey.localeCompare(b.graphKey)
       || a.task.id.localeCompare(b.task.id)
     );

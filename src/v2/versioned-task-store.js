@@ -1,4 +1,4 @@
-import { VersionedStore } from './versioned-store.js';
+import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { scopeOfTask } from './control-task-policy.js';
 
 // De-materialized task store for DB-first (versionedTree) projects
@@ -16,9 +16,8 @@ import { scopeOfTask } from './control-task-policy.js';
 // not a copy of the plan. Anything not implemented here is delegated to
 // the runtime store via the Proxy fallback.
 //
-// Known seam: insertTriagedFixTask is delegated to the runtime store,
-// whose internal view only sees runtime-side tasks; fix tasks inserted
-// that way live runtime-side until the next begin-iteration seeding.
+// insertTriagedFixTask is implemented on the facade: triaged fixes
+// land in the standalone issue queue as embedded exec records.
 const SPEC_OWNED_FIELDS = new Set([
   'taskKind', 'title', 'intent', 'parentId', 'dependsOn', 'interfaceIds',
   'featureId', 'executionMode', 'acceptanceCriteria', 'testStrategy',
@@ -122,6 +121,62 @@ export class VersionedTaskStore {
       ...patch,
       history: [...(current.history ?? []), structuredClone(entry)],
     });
+  }
+
+  // Issue queue (owner model, 2026-10-31): a TL-triaged fix becomes a
+  // standalone embedded exec task in the issue queue - never a spec
+  // node, never adopted into the task tree at the next version. Issue
+  // records themselves live in the runtime store (the live issue path);
+  // only the fix task lands on the versioned side.
+  insertTriagedFixTask({ projectId, issueId, actor, task, beforeTaskIds = [] }) {
+    if (actor !== 'tech_lead') throw new Error('FIX_TASK_REQUIRES_TECH_LEAD');
+    if (!this.runtime.getProject(projectId)) throw new Error('unknown project');
+    const issue = this.runtime.getIssue(issueId);
+    if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
+    if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
+    if (!task?.id || (task.taskKind != null && !DELIVERY_KINDS.includes(task.taskKind))) throw new Error('delivery fix task id required');
+    if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
+    if (this.getTask(task.id)) throw new Error('fix task id already exists');
+    const existing = new Set(this.listTasks(projectId).map(item => item.id));
+    for (const dep of task.dependsOn ?? []) {
+      if (dep === task.id) throw new Error('fix task cannot depend on itself');
+      if (!existing.has(dep)) throw new Error(`unknown dependency: ${dep}`);
+    }
+    const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
+    const fix = {
+      ...structuredClone(task), projectId,
+      taskKind: task.taskKind ?? 'FEATURE_TASK', issueRefs: refs,
+      parentId: null, milestoneId: null, queue: 'issue',
+      stage: task.stage ?? 'developer', state: task.state ?? 'READY', execution: task.execution ?? null,
+      input: { ...(task.input ?? {}), issueRefs: refs, queue: 'issue' },
+      history: [...(task.history ?? []), { type: 'TL_INSERT_FIX_TASK', issueId, at: new Date().toISOString() }],
+    };
+    if (fix.state !== 'READY' || fix.stage !== 'developer' || fix.execution) throw new Error('fix task must start READY/developer');
+    const created = this.createTask(fix);
+    const assignedTaskIds = [...new Set([...(issue.assignedTaskIds ?? []), fix.id])];
+    this.runtime.updateIssue(issueId, {
+      state: 'ASSIGNED', assignedTaskIds,
+      triage: { ...(issue.triage ?? {}), disposition: 'ASSIGNED', decidedBy: 'tech_lead', insertedBefore: beforeTaskIds },
+    });
+    return created;
+  }
+
+  // Same rule as the runtime store, evaluated over the merged task view
+  // so fixes living in the issue queue (embedded exec records) resolve
+  // their issues when they finish.
+  reconcileAssignedIssues(projectId) {
+    const resolved = [];
+    for (const issue of this.runtime.listIssues(projectId, { states: ['ASSIGNED'] })) {
+      const ids = issue.assignedTaskIds ?? [];
+      if (ids.length === 0) continue;
+      if (!ids.every(id => this.getTask(id)?.state === 'DONE')) continue;
+      this.runtime.updateIssue(issue.id, {
+        state: 'RESOLVED',
+        resolution: { kind: 'ASSIGNED_TASKS_DONE', taskIds: [...ids], at: new Date().toISOString() },
+      });
+      resolved.push(issue.id);
+    }
+    return resolved;
   }
 
   // Composite executor routes, composed over the routed primitives (the

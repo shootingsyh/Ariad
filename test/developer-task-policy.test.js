@@ -54,3 +54,32 @@ test('scheduler fails closed without starting approval gate or ad-hoc developer 
     assert.equal(calls,0);
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('issue-queue developer tasks need no milestone ownership', () => {
+  assert.equal(developerTaskPolicyFailure({ taskKind: 'FEATURE_TASK', stage: 'developer', queue: 'issue', milestoneId: null }), null);
+  assert.equal(developerTaskPolicyFailure({ taskKind: 'FEATURE_TASK', stage: 'developer', input: { queue: 'issue' } }), null);
+  assert.equal(developerTaskPolicyFailure({ taskKind: 'FEATURE_TASK', stage: 'developer', milestoneId: null }), 'DEVELOPER_REQUIRES_MILESTONE');
+});
+
+test('scheduler drains the issue queue before milestone work', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-issue-prio-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'P-prio' });
+    store.createTask({ taskKind: 'FEATURE_TASK', id: 'ms-task', projectId: 'P-prio', stage: 'developer', state: 'READY', milestoneId: 'M1', title: 'Milestone work' });
+    store.createTask({ taskKind: 'FEATURE_TASK', id: 'ms-downstream', projectId: 'P-prio', stage: 'developer', state: 'READY', milestoneId: 'M1', title: 'Downstream', dependsOn: ['ms-task'] });
+    store.createTask({ taskKind: 'FEATURE_TASK', id: 'issue-fix', projectId: 'P-prio', stage: 'developer', state: 'READY', queue: 'issue', title: 'Triaged fix' });
+    const starts = [];
+    const roles = new RoleRegistry();
+    roles.register('developer', { prepare: () => ({ provider: 'fake' }), transition: () => ({ state: 'DONE' }) });
+    const providers = new ProviderRegistry();
+    providers.register({ id: 'fake', start: async (arg) => { starts.push(JSON.stringify(arg)); return { externalId: 'fake' }; }, poll: async () => ({ state: 'RUNNING' }), cancel: async () => {} });
+    const scheduler = new V2Scheduler({ store, roles, providers, resources: new ResourcePool({}) });
+    await scheduler.tick('P-prio');
+    assert.equal(starts.length, 2);
+    assert.ok(starts[0].includes('issue-fix'), `issue fix must start first, got: ${starts[0]}`);
+    assert.ok(starts[1].includes('ms-task'), `milestone task must start second, got: ${starts[1]}`);
+  } finally {
+    store.close(); rmSync(dir, { recursive: true, force: true });
+  }
+});

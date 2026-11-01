@@ -52,6 +52,13 @@ export function scopeOfTask(task) {
   return isDeliveryKind(task?.taskKind) ? 'delivery' : 'control';
 }
 
+// Delivery work lives in one of two parallel queues: the milestone task
+// tree (default) or the standalone issue queue (triaged fixes). The
+// scheduler drains the issue queue first.
+export function queueOfTask(task) {
+  return task?.queue ?? task?.input?.queue ?? 'milestone';
+}
+
 export function isAdhocAnalysis(task) {
   return task?.taskKind === TASK_KINDS.ADHOC_ANALYSIS;
 }

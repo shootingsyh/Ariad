@@ -124,3 +124,25 @@ test('standalone runtime wraps versioned projects in the facade and sees the pro
   assert.deepEqual(delivery.map(x => x.id).sort(), ['f-1', 'm-1']);
   assert.equal(runtime.store.getTask('f-1').milestoneId, 'm-1');
 });
+
+test('facade routes triaged fixes into the issue queue and resolves the issue on completion', (t) => {
+  const { runtime, seed, facade } = makeFacade(t);
+  seedAndPromote(seed);
+  const issue = runtime.createIssue({ projectId: 'proj', title: 'Crash on save', description: 'Boom' });
+  const fix = facade.insertTriagedFixTask({
+    projectId: 'proj', issueId: issue.id, actor: 'tech_lead',
+    task: { id: 'fix-1', taskKind: 'FEATURE_TASK', title: 'Fix crash', dependsOn: [] },
+    beforeTaskIds: ['f-1'],
+  });
+  assert.equal(fix.queue, 'issue');
+  assert.equal(fix.milestoneId, null);
+  // The fix is an embedded queue item on the versioned side: no runtime
+  // row, and the prod spec (the task tree) is untouched.
+  assert.equal(runtime.getTask('fix-1'), null);
+  assert.deepEqual(seed.listSpecTasks(1).map(x => x.id).sort(), ['f-1', 'm-1']);
+  assert.equal(runtime.getIssue(issue.id).state, 'ASSIGNED');
+  const live = facade.getTask('fix-1');
+  facade.updateTask('fix-1', live.version, { state: 'DONE', stage: 'reviewer' });
+  assert.deepEqual(facade.reconcileAssignedIssues('proj'), [issue.id]);
+  assert.equal(runtime.getIssue(issue.id).state, 'RESOLVED');
+});

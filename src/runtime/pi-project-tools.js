@@ -273,7 +273,7 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
   pi.registerTool({
     name: 'ariad_insert_fix_task',
     label: 'Ariad insert triaged fix task',
-    description: 'Tech Lead only: insert a new independent repair task into the active delivery DAG, adding prerequisite edges only to idle READY tasks. Does not pause active work or replan.',
+    description: 'Tech Lead only: place a triaged repair task into the standalone issue queue, parallel to the milestone task tree. The scheduler drains the issue queue before milestone work. The task is not inserted into the task tree: no other task is modified and nothing is replanned. beforeTaskIds is recorded as triage context only and gates nothing.',
     parameters: Type.Object({
       issueId: Type.String({ minLength: 1 }),
       taskId: Type.String({ minLength: 1 }),
