@@ -396,7 +396,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
   if (scope === 'project' && action === 'decide' && !decision?.trim()) {
     throw new Error('decide requires decision text: ariad project decide <name> <decision>');
   }
-  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues', 'decide'].includes(action)) {
+  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues', 'decide'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
     if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'create', 'takeover', 'adopt', 'issue-open', 'decide'].includes(action)) await ensureAriadDaemon(root);
     const actualAction = action === 'set-ux-review' ? 'set_ux_review' : action === 'set-debug-hold' ? 'set_debug_hold' : action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
