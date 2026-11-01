@@ -1,24 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
   appendNotification,
   readNotifications,
-  readNotificationCursor,
-  writeNotificationCursor,
   listUnreadNotifications,
-  notificationsLogPath,
+  ackNotifications,
 } from '../src/v2/notifications.js';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 
-test('append-only log assigns increasing seq and cursor filters unread', () => {
+test('table appends rows with autoincrement seq and read_at is the check mark', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-notif-'));
   const dbFile = join(dir, 'state.db');
   assert.deepEqual(readNotifications(dbFile), []);
-  assert.equal(readNotificationCursor(dbFile), 0);
   const first = appendNotification(dbFile, {
     projectId: 'P', taskId: 't1', taskTitle: 'First', state: 'NEEDS_HUMAN',
     task: { history: [{ type: 'ROLE_RESULT', summary: 'Human must decide', questions: ['Approve?'] }] },
@@ -30,12 +27,18 @@ test('append-only log assigns increasing seq and cursor filters unread', () => {
   assert.deepEqual(first.questions, ['Approve?']);
   assert.equal(second.summary, '');
   assert.equal(listUnreadNotifications(dbFile).length, 2);
-  writeNotificationCursor(dbFile, 1);
+
+  assert.equal(ackNotifications(dbFile, 1), 1);
+  // Acking the same seq again checks nothing new.
+  assert.equal(ackNotifications(dbFile, 1), 0);
   const unread = listUnreadNotifications(dbFile);
   assert.equal(unread.length, 1);
   assert.equal(unread[0].taskId, 't2');
-  // The log itself is untouched by acking: both lines remain.
-  assert.equal(readFileSync(notificationsLogPath(dbFile), 'utf8').trim().split('\n').length, 2);
+  // Rows are never deleted by acking: both remain, first flagged read.
+  const all = readNotifications(dbFile);
+  assert.equal(all.length, 2);
+  assert.equal(all[0].read, true);
+  assert.equal(all[1].read, false);
 });
 
 test('store appends one notification per transition into a human-attention state', () => {
@@ -57,6 +60,7 @@ test('store appends one notification per transition into a human-attention state
   assert.equal(records[0].taskTitle, 'Ship it');
   assert.equal(records[0].summary, 'Requirements need approval');
   assert.deepEqual(records[0].questions, ['Approve the document?']);
+  assert.equal(records[0].read, false);
 
   // Staying in the state across further updates does not re-notify.
   const stillParked = store.updateTask('D', parked.version, { state: 'NEEDS_HUMAN' });

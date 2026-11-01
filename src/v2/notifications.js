@@ -1,62 +1,90 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 
-// Append-only human-attention notification stream. Whenever a task
-// transitions INTO a state where a human must act (NEEDS_HUMAN or
-// SYSTEM_BLOCKED), the store appends one JSON line to
-// notifications.jsonl beside the project's state DB - inside the
-// project's .ariad directory, which the project repo tracks in git,
-// so the stream is versioned with the project and survives DB
-// generations (state.db -> state2.db keeps the same directory).
-// Consumers never rewrite the log: they read with a cursor
-// (notifications-cursor.json) and ack by advancing it.
+// Human-attention notification table. Whenever a task transitions
+// INTO a state where a human must act (NEEDS_HUMAN or
+// SYSTEM_BLOCKED), the store appends one row to human_notifications
+// in notifications.db beside the project's state DB - inside the
+// project's .ariad directory (tracked in git like memory.db), so the
+// stream survives state-DB generations (state.db -> state2.db keeps
+// the same directory). Rows are never edited except for the read
+// check: consumers mark what they delivered with read_at, and unread
+// is simply read_at IS NULL. SQLite gives transactions, an
+// AUTOINCREMENT seq and no torn writes - no log file bookkeeping.
 
 export const HUMAN_ATTENTION_STATES = Object.freeze(['NEEDS_HUMAN', 'SYSTEM_BLOCKED']);
 
-export function notificationsLogPath(storeFile) {
-  return join(dirname(storeFile), 'notifications.jsonl');
+export function notificationsDbPath(storeFile) {
+  return join(dirname(storeFile), 'notifications.db');
 }
 
-export function notificationsCursorPath(storeFile) {
-  return join(dirname(storeFile), 'notifications-cursor.json');
+function openNotificationsDb(storeFile) {
+  const db = new DatabaseSync(notificationsDbPath(storeFile));
+  db.exec('PRAGMA journal_mode=WAL;');
+  db.exec('PRAGMA busy_timeout=5000;');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS human_notifications (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      task_title TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      questions_json TEXT NOT NULL DEFAULT '[]',
+      read_at TEXT
+    );
+  `);
+  return db;
 }
 
-const isMemoryStore = storeFile => storeFile === ':memory:';
-
-export function readNotifications(storeFile) {
-  if (isMemoryStore(storeFile)) return [];
-  const path = notificationsLogPath(storeFile);
-  if (!existsSync(path)) return [];
-  const records = [];
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    try { records.push(JSON.parse(line)); } catch { /* a torn final line is ignored, never fatal */ }
-  }
-  return records;
+function rowToRecord(row) {
+  let questions = [];
+  try { questions = JSON.parse(row.questions_json); } catch { /* stored by us; defensive only */ }
+  return {
+    seq: row.seq,
+    ts: row.ts,
+    projectId: row.project_id,
+    taskId: row.task_id,
+    taskTitle: row.task_title,
+    kind: row.kind,
+    summary: row.summary,
+    questions: Array.isArray(questions) ? questions : [],
+    read: row.read_at != null,
+    readAt: row.read_at,
+  };
 }
 
-export function readNotificationCursor(storeFile) {
-  if (isMemoryStore(storeFile)) return 0;
-  const path = notificationsCursorPath(storeFile);
-  if (!existsSync(path)) return 0;
+export function readNotifications(storeFile, { unreadOnly = false } = {}) {
+  let db;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return Number.isInteger(parsed?.lastReadSeq) ? parsed.lastReadSeq : 0;
-  } catch {
-    return 0;
+    db = openNotificationsDb(storeFile);
+    const rows = db.prepare(
+      `SELECT * FROM human_notifications ${unreadOnly ? 'WHERE read_at IS NULL' : ''} ORDER BY seq`,
+    ).all();
+    return rows.map(rowToRecord);
+  } finally {
+    db?.close();
   }
-}
-
-export function writeNotificationCursor(storeFile, lastReadSeq) {
-  const cursor = { lastReadSeq, updatedAt: new Date().toISOString() };
-  if (isMemoryStore(storeFile)) return cursor;
-  writeFileSync(notificationsCursorPath(storeFile), `${JSON.stringify(cursor, null, 2)}\n`);
-  return cursor;
 }
 
 export function listUnreadNotifications(storeFile) {
-  const cursor = readNotificationCursor(storeFile);
-  return readNotifications(storeFile).filter(record => record.seq > cursor);
+  return readNotifications(storeFile, { unreadOnly: true });
+}
+
+// The "check mark": mark every row up to upToSeq as read. Returns how
+// many rows were newly checked.
+export function ackNotifications(storeFile, upToSeq) {
+  let db;
+  try {
+    db = openNotificationsDb(storeFile);
+    const result = db.prepare(
+      'UPDATE human_notifications SET read_at = ? WHERE seq <= ? AND read_at IS NULL',
+    ).run(new Date().toISOString(), upToSeq);
+    return result.changes;
+  } finally {
+    db?.close();
+  }
 }
 
 // The payload a human needs in order to act: what the role submitted
@@ -77,20 +105,24 @@ export function summarizeForNotification(task) {
 }
 
 export function appendNotification(storeFile, { projectId, taskId, taskTitle = '', state, task = null }) {
-  if (isMemoryStore(storeFile)) return null;
-  const existing = readNotifications(storeFile);
-  const seq = (existing.at(-1)?.seq ?? 0) + 1;
   const { summary, questions } = task ? summarizeForNotification(task) : { summary: '', questions: [] };
-  const record = { seq, ts: new Date().toISOString(), projectId, taskId, taskTitle, kind: state, summary, questions };
-  appendFileSync(notificationsLogPath(storeFile), `${JSON.stringify(record)}\n`);
-  return record;
+  let db;
+  try {
+    db = openNotificationsDb(storeFile);
+    const result = db.prepare(
+      'INSERT INTO human_notifications (ts, project_id, task_id, task_title, kind, summary, questions_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(new Date().toISOString(), projectId, taskId, taskTitle, state, summary, JSON.stringify(questions));
+    return { seq: Number(result.lastInsertRowid), projectId, taskId, taskTitle, kind: state, summary, questions, read: false };
+  } finally {
+    db?.close();
+  }
 }
 
 // Store hook, called after a task mutation has committed. Appends
-// exactly one notification per transition INTO a human-attention
-// state: further updates while staying in the state do not
-// re-notify; leaving and re-entering notifies again. A notification
-// failure must never break task mutation, so errors are swallowed.
+// exactly one row per transition INTO a human-attention state:
+// further updates while staying in the state do not re-notify;
+// leaving and re-entering notifies again. A notification failure
+// must never break task mutation, so errors are swallowed.
 export function notifyHumanAttentionTransition(storeFile, { projectId, task, fromState }) {
   try {
     if (!task || !HUMAN_ATTENTION_STATES.includes(task.state)) return null;

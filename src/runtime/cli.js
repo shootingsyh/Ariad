@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { recordRequirementsApproval } from '../v2/project-docs.js';
 import { beginIteration } from '../v2/begin-iteration.js';
-import { readNotifications, readNotificationCursor, writeNotificationCursor } from '../v2/notifications.js';
+import { readNotifications, ackNotifications } from '../v2/notifications.js';
 import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
@@ -295,11 +295,9 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     if (action === 'list') {
       const projects = manager.list().map(status => {
         const paths = manager.resolveProjectPaths(status.id);
-        const cursor = readNotificationCursor(paths.db);
         const notifications = readNotifications(paths.db)
-          .filter(record => !unreadOnly || record.seq > cursor)
-          .map(record => ({ ...record, read: record.seq <= cursor }));
-        return { project: status.id, cursor, notifications };
+          .filter(record => !unreadOnly || !record.read);
+        return { project: status.id, notifications };
       });
       return { projects };
     }
@@ -307,8 +305,8 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
       if (!name) throw new Error(usage());
       if (!Number.isInteger(upToSeq) || upToSeq < 0) throw new Error('notifications ack requires --up-to <seq>');
       const paths = manager.resolveProjectPaths(name);
-      const cursor = writeNotificationCursor(paths.db, upToSeq);
-      return { project: paths.id, ...cursor };
+      const acked = ackNotifications(paths.db, upToSeq);
+      return { project: paths.id, upToSeq, acked };
     }
     throw new Error(usage());
   }
