@@ -256,3 +256,27 @@ test('PM requirements-authoring prompt carries the document standards', () => {
   assert.match(prompt, /no numeric tuning values, no mechanic formulas or constants/);
   assert.match(prompt, /present-tense product description/);
 });
+
+test('debug hold parks the PM plan review for the human, never the failure ladder', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-debughold-'));
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}) };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {}, debugHoldAfterPlanReview: true });
+  const accept = { outcome: 'PLAN_ACCEPTED', summary: 'plan accepted', result: { reason: 'Plan covers the approved requirements.', startDelivery: true } };
+  const out = roles.pm.transition({
+    task: { id: 'pr1', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b2', planGateRetries: 0 } },
+    result: accept,
+  });
+  // The debug hold is a deliberate human channel, not machinery failure:
+  // it parks NEEDS_HUMAN without consuming gate retries, and it still
+  // parks (never routes to the debugger) when retries are spent. The
+  // 2026-10-31 SRPG halt laddered the hold to SYSTEM_BLOCKED and parked
+  // the whole project FAILED because DEBUG_HOLD was missing here.
+  assert.equal(out.state, 'NEEDS_HUMAN');
+  assert.equal(out.transitionHistory.type, 'DEBUG_HOLD');
+  const exhausted = roles.pm.transition({
+    task: { id: 'pr2', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b2', planGateRetries: 2 } },
+    result: accept,
+  });
+  assert.equal(exhausted.state, 'NEEDS_HUMAN');
+  assert.equal(exhausted.transitionHistory.type, 'DEBUG_HOLD');
+});

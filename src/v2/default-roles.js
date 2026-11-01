@@ -535,11 +535,13 @@ export function createDefaultV2Roles({
     // diagnosis lands in SYSTEM_BLOCKED. Deliberate human channels pass
     // through untouched: PM_HUMAN_DECISION (the PM's requirements call and
     // the takeover review), REQUIREMENTS_GATE (the decompose gate waiting
-    // on human approval of the requirements document), and the debugger's
+    // on human approval of the requirements document), DEBUG_HOLD (the
+    // operator debug hold after PM plan acceptance), and the debugger's
     // own terminal diagnosis.
     if (legacy.state === 'NEEDS_HUMAN' && task.stage !== 'project_debugger'
       && legacy.transitionHistory?.type !== 'PM_HUMAN_DECISION'
-      && legacy.transitionHistory?.type !== 'REQUIREMENTS_GATE') {
+      && legacy.transitionHistory?.type !== 'REQUIREMENTS_GATE'
+      && legacy.transitionHistory?.type !== 'DEBUG_HOLD') {
       const retries = task.input?.planGateRetries ?? 0;
       const blockedType = legacy.transitionHistory?.type ?? null;
       const previousGateFailure = {
@@ -562,9 +564,10 @@ export function createDefaultV2Roles({
     const binding = roleExecutorBinding(task);
     if (!binding) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
     let signal = PLAN_SIGNALS[binding.state]?.[`${state}:${stage ?? (state === 'READY' ? task.stage : '')}`];
-    // The PM's deliberate human gate (requirements call / takeover review)
-    // exits the executor through its own terminal, not the failure path.
-    if (['PM_HUMAN_DECISION', 'REQUIREMENTS_GATE'].includes(legacy.transitionHistory?.type)) signal = 'HUMAN_GATE';
+    // The PM's deliberate human gate (requirements call / takeover review
+    // / debug hold) exits the executor through its own terminal, not the
+    // failure path.
+    if (['PM_HUMAN_DECISION', 'REQUIREMENTS_GATE', 'DEBUG_HOLD'].includes(legacy.transitionHistory?.type)) signal = 'HUMAN_GATE';
     if (!signal) throw new Error(`PLAN_EXECUTOR_UNMAPPED_MOVE:${binding.state}/${state}:${stage ?? ''}`);
     const resolved = executorTransitionFromResult(task, signal);
     if (!resolved) throw new Error(`PLAN_EXECUTOR_BINDING_MISSING:${task.id}`);
