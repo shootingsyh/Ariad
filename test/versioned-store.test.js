@@ -41,6 +41,16 @@ test('draft -> promote -> prod effective tasks are READY', (t) => {
   assert.deepEqual(tasks.map(x => x.id), ['a-task', 'b-task']);
   assert.ok(tasks.every(x => x.state === 'READY'));
   assert.equal(tasks[0].title, 'Alpha task');
+  // Fresh spec tasks enter delivery at the developer stage (a null stage
+  // crashes scheduler dispatch with "unknown role: null").
+  assert.ok(tasks.every(x => x.stage === 'developer'));
+});
+
+test('an exec record without a stage still surfaces the developer stage', (t) => {
+  const store = makeStore(t);
+  seedV1(store);
+  store.upsertExecTask({ id: 'a-task', projectId: 'proj', state: 'READY', history: [] });
+  assert.equal(store.getEffectiveTask('a-task').stage, 'developer');
 });
 
 test('draft edits are isolated until promotion; diff reports the change', (t) => {

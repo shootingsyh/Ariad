@@ -461,13 +461,13 @@ export class VersionedStore {
         out.push({
           ...spec, ...ex.data, projectId: this.projectId, milestoneId: milestoneOf(spec),
           input: { ...(spec.input ?? {}), ...(ex.data.input ?? {}) },
-          state: ex.data.state ?? 'READY', stage: ex.data.stage ?? null,
+          state: ex.data.state ?? 'READY', stage: ex.data.stage ?? 'developer',
           history: ex.data.history ?? [], execution: ex.data.execution ?? null,
           artifacts: ex.data.artifacts ?? null,
           version: ex.version, updatedAt: ex.updatedAt,
         });
       } else {
-        out.push({ ...spec, projectId: this.projectId, milestoneId: milestoneOf(spec), state: 'READY', stage: null, history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
+        out.push({ ...spec, projectId: this.projectId, milestoneId: milestoneOf(spec), state: 'READY', stage: 'developer', history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
       }
     }
     for (const ex of this.listExecTasks()) {
