@@ -59,9 +59,20 @@ export function writeInventoryArtifact({ db, workspace, project, oldDbPath, arch
       lastHistoryType: Array.isArray(history) && history.length ? (history[history.length - 1]?.type ?? null) : null,
     };
   }), []) : [];
-  const issues = has('v2_issues') ? guard(() => dumpTable(db, 'v2_issues', ['data_json']).map(row => ({
-    id: row.id, state: row.state, ...(row.data_json && typeof row.data_json === 'object' ? row.data_json : {}),
-  })), []) : [];
+  // Two issue stores coexist in a generation database: the runtime
+  // v2_issues table (role-reported, fingerprint-deduped) and the
+  // versioned store's issues table (spec-side live issues). Both must
+  // be inventoried: a cutover that only dumps v2_issues silently drops
+  // every versioned issue from the next generation's discovery record
+  // (found live on SRPG, 2026-11-01: 23 OPEN versioned issues reported
+  // as openIssues 0).
+  const dumpIssues = (table, source) => dumpTable(db, table, ['data_json']).map(row => ({
+    id: row.id, state: row.state, source, ...(row.data_json && typeof row.data_json === 'object' ? row.data_json : {}),
+  }));
+  const issues = [
+    ...(has('v2_issues') ? guard(() => dumpIssues('v2_issues', 'v2_issues'), []) : []),
+    ...(has('issues') ? guard(() => dumpIssues('issues', 'issues'), []) : []),
+  ];
   const contracts = has('spec_contracts') ? guard(() => dumpTable(db, 'spec_contracts', ['contract_json'])
     .map(row => row.contract_json && typeof row.contract_json === 'object' ? row.contract_json : row), []) : [];
   const versions = has('spec_versions') ? guard(() => dumpTable(db, 'spec_versions', []), []) : [];

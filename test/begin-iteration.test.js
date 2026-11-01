@@ -12,7 +12,7 @@ import { AriadProjectManager } from '../src/runtime/project-manager.js';
 import { beginIteration } from '../src/v2/begin-iteration.js';
 import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../src/runtime/workspace-ignore.js';
 
-function makeAdoptedProject({ desiredState = 'STOPPED', tasks = [], issues = [], incidents = 0 } = {}) {
+function makeAdoptedProject({ desiredState = 'STOPPED', tasks = [], issues = [], incidents = 0, versionedIssues = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ariad-iter-'));
   const projectsRoot = join(root, 'projects');
   const workspace = join(root, 'ws');
@@ -34,6 +34,11 @@ function makeAdoptedProject({ desiredState = 'STOPPED', tasks = [], issues = [],
   const insIncident = store.db.prepare('INSERT INTO v2_system_incidents (project_id, task_id, data_json, created_at) VALUES (?, NULL, ?, ?)');
   for (let i = 0; i < incidents; i++) insIncident.run('demo', JSON.stringify({ kind: 'probe' }), '2026-10-01T00:00:00.000Z');
   store.db.close();
+  if (versionedIssues.length) {
+    const versioned = new VersionedStore(join(workspace, '.ariad', 'state.db'));
+    for (const issue of versionedIssues) versioned.createIssue({ projectId: 'demo', ...issue });
+    versioned.close();
+  }
   return { root, projectsRoot, workspace };
 }
 
@@ -49,7 +54,7 @@ const baseIssues = [
 ];
 
 test('begin-iteration archives, writes the inventory artifact, creates versioned project record, flips pointer', () => {
-  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks, issues: baseIssues, incidents: 3 });
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks, issues: baseIssues, incidents: 3, versionedIssues: [{ id: 'vi-open', title: 'Versioned open issue', severity: 'medium', description: 'Lives in the versioned issues table.' }] });
   const manager = new AriadProjectManager({ projectsRoot });
   const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:00:00.000Z') });
 
@@ -57,11 +62,16 @@ test('begin-iteration archives, writes the inventory artifact, creates versioned
   assert.equal(report.pointer, 'project-ref.json');
   assert.equal(report.inventory.tasks, 3);
   assert.equal(report.inventory.done, 1);
-  assert.equal(report.inventory.openIssues, 1);
+  assert.equal(report.inventory.openIssues, 2);
   const inventoryDir = join(workspace, '.ariad', 'artifacts', 'inventory');
   const inventoryMd = readFileSync(join(inventoryDir, 'INVENTORY.md'), 'utf8');
   assert.ok(inventoryMd.includes('Done feature'));
   assert.ok(inventoryMd.includes('Open bug'));
+  assert.ok(inventoryMd.includes('Versioned open issue'));
+  const dumpedIssues = JSON.parse(readFileSync(join(inventoryDir, 'issues.json'), 'utf8'));
+  assert.equal(dumpedIssues.length, 3);
+  assert.equal(dumpedIssues.find(i => i.id === 'vi-open').source, 'issues');
+  assert.equal(dumpedIssues.find(i => i.id === 'i-open').source, 'v2_issues');
   assert.ok(existsSync(join(inventoryDir, 'SCHEMA.md')));
   const dumpedTasks = JSON.parse(readFileSync(join(inventoryDir, 'tasks.json'), 'utf8'));
   assert.equal(dumpedTasks.length, 4);
