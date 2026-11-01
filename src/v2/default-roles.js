@@ -1118,7 +1118,9 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: 'NO_OPEN_DRAFT: this is a DB-first (versionedTree) project - the plan must be authored into a database draft with the ariad_tree_patch tool (openDraft, then applyOps); planner artifact files alone cannot be promoted', errorCode: 'NO_OPEN_DRAFT' },
                 };
               }
-              if (draftStore.listSpecTasks(draft.version).length === 0) {
+              const draftTasks = draftStore.listSpecTasks(draft.version);
+              const draftContracts = draftStore.listSpecContracts(draft.version);
+              if (draftTasks.length === 0) {
                 return {
                   outcome: 'NOT_PASS',
                   result: { valid: false, plan: null, error: 'DRAFT_EMPTY: the open DB draft contains no tasks - author the tree into it with ariad_tree_patch applyOps before validation', errorCode: 'DRAFT_EMPTY' },
@@ -1135,7 +1137,7 @@ export function createDefaultV2Roles({
               // plan may not require external/manual human labor unless
               // the human explicitly requested it.
               try {
-                validatePlanAutonomy({ tasks: draftStore.listSpecTasks(draft.version) }, planningBatchRequests(store, task));
+                validatePlanAutonomy({ tasks: draftTasks }, planningBatchRequests(store, task));
               } catch (error) {
                 return {
                   outcome: 'NOT_PASS',
@@ -1146,9 +1148,14 @@ export function createDefaultV2Roles({
               // through to the on-disk planner bundle below - it is a
               // legacy medium for versioned projects and a stale bundle
               // must not fail a valid draft (SRPG, 2026-10-31).
+              // The PASS payload carries the full draft content (tasks
+              // and contracts), because the critic and the PM judge
+              // this plan from the validator result: with only a stub
+              // {version, taskCount} both of them accepted a plan they
+              // could not see (SRPG art iteration, 2026-11-01).
               return {
                 outcome: 'PASS',
-                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftStore.listSpecTasks(draft.version).length }, error: null, errorCode: null },
+                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftTasks.length, tasks: draftTasks, contracts: draftContracts }, error: null, errorCode: null },
               };
             } finally {
               draftStore.close();
@@ -1241,6 +1248,7 @@ export function createDefaultV2Roles({
           'Every important feature and every milestone must have at least one representative end-to-end user scenario: enter through a real supported product entry point, follow the required user-visible steps without shortcuts, exercise the relevant child capabilities together, and reach the intended user-visible outcome.',
           'Do not accept fake E2E that jumps over required workflow state by calling internals directly, injecting final state/data, opening a late screen directly, starting at a final game level, or otherwise bypassing steps an actual user must perform. Focused unit/integration tests may supplement E2E but cannot replace it.',
           'The project/root plan must culminate in a product-level end-to-end journey that demonstrates the intended user can start from a realistic initial state and obtain the product\'s promised value. Require setup/onboarding/persistence/recovery or other lifecycle steps only when they are truly part of that product experience; do not invent unrelated commercial requirements.',
+          'PLAN FIDELITY - JUDGE THE DRAFT ITSELF, NOT SUMMARIES OF IT: the payload plan carries the full draft (every task with intent, acceptanceCriteria, testStrategy and flags, plus the feature contracts). Trace every requirement in the approved requirements document - above all every addition or change in its delta - to the task or tasks that carry it, and judge each carrying task by the text of its own acceptanceCriteria. Return PLAN_REVISION_REQUIRED when you find any of these: (a) a requirement is carried only by verification or regression wording (reuse the existing implementation, verify, repair only what verification finds) while the document presents it as something this version adds, changes, or completes, and the plan names no concrete existing evidence that the current implementation already satisfies it exactly as written - work the document calls for must be produced by a production task, not presumed already present; (b) acceptance criteria dilute an enumerated requirement into generic language (for example: no placeholders remain, assets are consistent) that would pass without the enumerated specifics existing - every enumerated item in the document (each named action, variant, deliverable, or member of a list) must appear in the acceptance criteria of some task, complete and not sampled; a list covered only in part is not covered; (c) a visual or media requirement is carried by tasks lacking the markings the quality flow relies on - media production needs art.required with named deliverables and the artist stage, and visual delivery needs ux.required so the rendered-evidence review actually runs; (d) the plan treats existing assets or implementation as satisfying a requirement on the basis of names, counts, or file presence alone, without evidence at the granularity the requirement enumerates. When you return PLAN_REVISION_REQUIRED for any of these, quote the requirement and name the missing or diluted item in result.guidance so the Tech Lead can repair it without guessing. Validator PASS and critic CLEAN establish structure only; they are not evidence of fidelity, and accepting on their summaries alone is a review failure.',
           'For takeover, compare the known authoritative roadmap/docs and the logical tree against the milestone list. Do not accept if known later major scope is missing from milestones, or if the milestone list contains placeholder/unused/TBD entries instead of real checkpoints.',
           'If this is a game project, do not accept a plan whose completion evidence only shows that maps/levels were launched, traversed, or exercised. The product-level E2E must begin from a normal player entry/start state and play through the required progression to an actual win/clear; directly opening the final level or injecting progression state is not a valid full playthrough. Ariad must know how to execute that successful path autonomously without relying on external human players unless the user explicitly requested a human study.',
           takeover
