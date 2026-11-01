@@ -211,7 +211,7 @@ export class AriadService {
             store.enqueuePlanningRequest({
               id: `requirements:${project.id}`,
               projectId: project.id,
-              request: { purpose: 'REQUIREMENTS_AUTHORING', instruction: record.goal || 'Author the version requirements document (reverse-engineering a baseline first when none exists), fold in the new requirements, and obtain human approval.' },
+              request: { purpose: 'REQUIREMENTS_AUTHORING', instruction: record.goal || 'Author the version requirements document (describing the product as it actually stands today, carried forward, with the new requirements folded in), and obtain human approval.' },
               context: { bootstrap: true, iteration: true },
             });
           } else {

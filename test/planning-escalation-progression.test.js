@@ -352,3 +352,18 @@ test('approved requirements close the PM stage and enqueue initial planning', ()
   assert.equal(enqueued.length, 1);
   assert.equal(enqueued[0].request.purpose, 'INITIAL_PLAN');
 });
+
+test('PM requirements-authoring prompt carries the document standards', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-reqprompt-'));
+  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
+  const prepared = roles.pm.prepare({
+    project: { id: 'P', workspace: dir, mode: 'TAKEOVER', goal: 'G' },
+    task: { id: 'r3', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'REQUIREMENTS_AUTHORING', planningBatchId: 'b1', requests: [] } },
+  });
+  const prompt = prepared.context.v2Prompt;
+  assert.match(prompt, /delta section stating ONLY what this version adds, changes, or removes/);
+  assert.match(prompt, /must not recount, list, or summarize what the previous version already implemented/);
+  assert.match(prompt, /no numeric tuning values, no mechanic formulas or constants/);
+  assert.match(prompt, /present-tense product description/);
+});
