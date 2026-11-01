@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
+import { VersionedStore } from '../src/v2/versioned-store.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
 import { requirementsStatus } from '../src/v2/project-docs.js';
 import { restoreRequirementsCheckpoint } from '../src/v2/debug-requirements-checkpoint.js';
@@ -102,4 +103,25 @@ test('refuses when a task is in flight or the project is not stopped', () => {
   archiveApproval(b.workspace);
   b.store.close();
   assert.throws(() => restoreRequirementsCheckpoint({ manager: new AriadProjectManager({ projectsRoot: b.projectsRoot }), name: 'demo' }), /DEBUG_CHECKPOINT_NOT_STOPPED/);
+});
+
+test('discards an open TL spec draft only with discardPlanning', () => {
+  const { projectsRoot, workspace, store } = makeProject();
+  addBatch(store, { id: 'requirements:demo', batchId: 'batch-1-1', purpose: 'REQUIREMENTS_AUTHORING', stage: 'pm', state: 'DONE' });
+  addBatch(store, { id: 'demo:replan:1', batchId: 'batch-2-1', purpose: 'INITIAL_PLAN', stage: 'tech_lead', state: 'DONE' });
+  archiveApproval(workspace);
+  store.close();
+  const versioned = new VersionedStore(join(workspace, '.ariad', 'state.db'));
+  versioned.initProject('demo');
+  versioned.createDraft({ createdBy: 'tech_lead' });
+  versioned.close();
+  const manager = new AriadProjectManager({ projectsRoot });
+  assert.throws(() => restoreRequirementsCheckpoint({ manager, name: 'demo' }), /DEBUG_CHECKPOINT_SPEC_DRAFT_EXISTS/);
+  const report = restoreRequirementsCheckpoint({ manager, name: 'demo', discardPlanning: true });
+  assert.equal(report.discardedDraftVersion, 1);
+  const check = new VersionedStore(join(workspace, '.ariad', 'state.db'));
+  assert.equal(check.getOpenDraft(), null);
+  assert.equal(check.listVersions()[0].state, 'discarded');
+  check.close();
+  assert.deepEqual(counts(workspace), { tasks: 0, requests: 0 });
 });

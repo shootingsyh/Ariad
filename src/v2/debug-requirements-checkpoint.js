@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalsPath, readApprovals, requirementsPath, requirementsStatus } from './project-docs.js';
-import { DELIVERY_KINDS } from './versioned-store.js';
+import { DELIVERY_KINDS, VersionedStore } from './versioned-store.js';
 
 // DEBUG tool (operator surface, not a product flow): restore the
 // checkpoint "requirements human-approved, TL planning not started".
@@ -15,7 +15,9 @@ import { DELIVERY_KINDS } from './versioned-store.js';
 // hash (found in the live approvals file or a pre-iterate archive -
 // it never creates a fresh approval), and (b) deleting the
 // requirements-stage planning batch (and, only with discardPlanning,
-// any other planning batch) from the store. It enqueues nothing:
+// any other planning batch, plus any open TL spec draft - discarded
+// through VersionedStore.discardDraft, never by raw deletes) from
+// the store. It enqueues nothing:
 // the project stays STOPPED, and a later `project start` takes the
 // already-existing ensureRunning branch straight to INITIAL_PLAN.
 // Every run is appended to .ariad/debug-ops.jsonl for audit.
@@ -62,6 +64,7 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
 
   const db = new DatabaseSync(paths.db);
   let removedTasks = [];
+  let draftVersion = null;
   let removedRequests = [];
   try {
     const rows = db.prepare('SELECT id, data_json FROM v2_projects').all();
@@ -82,8 +85,9 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
     try {
       const prod = db.prepare("SELECT COUNT(*) AS n FROM spec_versions WHERE state = 'prod'").get();
       if (prod?.n > 0) fail('DEBUG_CHECKPOINT_PROD_EXISTS', 'a promoted spec version already exists; the checkpoint is pre-planning');
-      const drafts = db.prepare("SELECT COUNT(*) AS n FROM spec_versions WHERE state = 'draft'").get();
-      if (drafts?.n > 0) fail('DEBUG_CHECKPOINT_SPEC_DRAFT_EXISTS', 'a TL spec draft already exists; discarding planning would orphan it, refusing');
+      const draftRow = db.prepare("SELECT MAX(version) AS v FROM spec_versions WHERE state = 'draft'").get();
+      draftVersion = draftRow?.v ?? null;
+      if (draftVersion != null && !discardPlanning) fail('DEBUG_CHECKPOINT_SPEC_DRAFT_EXISTS', `a TL spec draft (v${draftVersion}) already exists; rerun with --discard-planning to discard it through VersionedStore.discardDraft`);
     } catch (err) { if (err.code?.startsWith('DEBUG_CHECKPOINT_')) throw err; /* no spec tables yet: fine */ }
 
     const requests = db.prepare('SELECT id, state, batch_id, data_json FROM v2_planning_requests WHERE project_id = ?').all(row.id)
@@ -113,18 +117,23 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
     } catch (err) { db.exec('ROLLBACK'); throw err; }
   } finally { db.close(); }
 
+  if (draftVersion != null) {
+    const versioned = new VersionedStore(paths.db);
+    try { versioned.discardDraft(); } finally { versioned.close(); }
+  }
+
   const approvals = readApprovals(paths.workspace);
   approvals.requirements = { ...prior.record, restoredBy: 'debug-cli', restoredAt: now.toISOString(), restoreSource: prior.source };
   writeFileSync(approvalsPath(paths.workspace), `${JSON.stringify(approvals, null, 2)}\n`);
   if (!requirementsStatus(paths.workspace).approved) fail('DEBUG_CHECKPOINT_VERIFY_FAILED', 'restored approval does not match the document hash');
 
-  const audit = { at: now.toISOString(), op: 'debug-restore-requirements', project: paths.id, sha256, approvalSource: prior.source, removedRequests, removedTasks, discardPlanning };
+  const audit = { at: now.toISOString(), op: 'debug-restore-requirements', project: paths.id, sha256, approvalSource: prior.source, removedRequests, removedTasks, discardPlanning, discardedDraftVersion: draftVersion };
   mkdirSync(paths.ariad, { recursive: true });
   appendFileSync(join(paths.ariad, 'debug-ops.jsonl'), `${JSON.stringify(audit)}\n`);
   return {
     project: paths.id, dbFile: paths.db.split('/').pop(), desiredState: 'STOPPED',
     requirements: { sha256, approvalRestoredFrom: prior.source, approvedBy: prior.record.approvedBy ?? null, approvedAt: prior.record.approvedAt ?? null },
-    removedRequests, removedTasks,
+    removedRequests, removedTasks, discardedDraftVersion: draftVersion,
     nextStep: 'project start enqueues INITIAL_PLAN only (requirements stage already finalized at this checkpoint)',
   };
 }
