@@ -21,7 +21,10 @@ export function notificationsCursorPath(storeFile) {
   return join(dirname(storeFile), 'notifications-cursor.json');
 }
 
+const isMemoryStore = storeFile => storeFile === ':memory:';
+
 export function readNotifications(storeFile) {
+  if (isMemoryStore(storeFile)) return [];
   const path = notificationsLogPath(storeFile);
   if (!existsSync(path)) return [];
   const records = [];
@@ -33,6 +36,7 @@ export function readNotifications(storeFile) {
 }
 
 export function readNotificationCursor(storeFile) {
+  if (isMemoryStore(storeFile)) return 0;
   const path = notificationsCursorPath(storeFile);
   if (!existsSync(path)) return 0;
   try {
@@ -45,6 +49,7 @@ export function readNotificationCursor(storeFile) {
 
 export function writeNotificationCursor(storeFile, lastReadSeq) {
   const cursor = { lastReadSeq, updatedAt: new Date().toISOString() };
+  if (isMemoryStore(storeFile)) return cursor;
   writeFileSync(notificationsCursorPath(storeFile), `${JSON.stringify(cursor, null, 2)}\n`);
   return cursor;
 }
@@ -72,6 +77,7 @@ export function summarizeForNotification(task) {
 }
 
 export function appendNotification(storeFile, { projectId, taskId, taskTitle = '', state, task = null }) {
+  if (isMemoryStore(storeFile)) return null;
   const existing = readNotifications(storeFile);
   const seq = (existing.at(-1)?.seq ?? 0) + 1;
   const { summary, questions } = task ? summarizeForNotification(task) : { summary: '', questions: [] };
