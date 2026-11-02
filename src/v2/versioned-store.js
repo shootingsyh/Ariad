@@ -452,6 +452,12 @@ export class VersionedStore {
     };
     const out = [];
     for (const spec of specs) {
+      // Media-production tasks (art.required) enter delivery at the artist
+      // stage: the artist produces the named deliverables first, then the
+      // executor hands off to developer for integration. The entry stage
+      // only fills a stage that execution has not established yet - it
+      // never rewinds a task that already has one.
+      const entryStage = spec.art?.required ? 'artist' : 'developer';
       const ex = execById.get(spec.id);
       if (ex && !ex.embedded) {
         // Exec data is the execution face of the spec task (state, stage,
@@ -461,13 +467,13 @@ export class VersionedStore {
         out.push({
           ...spec, ...ex.data, projectId: this.projectId, milestoneId: milestoneOf(spec),
           input: { ...(spec.input ?? {}), ...(ex.data.input ?? {}) },
-          state: ex.data.state ?? 'READY', stage: ex.data.stage ?? 'developer',
+          state: ex.data.state ?? 'READY', stage: ex.data.stage ?? entryStage,
           history: ex.data.history ?? [], execution: ex.data.execution ?? null,
           artifacts: ex.data.artifacts ?? null,
           version: ex.version, updatedAt: ex.updatedAt,
         });
       } else {
-        out.push({ ...spec, projectId: this.projectId, milestoneId: milestoneOf(spec), state: 'READY', stage: 'developer', history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
+        out.push({ ...spec, projectId: this.projectId, milestoneId: milestoneOf(spec), state: 'READY', stage: entryStage, history: [], execution: null, artifacts: null, version: 1, updatedAt: null });
       }
     }
     for (const ex of this.listExecTasks()) {

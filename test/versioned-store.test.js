@@ -53,6 +53,36 @@ test('an exec record without a stage still surfaces the developer stage', (t) =>
   assert.equal(store.getEffectiveTask('a-task').stage, 'developer');
 });
 
+const TASK_ART = { id: 'art-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Art task', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct', art: { required: true, media: ['image'], deliverables: ['title image'] } };
+
+function seedArtV1(store) {
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([
+    { op: 'upsertContract', contract: FEATURE_CONTRACT },
+    { op: 'upsertTask', task: TASK_A },
+    { op: 'upsertTask', task: TASK_ART },
+  ]);
+  return store.promoteDraft({ approvedBy: 'pm' });
+}
+
+test('art-required spec tasks enter delivery at the artist stage', (t) => {
+  const store = makeStore(t);
+  seedArtV1(store);
+  assert.equal(store.getEffectiveTask('art-task').stage, 'artist');
+  assert.equal(store.getEffectiveTask('a-task').stage, 'developer');
+});
+
+test('artist entry stage fills only a stage execution has not established', (t) => {
+  const store = makeStore(t);
+  seedArtV1(store);
+  // A stageless exec record still surfaces the entry stage for its spec.
+  store.upsertExecTask({ id: 'art-task', projectId: 'proj', state: 'READY', history: [] });
+  assert.equal(store.getEffectiveTask('art-task').stage, 'artist');
+  // Once execution has established a stage, it is preserved as-is.
+  store.upsertExecTask({ id: 'art-task', projectId: 'proj', state: 'WORKING', stage: 'tester', history: [] });
+  assert.equal(store.getEffectiveTask('art-task').stage, 'tester');
+});
+
 test('draft edits are isolated until promotion; diff reports the change', (t) => {
   const store = makeStore(t);
   seedV1(store);
