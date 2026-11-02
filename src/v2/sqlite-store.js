@@ -102,11 +102,29 @@ function graphKey(task) {
   return scopeOfTask(task) === 'control' ? `control:${task.flowId}` : 'delivery';
 }
 
+// SQLITE_IOERR ("disk I/O error") is the signature of a stale cached
+// connection on an otherwise healthy WAL file: other connections cycling
+// the WAL leave this handle's view unusable while a fresh connection
+// reads the same file fine (2026-11-01 reconcile-signal incident).
+export function isDiskIoError(error) {
+  if (!error) return false;
+  if (error.errcode === 10) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /disk I\/O error/i.test(message);
+}
+
 export class SQLiteV2Store {
   constructor(file) {
     if (!file) throw new Error('SQLiteV2Store requires a database file path');
-    this.db = new DatabaseSync(file);
     this.filePath = file;
+    this.db = null;
+    this.#open();
+  }
+
+  // (Re)opens the connection and (re)applies pragmas and schema; every
+  // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
+  #open() {
+    this.db = new DatabaseSync(this.filePath);
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec(`
@@ -160,6 +178,18 @@ export class SQLiteV2Store {
       CREATE INDEX IF NOT EXISTS idx_v2_incidents_project
         ON v2_system_incidents(project_id, sequence);
     `);
+  }
+
+  // Drops the cached connection when it has gone stale (isDiskIoError)
+  // so subsequent operations run on a fresh one; the file itself and all
+  // committed data are untouched (2026-11-02: this store's listTasks kept
+  // failing with SQLITE_IOERR and parked the project FAILED).
+  reopen() {
+    if (this.db) {
+      try { this.db.close(); } catch { /* already dead: reopening anyway */ }
+      this.db = null;
+    }
+    this.#open();
   }
 
   createProject(project) {

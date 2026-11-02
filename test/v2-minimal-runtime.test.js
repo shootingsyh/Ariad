@@ -2050,3 +2050,15 @@ test('TL routes triaged fix into the issue queue without touching the delivery D
     store.close(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('SQLiteV2Store.reopen recovers from a dead cached handle', (t) => {
+  const { file } = tempDb();
+  const store = new SQLiteV2Store(file);
+  t.after(() => { try { store.close(); } catch { /* already closed */ } });
+  store.createProject({ id: 'reopen-proj', goal: 'g' });
+  assert.equal(store.getProject('reopen-proj')?.id, 'reopen-proj');
+  store.db.close(); // simulate the cached handle dying underneath the store
+  assert.throws(() => store.getProject('reopen-proj'));
+  store.reopen();
+  assert.equal(store.getProject('reopen-proj')?.id, 'reopen-proj');
+});

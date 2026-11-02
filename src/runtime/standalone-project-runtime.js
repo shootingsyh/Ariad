@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import { SQLiteV2Store } from '../v2/sqlite-store.js';
+import { SQLiteV2Store, isDiskIoError } from '../v2/sqlite-store.js';
 import { VersionedTaskStore } from '../v2/versioned-task-store.js';
 import { RoleRegistry } from '../v2/role-registry.js';
 import { ProviderRegistry } from '../v2/provider-registry.js';
@@ -153,6 +153,22 @@ export class StandaloneProjectRuntime {
   }
 
   async tick({ schedule = true, adhocOnly = false } = {}) {
+    try {
+      return await this.#tickOnce({ schedule, adhocOnly });
+    } catch (error) {
+      if (!isDiskIoError(error)) throw error;
+      // A store handle can go stale underneath a healthy WAL file (other
+      // connections cycling the WAL): every operation then fails with
+      // SQLITE_IOERR while a fresh connection works (2026-11-01 signal
+      // incident; 2026-11-02 supervisor.audit -> listTasks). Reopen the
+      // project stores once and retry the tick before the failure is
+      // allowed to park the project.
+      this.store.reopen?.();
+      return await this.#tickOnce({ schedule, adhocOnly });
+    }
+  }
+
+  async #tickOnce({ schedule = true, adhocOnly = false } = {}) {
     const audit = await this.supervisor.audit(this.projectId, { adhocOnly });
     const scheduled = schedule ? await this.scheduler.tick(this.projectId, { adhocOnly }) : { started: [] };
     this.store.checkpoint();

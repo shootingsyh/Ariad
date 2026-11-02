@@ -53,6 +53,10 @@ export class VersionedTaskStore {
     try { this.versioned.close(); } catch { /* already closed */ }
   }
 
+  reopen() {
+    try { this.runtime.reopen(); } finally { this.versioned.reopen(); }
+  }
+
   #effectiveById() {
     return new Map(this.versioned.effectiveTasks().map(t => [t.id, t]));
   }

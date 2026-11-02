@@ -243,3 +243,14 @@ test('effective tasks derive milestoneId from the task-tree parent chain', (t) =
   assert.equal(byId.get('m-child').milestoneId, 'm-child');
   assert.equal(byId.get('m-root').milestoneId, 'm-root');
 });
+
+test('reopen recovers from a dead cached handle', (t) => {
+  const store = makeStore(t);
+  seedV1(store);
+  assert.equal(store.getProdVersion(), 1);
+  store.db.close(); // simulate the cached handle dying underneath the store
+  assert.throws(() => store.getProdVersion());
+  store.reopen();
+  assert.equal(store.getProdVersion(), 1);
+  assert.ok(store.effectiveTasks().length > 0);
+});

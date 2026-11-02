@@ -42,7 +42,15 @@ function fail(code, message, details = undefined) {
 export class VersionedStore {
   constructor(file) {
     if (!file) throw new Error('VersionedStore requires a database file path');
-    this.db = new DatabaseSync(file);
+    this.filePath = file;
+    this.db = null;
+    this.#open();
+  }
+
+  // (Re)opens the connection and (re)applies pragmas and schema; every
+  // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
+  #open() {
+    this.db = new DatabaseSync(this.filePath);
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec(`
@@ -88,6 +96,16 @@ export class VersionedStore {
         updated_at TEXT NOT NULL
       );
     `);
+  }
+
+  // See SQLiteV2Store.reopen: drop a stale cached handle so subsequent
+  // operations run on a fresh connection.
+  reopen() {
+    if (this.db) {
+      try { this.db.close(); } catch { /* already dead: reopening anyway */ }
+      this.db = null;
+    }
+    this.#open();
   }
 
   close() { this.db.close(); }
