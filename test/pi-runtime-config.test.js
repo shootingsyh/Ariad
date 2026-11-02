@@ -284,14 +284,18 @@ test('Pi role result tool preserves Ariad strict role outcomes and structured de
   assert.equal(reviewer.properties.result.type, 'object');
   assert.equal(reviewer.properties.result.properties.interfaceReviews.type, 'array');
 
-  assert.deepEqual(piDeclaredRoleResultToolSchema('developer'), piDeclaredRoleResultToolSchema('tester'));
-  assert.deepEqual(piDeclaredRoleResultToolSchema('tester'), piDeclaredRoleResultToolSchema('reviewer'));
+  // The schema shown to the model is the schema that validates it:
+  // declared === strict for every role. (Regression: a divergent declared
+  // schema once marked tester criteria Optional while validation required
+  // it, looping a live session on ~1000 rejected submissions.)
+  for (const role of ['developer', 'tester', 'reviewer', 'test_engineer', 'artist', 'pm']) {
+    assert.deepEqual(piDeclaredRoleResultToolSchema(role), piRoleResultToolSchema(role));
+  }
   const declared = piDeclaredRoleResultToolSchema('tester');
   assert.equal(declared.properties.result.properties.criteria.type, 'array');
   assert.ok(declared.properties.result.properties.criteria.items.properties.evidenceType);
-  assert.equal(declared.properties.result.properties.interfaceRealizations.type, 'array');
   assert.equal(declared.properties.result.properties.interfaceVerifications.type, 'array');
-  assert.equal(declared.properties.result.properties.interfaceReviews.type, 'array');
+  assert.ok(declared.properties.result.required.includes('criteria'));
 });
 
 

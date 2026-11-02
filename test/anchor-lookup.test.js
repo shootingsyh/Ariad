@@ -100,7 +100,7 @@ test('ariad_anchor_lookup tool issues anchors by symbol search, file+symbol, and
   assert.ok(unknown.unresolved.length >= 1);
 });
 
-test('seal fields are required in delivery result schemas, not optional', () => {
+test('delivery result schemas require the seal fields the role itself owns', () => {
   const anchor = { kind: 'symbol', file: 'src/store.js', symbol: 'createTaskStore', startLine: 2, endLine: 5, fileHash: 'abc123', status: 'VALID' };
   const full = {
     outcome: 'PASS',
@@ -113,11 +113,13 @@ test('seal fields are required in delivery result schemas, not optional', () => 
   };
   const declared = piDeclaredRoleResultToolSchema('developer');
   assert.equal(Check(declared, full), true, 'complete delivery result validates (incl. hash-pinned anchor)');
-  for (const field of ['interfaceRealizations', 'interfaceVerifications', 'interfaceReviews']) {
-    const incomplete = structuredClone(full);
-    delete incomplete.result[field];
-    assert.equal(Check(declared, incomplete), false, `missing ${field} must not validate`);
-  }
+  const missingOwn = structuredClone(full);
+  delete missingOwn.result.interfaceRealizations;
+  assert.equal(Check(declared, missingOwn), false, 'missing interfaceRealizations must not validate for developer');
+  const noForeignSlots = structuredClone(full);
+  delete noForeignSlots.result.interfaceVerifications;
+  delete noForeignSlots.result.interfaceReviews;
+  assert.equal(Check(declared, noForeignSlots), true, 'slots owned by other roles are not required for developer');
   const perRole = piRoleResultToolSchema('developer');
   assert.equal(Check(perRole, full), true);
   const perRoleMissing = structuredClone(full);

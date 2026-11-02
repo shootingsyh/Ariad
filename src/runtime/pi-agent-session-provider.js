@@ -233,53 +233,47 @@ export function piRoleResultToolSchema(role) {
   }, { additionalProperties: false });
 }
 
-const deliveryDeclaredResultSchema = Type.Object({
-  discoveredIssues: Type.Optional(Type.Array(discoveredIssueSchema)),
-  // Seal slots are REQUIRED in every delivery result (empty array when
-  // the role owns no interfaces of that kind): omitting them silently
-  // was the dominant seal failure mode, so the schema refuses it.
-  interfaceRealizations: Type.Array(Type.Object({
-    interfaceId: Type.String({ minLength: 1 }),
-    anchors: Type.Array(anchorSchema),
-  }, { additionalProperties: false })),
-  criteria: Type.Optional(Type.Array(Type.Object({
-    criterionId: Type.String({ minLength: 1 }),
-    status: Type.Union([
-      Type.Literal('SATISFIED'),
-      Type.Literal('FAILED'),
-      Type.Literal('UNVERIFIED'),
-      Type.Literal('BLOCKED'),
-    ]),
-    evidenceType: Type.Union([
-      Type.Literal('runtime'),
-      Type.Literal('static'),
-      Type.Literal('behavioral'),
-      Type.Literal('proxy'),
-      Type.Literal('manual'),
-    ]),
-    evidence: Type.Array(Type.Any()),
-    reason: Type.String({ minLength: 1 }),
-  }, { additionalProperties: false }))),
-  interfaceVerifications: Type.Array(Type.Object({
-    interfaceId: Type.String({ minLength: 1 }),
-    evidence: Type.Array(Type.Any()),
-    anchors: Type.Optional(Type.Array(anchorSchema)),
-  }, { additionalProperties: false })),
-  interfaceReviews: Type.Array(Type.Object({
-    interfaceId: Type.String({ minLength: 1 }),
-    status: Type.Literal('APPROVED'),
-    reason: Type.String({ minLength: 1 }),
-  }, { additionalProperties: false })),
-}, { additionalProperties: false });
-
+// The schema registered as the tool's parameters IS the schema that
+// validates the submission (piRoleResultToolSchema). There is deliberately
+// no second, divergent "declared" schema: on 2026-11-01 a tester session
+// burned ~1000 submissions because the registered schema marked the
+// tester's result.criteria Optional while the validation schema required
+// it - the model followed the contract it was shown and was rejected by a
+// hidden one. Per-role requiredness also replaces the former blanket rule
+// that every delivery result carry all three interface seal slots: a
+// role's result must carry the slots its own schema names (developer:
+// interfaceRealizations; tester: criteria + interfaceVerifications;
+// reviewer: interfaceReviews). Downstream seal validation tolerates the
+// absence of slots a role does not own.
 export function piDeclaredRoleResultToolSchema(role) {
-  if (role === "test_engineer") return piRoleResultToolSchema(role);
-  if (!DELIVERY_ROLES.has(role)) return piRoleResultToolSchema(role);
-  return Type.Object({
-    outcome: Type.Union([Type.Literal('PASS'), Type.Literal('NOT_PASS')]),
-    ...commonFields,
-    result: Type.Optional(deliveryDeclaredResultSchema),
-  }, { additionalProperties: false });
+  return piRoleResultToolSchema(role);
+}
+
+export const MAX_CONSECUTIVE_INVALID_RESULT_SUBMISSIONS = 5;
+
+// Counts consecutive schema-invalid ariad_role_result submissions within
+// one session. A model that cannot repair its submission from the
+// validation detail would otherwise retry forever (observed: ~1000
+// attempts); when the count reaches the limit the tool terminates the
+// session without an accepted result, and the attempt then fails through
+// the normal missing-result path instead of looping.
+export function createResultSubmissionGuard(role, limit = MAX_CONSECUTIVE_INVALID_RESULT_SUBMISSIONS) {
+  const schema = piRoleResultToolSchema(role);
+  let invalidCount = 0;
+  return {
+    validate(params) {
+      if (Check(schema, params)) {
+        invalidCount = 0;
+        return { ok: true, invalidCount };
+      }
+      invalidCount += 1;
+      const detail = [...Errors(schema, params)]
+        .slice(0, 8)
+        .map(error => `${error.path || '/'}: ${error.message}`)
+        .join('; ');
+      return { ok: false, invalidCount, detail, tripped: invalidCount >= limit };
+    },
+  };
 }
 
 const BASH_DEVICE_ALLOWLIST = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr']);
@@ -506,6 +500,7 @@ export async function createDefaultPiRunSession(spec) {
   }
 
   let terminalResult = null;
+  const resultSubmissionGuard = createResultSubmissionGuard(spec.role);
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
     retry: { enabled: true, maxRetries: 2 },
@@ -549,13 +544,16 @@ export async function createDefaultPiRunSession(spec) {
         description: 'Submit the authoritative structured result for this Ariad role. Arguments are strictly validated. Use only the outcome values and result shape allowed by this tool schema. This must be the final action.',
         parameters: piDeclaredRoleResultToolSchema(spec.role),
         async execute(_toolCallId, params) {
-          const strictRoleSchema = piRoleResultToolSchema(spec.role);
-          if (!Check(strictRoleSchema, params)) {
-            const detail = [...Errors(strictRoleSchema, params)]
-              .slice(0, 8)
-              .map(error => `${error.path || '/'}: ${error.message}`)
-              .join('; ');
-            throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}; ${detail}`);
+          const verdict = resultSubmissionGuard.validate(params);
+          if (!verdict.ok) {
+            if (verdict.tripped) {
+              return {
+                content: [{ type: 'text', text: `ARIAD_ROLE_RESULT_CIRCUIT_BREAKER: ${verdict.invalidCount} consecutive schema-invalid submissions of ${RESULT_TOOL} in this session; the session is terminated without an accepted result. Last validation detail: role=${spec.role}; ${verdict.detail}` }],
+                details: { accepted: false, circuitBreaker: true, invalidSubmissions: verdict.invalidCount },
+                terminate: true,
+              };
+            }
+            throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}; ${verdict.detail}`);
           }
           if (spec.role === 'test_engineer' && params.outcome === 'PASS') {
             const required = spec.context?.task?.acceptanceCriterionIds ?? [];
