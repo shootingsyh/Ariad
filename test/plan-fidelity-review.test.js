@@ -153,6 +153,31 @@ test('a human decision on the parked review re-authorizes further revision round
   assert.equal(enqueued.length, 1);
 });
 
+test('PM revision rounds reset after an acceptance: old rounds do not park a fresh draft', () => {
+  const enqueued = [];
+  const fiveOld = Array.from({ length: 5 }, (_, i) => ({ request: { purpose: 'PM_PLAN_REVISION' }, createdAt: '2026-11-01T0' + i + ':00:00.000Z' }));
+  const accepted = { id: 'planner:batch-5-5:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T09:00:00.000Z' }] };
+  const store = { listPlanningRequests: () => fiveOld, listTasks: () => [accepted] };
+  const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
+  const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
+  const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'fix the carriers', reason: 'gaps remain' } } });
+  assert.equal(out.state, 'DONE');
+  assert.equal(enqueued.length, 1);
+});
+
+test('PM revision rounds since the last acceptance still park at the cap', () => {
+  const enqueued = [];
+  const accepted = { id: 'planner:batch-5-5:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T09:00:00.000Z' }] };
+  const fiveNew = Array.from({ length: 5 }, (_, i) => ({ request: { purpose: 'PM_PLAN_REVISION' }, createdAt: '2026-11-01T1' + i + ':00:00.000Z' }));
+  const store = { listPlanningRequests: () => fiveNew, listTasks: () => [accepted] };
+  const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
+  const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
+  const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'still gaps', reason: 'not converged' } } });
+  assert.equal(out.state, 'NEEDS_HUMAN');
+  assert.equal(out.transitionHistory.type, 'PM_HUMAN_DECISION');
+  assert.equal(enqueued.length, 0);
+});
+
 test('PM plan review inherits prior objections and all human decisions as payload data', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-pminherit-'));
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };

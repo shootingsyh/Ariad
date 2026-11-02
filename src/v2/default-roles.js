@@ -22,6 +22,34 @@ export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
 // human decision instead of spawning another full replan.
 export const PM_REVISION_ROUND_CAP = 5;
 
+// Revision rounds are counted per draft lineage: only PM_PLAN_REVISION
+// requests created after the most recent PLAN_ACCEPTED pm review count
+// toward the cap. Counting every revision in project history lets
+// unrelated later batches inherit an exhausted cap (SRPG 2026-11-01:
+// batch-26-27 parked for a human on its FIRST revision request because
+// the initial-planning rounds were still on the tally). A store without
+// task listing falls back to the raw project-wide count.
+export function pmRevisionRoundsSinceAcceptance(store, projectId) {
+  if (typeof store?.listPlanningRequests !== 'function') return 0;
+  const revisions = store.listPlanningRequests(projectId)
+    .filter(item => item.request?.purpose === 'PM_PLAN_REVISION');
+  if (typeof store?.listTasks !== 'function') return revisions.length;
+  let lastAcceptMs = null;
+  for (const t of store.listTasks(projectId) ?? []) {
+    for (const h of t?.history ?? []) {
+      if (h?.type === 'ROLE_RESULT' && h?.role === 'pm' && h?.outcome === 'PLAN_ACCEPTED') {
+        const ms = Date.parse(h.completedAt ?? h.at ?? '');
+        if (Number.isFinite(ms) && (lastAcceptMs === null || ms > lastAcceptMs)) lastAcceptMs = ms;
+      }
+    }
+  }
+  if (lastAcceptMs === null) return revisions.length;
+  return revisions.filter(item => {
+    const ms = Date.parse(item.createdAt ?? '');
+    return Number.isFinite(ms) && ms > lastAcceptMs;
+  }).length;
+}
+
 import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
@@ -438,13 +466,12 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PLAN_REVISION_REQUIRED') {
           // Convergence bound: unbounded PM revision rounds are a system
           // failure mode, not diligence. When the rounds already spent on
-          // this project reach the cap, park for a human decision with
+          // the current draft since its last acceptance reach the cap,
+          // park for a human decision with
           // the latest objections instead of burning another full replan.
           // A human decision recorded on THIS task re-authorizes the
           // loop: the re-review may then enqueue further rounds.
-          const revisionRounds = typeof store?.listPlanningRequests === 'function'
-            ? store.listPlanningRequests(task.projectId).filter(item => item.request?.purpose === 'PM_PLAN_REVISION').length
-            : 0;
+          const revisionRounds = pmRevisionRoundsSinceAcceptance(store, task.projectId);
           const humanReauthorized = (task.history ?? []).some(entry => entry?.type === 'HUMAN_DECISION');
           if (revisionRounds >= PM_REVISION_ROUND_CAP && !humanReauthorized) {
             return {
