@@ -22,7 +22,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project replan <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -58,6 +58,7 @@ function parse(argv) {
   const [scope, action, ...arguments_] = argv;
   let name = null;
   let analysisInstruction = null;
+  let replanInstruction = null;
   let decision = null;
   let roleModels = null;
   let goal = null;
@@ -78,6 +79,7 @@ function parse(argv) {
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
   if (scope === 'notifications' && action === 'ack') name = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'analyze') analysisInstruction = arguments_.shift() ?? null;
+  if (scope === 'project' && action === 'replan') replanInstruction = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'decide') decision = arguments_.shift() ?? null;
   if (scope === 'project' && action === 'issue-open') {
     if (!arguments_.length) throw new Error('issue-open requires JSON');
@@ -386,6 +388,12 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     await ensureAriadDaemon(root);
     const id = 'operator-' + Date.now().toString(36);
     return daemonRequest(root, { action: 'operator_analyze', name, id, instruction: analysisInstruction });
+  }
+  if (scope === 'project' && action === 'replan') {
+    if (!name || !replanInstruction?.trim()) throw new Error('replan requires project name and instruction');
+    await ensureAriadDaemon(root);
+    const id = 'operator-' + Date.now().toString(36);
+    return daemonRequest(root, { action: 'operator_replan', name, id, instruction: replanInstruction });
   }
   if (scope === 'project' && ['create', 'takeover', 'adopt'].includes(action) && effectiveRoleModels != null) {
     // Fail fast at the operator surface: resolve every supplied ref

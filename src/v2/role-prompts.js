@@ -149,6 +149,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
 
   if (purpose === 'PLANNER_DECOMPOSE') {
     const issueRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE');
+    const replanRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'LOCAL_REPLAN');
     return [
       buildTechLeadPrompt({ projectContext: context, schema: null }),
       task.input?.threePass ? 'FEATURE PASS 3 OF 3 - INTERFACES AND TASKS: passes 1 and 2 already authored the functional and non-functional feature tree with documents, and a critic reviewed each pass. Do NOT re-author the feature tree in this pass, except to repair a concrete defect you can name. Your work now: (1) refine every leaf feature contract to final form - exportedInterfaces plus behavior clauses at tester-decidable granularity; (2) author the milestone task tree referencing the features (FEATURE_TASK and INTEGRATION_TASK carry featureId, MILESTONE_TASK never does), including the tasks that build or verify the non-functional features; (3) keep the feature documents, the FEATURES.md index and the Supports declarations consistent with any contract you touch.' : null,
@@ -159,6 +160,11 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         'For a valid issue, route the repair through the issue queue with ariad_insert_fix_task (the fix task runs ahead of milestone work; it does not join the task tree). Only when the fix genuinely changes the planned tree itself, reflect it in the open draft with ariad_tree_patch.',
         'The reporting task is NOT automatically blocked. Do not request a pause: PM alone decides stopping policy.',
         JSON.stringify({ issueRequests }, null, 2),
+      ].join('\n\n') : null,
+      replanRequests.length ? [
+        'LOCAL REPLAN (PROJECT-OWNER DECISION)',
+        'One or more planning requests are project-owner decisions to actualize as a bounded change to the current plan; each request carries its own guidance in its guidance field - follow it. Make the smallest correct change and leave every unrelated part of the plan untouched.',
+        JSON.stringify({ replanRequests }, null, 2),
       ].join('\n\n') : null,
     ].filter(Boolean).join('\n\n');
   }

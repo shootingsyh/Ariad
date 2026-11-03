@@ -321,6 +321,14 @@ export class AriadService {
     return { projectId: project.id, taskId: task.id, taskKind: task.taskKind, state: task.state };
   }
 
+  createOperatorReplan(name, { id, instruction }) {
+    const project = this.manager.status(name);
+    const runtime = this.runtimeFor(project);
+    const enqueued = runtime.enqueueLocalReplan({ id, instruction });
+    this.wake('operator-local-replan');
+    return { projectId: project.id, requestId: enqueued.id, purpose: 'LOCAL_REPLAN', state: enqueued.state };
+  }
+
   openIssue(name, issue) {
     const project = this.manager.status(name);
     const runtime = this.runtimeFor(project);

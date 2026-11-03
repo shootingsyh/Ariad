@@ -265,6 +265,10 @@ export async function serveAriad(root) {
             value = service.createOperatorAnalysis(input.name, {
               id: input.id, instruction: input.instruction,
             });
+          } else if (input.action === 'operator_replan') {
+            value = service.createOperatorReplan(input.name, {
+              id: input.id, instruction: input.instruction,
+            });
           } else if (input.action === 'daemon_shutdown') {
             const active = manager.list().filter(p => p.desiredState === 'RUNNING');
             if (active.length) throw new Error('ARIAD_DAEMON_HAS_ACTIVE_PROJECTS: stop projects first: ' + active.map(p => p.id).join(', '));

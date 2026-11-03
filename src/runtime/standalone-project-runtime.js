@@ -20,6 +20,20 @@ import { CURRENT_STORAGE_VERSION } from '../v2/schema-version.js';
  * primitive role run, while SQLite, scheduling, transitions and result
  * persistence remain in Ariad.
  */
+// Local replan (owner decision, 2026-11-02): the operator entrance that
+// actualizes an owner decision (for example the conclusion of a read-only
+// analyze) as a bounded change to the current plan. Unlike begin-iteration
+// it never stops or archives the project; unlike analyze it is not
+// read-only - it enqueues a planning request that the Tech Lead consumes
+// in the next planning batch under the boundary in LOCAL_REPLAN_GUIDANCE.
+export const LOCAL_REPLAN_GUIDANCE = [
+  'Actualize this project-owner decision as a LOCAL replan: the smallest correct change to the current plan.',
+  'You may amend not-yet-started features and tasks, add bounded new tasks, and remove not-yet-started tasks (a task removed from the spec is obsoleted at promotion).',
+  'Never modify, remove, or re-run DONE work or work in flight (WORKING / RESULT_READY); executed-work protection at promotion is a backstop, not permission to try.',
+  'Do not stop the project, archive its store, or start a new iteration.',
+  'If the decision mandates a change to REQUIREMENTS.md wording, do not edit that document and do not plan against unapproved text: quote the exact proposed replacement wording in your submitted result, so the PM can carry the delta into plan review; the requirements change itself still needs owner approval of the new document hash.',
+].join(' ');
+
 export class StandaloneProjectRuntime {
   constructor({
     project,
@@ -150,6 +164,22 @@ export class StandaloneProjectRuntime {
       return this.store.updateIssue(created.id, { state: 'TRIAGE_PENDING', planningRequestId: requestId });
     }
     return created;
+  }
+
+  enqueueLocalReplan({ id, instruction } = {}) {
+    if (!String(instruction ?? '').trim()) throw new Error('LOCAL_REPLAN_REQUIRES_INSTRUCTION');
+    const requestId = `${this.projectId}:local-replan:${id ?? Date.now()}:${++this.requestSequence}`;
+    return this.store.enqueuePlanningRequest({
+      id: requestId,
+      projectId: this.projectId,
+      request: {
+        purpose: 'LOCAL_REPLAN',
+        requestedBy: 'project-owner',
+        instruction,
+        guidance: LOCAL_REPLAN_GUIDANCE,
+      },
+      context: { sourceKind: 'project-owner-decision' },
+    });
   }
 
   async tick({ schedule = true, adhocOnly = false } = {}) {
