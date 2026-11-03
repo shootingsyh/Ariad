@@ -34,19 +34,29 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
   const revisions = store.listPlanningRequests(projectId)
     .filter(item => item.request?.purpose === 'PM_PLAN_REVISION');
   if (typeof store?.listTasks !== 'function') return revisions.length;
-  let lastAcceptMs = null;
+  let lastResetMs = null;
   for (const t of store.listTasks(projectId) ?? []) {
     for (const h of t?.history ?? []) {
       if (h?.type === 'ROLE_RESULT' && h?.role === 'pm' && h?.outcome === 'PLAN_ACCEPTED') {
         const ms = Date.parse(h.completedAt ?? h.at ?? '');
-        if (Number.isFinite(ms) && (lastAcceptMs === null || ms > lastAcceptMs)) lastAcceptMs = ms;
+        if (Number.isFinite(ms) && (lastResetMs === null || ms > lastResetMs)) lastResetMs = ms;
+      }
+      // An owner decision on a parked PM review re-authorizes revision:
+      // rounds at or before it were already judged by the owner and must
+      // not count toward the cap again. Without this reset the decide
+      // was a one-round token - the next round re-parked at cap+1
+      // (SRPG 2026-11-02: decide on batch-74, batch-75 parked at
+      // "6 rounds").
+      if (h?.type === 'HUMAN_DECISION' && t?.stage === 'pm') {
+        const ms = Date.parse(h.at ?? h.completedAt ?? '');
+        if (Number.isFinite(ms) && (lastResetMs === null || ms > lastResetMs)) lastResetMs = ms;
       }
     }
   }
-  if (lastAcceptMs === null) return revisions.length;
+  if (lastResetMs === null) return revisions.length;
   return revisions.filter(item => {
     const ms = Date.parse(item.createdAt ?? '');
-    return Number.isFinite(ms) && ms > lastAcceptMs;
+    return Number.isFinite(ms) && ms > lastResetMs;
   }).length;
 }
 

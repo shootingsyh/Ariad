@@ -190,8 +190,8 @@ export class VersionedStore {
   discardDraft({ force = false } = {}) {
     const draft = this.getOpenDraft();
     if (!draft) fail('NO_OPEN_DRAFT', 'no draft version is open');
-    if (!force && this.revisionBaseDraftVersion() != null) {
-      fail('DRAFT_IS_REVISION_BASE', `draft v${draft.version} is the rejected plan a pending PM revision must continue; discarding it would re-derive the revision from prod and drop fixes already landed in it - edit this draft in place instead (an operator may force-discard through the debug checkpoint)`);
+    if (!force && this.openDraftIsRevisionLineage()) {
+      fail('DRAFT_IS_REVISION_BASE', `draft v${draft.version} belongs to the lineage of a pending PM plan revision; discarding it would drop the fixes that revision exists to carry - continue the lineage with openRevisionDraft instead (an operator may force-discard through the debug checkpoint)`);
     }
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -201,6 +201,63 @@ export class VersionedStore {
       this.db.exec('COMMIT');
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
     return draft.version;
+  }
+
+  // The open draft is protected while a live PM revision targets its
+  // lineage: either it IS the named rejected draft, or it is the
+  // revision continuation minted from a superseded named draft
+  // (createRevisionDraft below). Discarding either drops the fixes the
+  // revision exists to carry.
+  openDraftIsRevisionLineage() {
+    if (this.revisionBaseDraftVersion() != null) return true;
+    const draft = this.getOpenDraft();
+    if (!draft) return false;
+    try {
+      const table = this.db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'v2_planning_requests'").get();
+      if (!table) return false;
+      const rows = this.db.prepare("SELECT data_json FROM v2_planning_requests WHERE state IN ('PENDING', 'CLAIMED')").all();
+      for (const row of rows) {
+        let parsed = null;
+        try { parsed = JSON.parse(row.data_json); } catch { continue; }
+        const request = parsed?.request ?? null;
+        if (request?.purpose !== 'PM_PLAN_REVISION') continue;
+        const named = this.#versionRow(Number(request?.rejectedDraftVersion));
+        if (named && named.state === 'superseded' && named.base_version === draft.base_version && named.created_at <= draft.created_at) return true;
+      }
+    } catch { return false; }
+    return false;
+  }
+
+  // A PM revision continues the rejected draft's LINEAGE but not its
+  // version identity: mint the next version seeded from the rejected
+  // draft and close the rejected one as 'superseded', its content
+  // retained for diffing and audit (owner directive 2026-11-02: an
+  // update gets a new minor version). Editing the rejected version in
+  // place left every round answering to the same version number, so
+  // PM reports named a draft whose content had already changed
+  // underneath the name (SRPG batch-75: repairs landed in v70 in
+  // place; PM, owner and TL all still called it "v70").
+  createRevisionDraft({ createdBy = null } = {}) {
+    const draft = this.getOpenDraft();
+    if (!draft) fail('NO_OPEN_DRAFT', 'no open draft exists to continue as a new version');
+    if (this.revisionBaseDraftVersion() !== draft.version) {
+      fail('NOT_A_REVISION_BASE', `draft v${draft.version} is not the rejected draft named by a pending PM plan revision - if this batch's revision draft is already open, continue it with applyOps; openRevisionDraft only mints the next version from the named rejected draft`);
+    }
+    const maxRow = this.db.prepare('SELECT MAX(version) AS m FROM spec_versions').get();
+    const version = (maxRow?.m ?? 0) + 1;
+    const ts = nowIso();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare("UPDATE spec_versions SET state = 'superseded' WHERE version = ?").run(draft.version);
+      this.db.prepare('INSERT INTO spec_versions (version, state, base_version, created_by, created_at, requirements_hash) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(version, 'draft', draft.base_version, createdBy, ts, draft.requirements_hash);
+      this.db.prepare('INSERT INTO spec_tasks (version, task_id, spec_json) SELECT ?, task_id, spec_json FROM spec_tasks WHERE version = ?')
+        .run(version, draft.version);
+      this.db.prepare('INSERT INTO spec_contracts (version, contract_id, contract_json) SELECT ?, contract_id, contract_json FROM spec_contracts WHERE version = ?')
+        .run(version, draft.version);
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+    return { ...this.#versionRow(version), supersededVersion: draft.version };
   }
 
   listSpecTasks(version) {

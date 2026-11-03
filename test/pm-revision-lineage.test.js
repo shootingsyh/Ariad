@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { VersionedStore } from '../src/v2/versioned-store.js';
-import { createDefaultV2Roles } from '../src/v2/default-roles.js';
+import { createDefaultV2Roles, pmRevisionRoundsSinceAcceptance } from '../src/v2/default-roles.js';
 import { plannerPrompt } from '../src/v2/role-prompts.js';
 
 // Revision-lineage regression (2026-11-02, SRPG): PM plan revision
@@ -106,8 +106,82 @@ test('the decompose prompt orders continuation of the rejected draft for a PM re
       history: [],
     },
   });
-  assert.match(prompt, /PM PLAN REVISION \(CONTINUE THE REJECTED DRAFT\)/);
+  assert.match(prompt, /PM PLAN REVISION \(CONTINUE THE REJECTED DRAFT AS A NEW VERSION\)/);
+  assert.match(prompt, /openRevisionDraft/);
   assert.match(prompt, /NEVER call discardDraft/);
   assert.match(prompt, /character-for-character/);
   assert.match(prompt, /FAIL trace: clause missing/);
+});
+
+// Second half of the lineage fix (owner directive 2026-11-02: "an
+// update gets a new minor version"): a revision round must not edit
+// the rejected version in place. createRevisionDraft mints the next
+// version seeded from the rejected draft and supersedes the old one,
+// so every round has its own version identity and PM reports name a
+// draft whose content is stable under that name.
+
+test('createRevisionDraft mints the next version from the rejected draft and supersedes it', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-revmint-'));
+  const dbPath = join(dir, 'state2.db');
+  const store = new VersionedStore(dbPath);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  store.initProject('P');
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([{ op: 'upsertContract', contract: CONTRACT }, { op: 'upsertTask', task: TASK_A }]);
+  store.promoteDraft({ approvedBy: 'pm' });
+  const rejected = store.createDraft({ createdBy: 'tl' });
+  seedRevisionBase(dbPath, { version: rejected.version });
+  const minted = store.createRevisionDraft({ createdBy: 'tl' });
+  assert.equal(minted.version, rejected.version + 1);
+  assert.equal(minted.supersededVersion, rejected.version);
+  assert.equal(minted.base_version, rejected.base_version);
+  assert.equal(store.getOpenDraft().version, minted.version);
+  const states = Object.fromEntries(store.listVersions().map(v => [v.version, v.state]));
+  assert.equal(states[rejected.version], 'superseded');
+  assert.equal(states[minted.version], 'draft');
+  // Superseded content is retained; the new draft inherits it whole.
+  assert.deepEqual(store.listSpecTasks(rejected.version).map(x => x.id), ['a-task']);
+  assert.deepEqual(store.listSpecTasks(minted.version).map(x => x.id), ['a-task']);
+});
+
+test('createRevisionDraft refuses when the open draft is not a named revision base', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-revmint-no-'));
+  const dbPath = join(dir, 'state2.db');
+  const store = new VersionedStore(dbPath);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  store.initProject('P');
+  assert.throws(() => store.createRevisionDraft({ createdBy: 'tl' }), (e) => e.code === 'NO_OPEN_DRAFT');
+  store.createDraft({ createdBy: 'tl' });
+  assert.throws(() => store.createRevisionDraft({ createdBy: 'tl' }), (e) => e.code === 'NOT_A_REVISION_BASE');
+});
+
+test('discardDraft stays refused for the minted continuation while the revision is live', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-revguard2-'));
+  const dbPath = join(dir, 'state2.db');
+  const store = new VersionedStore(dbPath);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  store.initProject('P');
+  const rejected = store.createDraft({ createdBy: 'tl' });
+  seedRevisionBase(dbPath, { version: rejected.version, state: 'CLAIMED' });
+  const minted = store.createRevisionDraft({ createdBy: 'tl' });
+  assert.equal(store.getOpenDraft().version, minted.version);
+  assert.throws(() => store.discardDraft(), (e) => e.code === 'DRAFT_IS_REVISION_BASE');
+  execSql(dbPath, "UPDATE v2_planning_requests SET state = 'PLANNED'");
+  store.discardDraft();
+  assert.equal(store.getOpenDraft(), null);
+});
+
+test('the revision round counter resets at an owner decision on a PM task', () => {
+  const req = (createdAt) => ({ createdAt, request: { purpose: 'PM_PLAN_REVISION' } });
+  const store = {
+    listPlanningRequests: () => [req('2026-11-02T00:00:00.000Z'), req('2026-11-02T06:00:00.000Z'), req('2026-11-03T00:00:00.000Z')],
+    listTasks: () => [
+      { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
+      { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
+      { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
+    ],
+  };
+  // Only requests after the owner decision count; the developer-stage
+  // decision must not reset the PM counter.
+  assert.equal(pmRevisionRoundsSinceAcceptance(store, 'P'), 2);
 });
