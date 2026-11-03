@@ -19,6 +19,13 @@ export const ARIAD_DIR_GITIGNORE_LINES = [
   '/memory.db-journal',
   '/pi/',
   '/run_logs/',
+  // Planning persistence (2026-11-03): node snapshots and the spec
+  // export are git-tracked on purpose - they are the repository copy
+  // of the planning state. Only the LIVE store file stays ignored.
+  '!/snapshots/',
+  '!/snapshots/**',
+  '!/spec-export/',
+  '!/spec-export/**',
 ];
 
 export const WORKSPACE_GITIGNORE_LINES = [

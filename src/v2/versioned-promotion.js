@@ -1,4 +1,5 @@
 import { docsRegimeAdopted, requirementsStatus } from './project-docs.js';
+import { persistPlanningState } from './planning-persistence.js';
 
 // PM promotion for DB-first projects, de-materialized (2026-10-31):
 // promotion is a pointer flip, not a copy. The draft version becomes
@@ -44,7 +45,15 @@ export function promoteVersionedDraft({ versionedStore, workspace = null, approv
   }
   const diff = versionedStore.diffDraft();
   const flip = versionedStore.promoteDraft({ approvedBy });
+  // Planning persistence (2026-11-03): a promotion - including the
+  // promotion that accepts a planning/replan batch - persists a store
+  // snapshot + prod spec export into the project repo (best-effort,
+  // never blocks the promotion; see planning-persistence.js).
+  const persistence = workspace
+    ? persistPlanningState({ workspace, db: versionedStore.db, versionedStore, node: 'promotion' })
+    : null;
   return {
+    persistence,
     created: diff.tasks.added,
     updated: diff.tasks.changed,
     obsoleted: diff.tasks.removed,

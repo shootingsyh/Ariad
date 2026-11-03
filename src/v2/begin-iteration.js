@@ -8,6 +8,7 @@ import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { writeInventoryArtifact } from './inventory-artifact.js';
 import { approvalsPath } from './project-docs.js';
 import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../runtime/workspace-ignore.js';
+import { persistPlanningState } from './planning-persistence.js';
 
 // begin-iteration: the system-side head of an iteration (replan) cycle.
 // It archives the project's current store, creates a fresh DB-first
@@ -225,11 +226,24 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     try { manager.writeManifest(name, { executionState: 'IDLE' }); } catch { /* no manifest to reset */ }
   }
 
+  // Planning persistence (2026-11-03): the fresh store starts life
+  // with a snapshot + spec export in the project repo (best-effort).
+  let persistence = null;
+  try {
+    const fresh = new VersionedStore(newDbPath);
+    try {
+      persistence = persistPlanningState({ workspace: paths.workspace, db: fresh.db, versionedStore: fresh, node: 'begin-iteration', now });
+    } finally { fresh.close(); }
+  } catch (e) {
+    persistence = { node: 'begin-iteration', errors: [`persistence failed: ${e?.message ?? e}`] };
+  }
+
   return {
     project: paths.id,
     projectId: project.id,
     previousDb: basename(oldDbPath),
     newDbFile,
+    persistence,
     archiveDir: archive.dir,
     archiveSha256: archive.manifest.sha256,
     inventory,
