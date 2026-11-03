@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { AriadProjectManager } from '../src/runtime/project-manager.js';
@@ -124,4 +125,102 @@ test('discards an open TL spec draft only with discardPlanning', () => {
   assert.equal(check.listVersions()[0].state, 'discarded');
   check.close();
   assert.deepEqual(counts(workspace), { tasks: 0, requests: 0 });
+});
+
+function makeProjectWithoutStore({ desiredState = 'STOPPED' } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'ariad-dbgfresh-'));
+  const projectsRoot = join(root, 'projects');
+  const workspace = join(root, 'ws');
+  mkdirSync(join(workspace, '.ariad', 'docs'), { recursive: true });
+  mkdirSync(join(projectsRoot, 'demo'), { recursive: true });
+  writeFileSync(join(projectsRoot, 'demo', 'project-ref.json'), `${JSON.stringify({ id: 'demo', workspace }, null, 2)}\n`);
+  writeFileSync(join(workspace, '.ariad', 'project.json'), `${JSON.stringify({
+    id: 'demo', desiredState, executionState: 'RUNNING', workspace,
+    goal: 'Build the thing', spec: 'Build the thing, exactly', mode: 'TAKEOVER',
+    roleModels: { pm: 'x/y' }, projectVersion: 3, activeVersion: 4,
+  }, null, 2)}\n`);
+  writeFileSync(join(workspace, '.ariad', 'docs', 'REQUIREMENTS.md'), DOC);
+  return { root, projectsRoot, workspace };
+}
+
+test('without --fresh-store a missing store still fails DEBUG_CHECKPOINT_DB_MISSING', () => {
+  const { projectsRoot, workspace } = makeProjectWithoutStore();
+  archiveApproval(workspace);
+  const manager = new AriadProjectManager({ projectsRoot });
+  assert.throws(() => restoreRequirementsCheckpoint({ manager, name: 'demo', expectedSha256: SHA }), /DEBUG_CHECKPOINT_DB_MISSING/);
+  assert.equal(existsSync(join(workspace, '.ariad', 'state.db')), false);
+});
+
+test('--fresh-store without a prior approval fails and builds no store', () => {
+  const { projectsRoot, workspace } = makeProjectWithoutStore();
+  archiveApproval(workspace, 'deadbeef'.repeat(8));
+  const manager = new AriadProjectManager({ projectsRoot });
+  assert.throws(
+    () => restoreRequirementsCheckpoint({ manager, name: 'demo', expectedSha256: SHA, freshStore: true }),
+    /DEBUG_CHECKPOINT_NO_PRIOR_APPROVAL/,
+  );
+  assert.equal(existsSync(join(workspace, '.ariad', 'state.db')), false);
+  const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
+  assert.equal(ref.dbFile, undefined);
+});
+
+test('--fresh-store builds the canonical store and restores the checkpoint', () => {
+  const { projectsRoot, workspace } = makeProjectWithoutStore();
+  archiveApproval(workspace);
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = restoreRequirementsCheckpoint({
+    manager, name: 'demo', expectedSha256: SHA, freshStore: true,
+    now: new Date('2026-11-03T00:00:00.000Z'),
+  });
+  assert.equal(report.freshStore, true);
+  assert.equal(report.dbFile, 'state.db');
+  const dbPath = join(workspace, '.ariad', 'state.db');
+  assert.ok(existsSync(dbPath));
+  const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
+  assert.equal(ref.dbFile, 'state.db');
+  assert.equal(manager.resolveProjectPaths('demo').db, dbPath);
+  const store = new SQLiteV2Store(dbPath);
+  const project = store.getProject('demo');
+  assert.equal(project.versionedTree, true);
+  assert.equal(project.unifiedTaskCompilerVersion, 1);
+  assert.equal(project.deliveryEnabled, false);
+  assert.equal(project.desiredState, 'STOPPED');
+  assert.equal(project.executionState, 'IDLE');
+  assert.equal(project.goal, 'Build the thing');
+  assert.equal(project.spec, 'Build the thing, exactly');
+  assert.equal(project.mode, 'TAKEOVER');
+  assert.equal(project.workspace, workspace);
+  assert.deepEqual(project.roleModels, { pm: 'x/y' });
+  store.close();
+  const raw = new DatabaseSync(dbPath, { readOnly: true });
+  const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(r => r.name);
+  raw.close();
+  for (const table of ['spec_versions', 'spec_tasks', 'spec_contracts']) assert.ok(tables.includes(table), table);
+  const versioned = new VersionedStore(dbPath);
+  assert.equal(versioned.projectId, 'demo');
+  assert.deepEqual(versioned.listVersions(), []);
+  versioned.close();
+  const status = requirementsStatus(workspace);
+  assert.equal(status.approved, true);
+  assert.equal(status.approval.approvedBy, 'human-cli');
+  assert.equal(status.approval.restoredBy, 'debug-cli');
+  const audit = readFileSync(join(workspace, '.ariad', 'debug-ops.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(audit.at(-1).op, 'debug-restore-requirements');
+  assert.equal(audit.at(-1).project, 'demo');
+  assert.deepEqual(counts(workspace), { tasks: 0, requests: 0 });
+});
+
+test('--fresh-store with an existing store takes the original path and does not rebuild', () => {
+  const { projectsRoot, workspace, store } = makeProject();
+  addBatch(store, { id: 'requirements:demo', batchId: 'batch-1-1', purpose: 'REQUIREMENTS_AUTHORING', stage: 'pm', state: 'NEEDS_HUMAN' });
+  archiveApproval(workspace);
+  store.close();
+  const manager = new AriadProjectManager({ projectsRoot });
+  const report = restoreRequirementsCheckpoint({ manager, name: 'demo', expectedSha256: SHA, freshStore: true });
+  assert.equal(report.freshStore, undefined);
+  assert.equal(report.dbFile, 'state.db');
+  assert.deepEqual(report.removedRequests, ['requirements:demo']);
+  assert.deepEqual(counts(workspace), { tasks: 0, requests: 0 });
+  const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
+  assert.equal(ref.dbFile, undefined);
 });

@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { approvalsPath, readApprovals, requirementsPath, requirementsStatus } from './project-docs.js';
 import { DELIVERY_KINDS, VersionedStore } from './versioned-store.js';
+import { createFreshProjectStore, FRESH_STORE_DB_FILE } from './fresh-store.js';
 
 // DEBUG tool (operator surface, not a product flow): restore the
 // checkpoint "requirements human-approved, TL planning not started".
@@ -21,12 +22,24 @@ import { DELIVERY_KINDS, VersionedStore } from './versioned-store.js';
 // the project stays STOPPED, and a later `project start` takes the
 // already-existing ensureRunning branch straight to INITIAL_PLAN.
 // Every run is appended to .ariad/debug-ops.jsonl for audit.
+//
+// --fresh-store: when the store file is missing entirely, it is
+// rebuilt first (the shared fresh-store.js construction, seeded from
+// the workspace manifest and pinned at the fixed state.db name), but
+// only after the pure file-side checks have all passed - the
+// requirements document exists, its hash matches --sha when given, a
+// prior human approval for that exact hash is on record, and the
+// manifest says STOPPED. Any failed check leaves no store behind.
 function fail(code, message) {
   const err = new Error(`${code}: ${message}`);
   err.code = code;
   throw err;
 }
 const parse = (s) => { try { return JSON.parse(s); } catch { return {}; } };
+function manifestDesiredState({ manager, name, paths }) {
+  try { return manager.status(name)?.desiredState; } catch { /* fall through to the raw manifest */ }
+  try { return parse(readFileSync(paths.manifest, 'utf8')).desiredState; } catch { return undefined; }
+}
 const sha256File = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
 export function findPriorRequirementsApproval(workspace, sha256) {
@@ -47,10 +60,11 @@ export function findPriorRequirementsApproval(workspace, sha256) {
   return null;
 }
 
-export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = null, discardPlanning = false, now = new Date() } = {}) {
+export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = null, discardPlanning = false, freshStore = false, now = new Date() } = {}) {
   if (!manager) fail('DEBUG_CHECKPOINT_MANAGER_REQUIRED', 'an AriadProjectManager is required');
   const paths = manager.resolveProjectPaths(name);
-  if (!existsSync(paths.db)) fail('DEBUG_CHECKPOINT_DB_MISSING', `no store at ${paths.db}`);
+  const storeMissing = !existsSync(paths.db);
+  if (storeMissing && !freshStore) fail('DEBUG_CHECKPOINT_DB_MISSING', `no store at ${paths.db}`);
   const docPath = requirementsPath(paths.workspace);
   if (!existsSync(docPath)) fail('DEBUG_CHECKPOINT_DOC_MISSING', 'REQUIREMENTS.md does not exist');
   const sha256 = sha256File(docPath);
@@ -62,7 +76,23 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
     fail('DEBUG_CHECKPOINT_NO_PRIOR_APPROVAL', `no human approval for hash ${sha256} exists in the live approvals file or any pre-iterate archive; this debug command restores a past approval, it cannot create one`);
   }
 
-  const db = new DatabaseSync(paths.db);
+  // --fresh-store rebuild: every pure file-side check above (doc,
+  // hash, prior approval) has passed by this point, so a failure from
+  // here on is a guard on the freshly built store, not a reason to
+  // have left the store unbuilt. The manifest STOPPED check is also
+  // file-side and runs before anything is created.
+  let fresh = null;
+  let dbPath = paths.db;
+  if (storeMissing) {
+    const desiredState = manifestDesiredState({ manager, name, paths });
+    if (desiredState !== 'STOPPED') {
+      fail('DEBUG_CHECKPOINT_NOT_STOPPED', `project desiredState is ${desiredState ?? 'unset'}; stop the project first`);
+    }
+    fresh = createFreshProjectStore({ paths, dbFile: FRESH_STORE_DB_FILE });
+    dbPath = fresh.dbPath;
+  }
+
+  const db = new DatabaseSync(dbPath);
   let removedTasks = [];
   let draftVersion = null;
   let removedRequests = [];
@@ -118,7 +148,7 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
   } finally { db.close(); }
 
   if (draftVersion != null) {
-    const versioned = new VersionedStore(paths.db);
+    const versioned = new VersionedStore(dbPath);
     try { versioned.discardDraft({ force: true }); } finally { versioned.close(); }
   }
 
@@ -131,7 +161,8 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
   mkdirSync(paths.ariad, { recursive: true });
   appendFileSync(join(paths.ariad, 'debug-ops.jsonl'), `${JSON.stringify(audit)}\n`);
   return {
-    project: paths.id, dbFile: paths.db.split('/').pop(), desiredState: 'STOPPED',
+    project: paths.id, dbFile: basename(dbPath), desiredState: 'STOPPED',
+    ...(fresh ? { freshStore: true } : {}),
     requirements: { sha256, approvalRestoredFrom: prior.source, approvedBy: prior.record.approvedBy ?? null, approvedAt: prior.record.approvedAt ?? null },
     removedRequests, removedTasks, discardedDraftVersion: draftVersion,
     nextStep: 'project start enqueues INITIAL_PLAN only (requirements stage already finalized at this checkpoint)',

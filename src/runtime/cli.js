@@ -22,7 +22,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project replan <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project replan <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--fresh-store] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -74,6 +74,7 @@ function parse(argv) {
   let dbFile = null;
   let expectedSha256 = null;
   let discardPlanning = false;
+  let freshStore = false;
   let upToSeq = null;
   let unreadOnly = false;
   if (scope === 'project' && action !== 'list') name = arguments_.shift() ?? null;
@@ -149,6 +150,10 @@ function parse(argv) {
       discardPlanning = true;
       continue;
     }
+    if (rest[i] === '--fresh-store') {
+      freshStore = true;
+      continue;
+    }
     if (rest[i] === '--up-to') {
       if (!rest[i + 1]) throw new Error('--up-to requires a sequence number');
       upToSeq = Number(rest[++i]);
@@ -166,7 +171,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning, freshStore };
 }
 
 
@@ -440,7 +445,7 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
 }
 
 export function runAriadCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, slotId, dbFile, expectedSha256, discardPlanning } = parse(argv);
+  const { scope, action, name, projectsRoot, slotId, dbFile, expectedSha256, discardPlanning, freshStore } = parse(argv);
 
   if (scope === 'setup') {
     return {
@@ -479,7 +484,7 @@ export function runAriadCli(argv = process.argv.slice(2)) {
   }
 
   if (action === 'debug-restore-requirements') {
-    const report = restoreRequirementsCheckpoint({ manager, name, expectedSha256, discardPlanning });
+    const report = restoreRequirementsCheckpoint({ manager, name, expectedSha256, discardPlanning, freshStore });
     return { action, project: name, checkpoint: report };
   }
 
