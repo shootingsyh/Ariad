@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { openGuardedDatabase } from './db-open-guard.js';
 import { createHash } from 'node:crypto';
 
 // Versioned spec store (DB-first architecture, 2026-10-31):
@@ -50,7 +51,9 @@ export class VersionedStore {
   // (Re)opens the connection and (re)applies pragmas and schema; every
   // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
   #open() {
-    this.db = new DatabaseSync(this.filePath);
+    // Same guarded open as the runtime store (db-open-guard.js): an
+    // existing empty/corrupt file hard-fails instead of initializing.
+    this.db = openGuardedDatabase(this.filePath);
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec(`

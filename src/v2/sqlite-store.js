@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { openGuardedDatabase } from './db-open-guard.js';
 import { createHash } from 'node:crypto';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
@@ -124,7 +125,10 @@ export class SQLiteV2Store {
   // (Re)opens the connection and (re)applies pragmas and schema; every
   // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
   #open() {
-    this.db = new DatabaseSync(this.filePath);
+    // Guarded open: an existing 0-byte or integrity-failing store is a
+    // hard failure (STORE_DB_EMPTY / STORE_DB_CORRUPT), never a silent
+    // fresh initialization (2026-11-03 incident). See db-open-guard.js.
+    this.db = openGuardedDatabase(this.filePath);
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec(`

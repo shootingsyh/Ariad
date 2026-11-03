@@ -3,6 +3,7 @@ import { adhocResultTransition } from './adhoc-result-executor.js';
 import { milestoneResultTransition } from './milestone-result-executor.js';
 import { persistRoleExecutorTransition } from './role-executor-persistence.js';
 import { isAdhocAnalysis, TASK_KINDS } from './control-task-policy.js';
+import { integrityErrorOf } from './db-open-guard.js';
 
 // Result advancement is dispatched by the task's single type field. Kinds
 // with a dedicated executor machine resolve through it; every other kind
@@ -56,6 +57,24 @@ export class RoleResultDispatcher {
   }
 
   async advanceResults(projectId, { adhocOnly = false } = {}) {
+    // Result-acceptance integrity gate (2026-11-03 incident): a role
+    // result was accepted and booked PLANNED against a store the same
+    // session had just destroyed. Before accepting ANY result for this
+    // project, verify the store's integrity; a damaged store refuses
+    // acceptance (results stay RESULT_READY, nothing is booked) and an
+    // incident is recorded instead.
+    const integrityError = integrityErrorOf(this.store?.db);
+    if (integrityError) {
+      try {
+        this.store?.recordIncident?.({
+          projectId,
+          taskId: null,
+          kind: 'RESULT_ACCEPTANCE_REFUSED_DB_CORRUPT',
+          error: integrityError,
+        });
+      } catch { /* the store may be too damaged to hold the record */ }
+      return;
+    }
     const table = this.#dispatchTable();
     for (const task of this.store.listTasks(projectId)) {
       if (task.state !== 'RESULT_READY') continue;
