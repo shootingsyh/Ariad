@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { SQLiteV2Store } from './sqlite-store.js';
+import { createFreshProjectStore } from './fresh-store.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { writeInventoryArtifact } from './inventory-artifact.js';
 import { approvalsPath } from './project-docs.js';
@@ -176,17 +176,14 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
 
   let inventory;
   try {
-    const runtime = new SQLiteV2Store(newDbPath);
-    try {
-      runtime.createProject({
-        ...project, versionedTree: true, unifiedTaskCompilerVersion: 1,
-        desiredState: 'STOPPED', executionState: 'IDLE', deliveryEnabled: false,
-      });
-    } finally { runtime.db.close(); }
-    const versioned = new VersionedStore(newDbPath);
-    try {
-      if (!versioned.projectId) versioned.initProject(project.id);
-    } finally { versioned.close(); }
+    // Shared fresh-store construction (fresh-store.js): the project
+    // row is seeded from the archived generation's row and the spec
+    // tables are created, exactly as the debug checkpoint's
+    // --fresh-store path builds them. The pointer is NOT pinned here:
+    // begin-iteration pins it last, after the inventory is written,
+    // so a failure above leaves the project resolving to the old
+    // (archived) state rather than a half-built store.
+    createFreshProjectStore({ paths, project, dbFile: newDbFile, pinPointer: false });
     // The inventory is documentation, not a migration: its failure must
     // not block the cutover (the archive still holds the full record),
     // so a failure is reported in the result instead of thrown.
