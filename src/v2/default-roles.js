@@ -348,6 +348,51 @@ export function createDefaultV2Roles({
             },
           };
         }
+        if (task.input?.purpose === 'LOCAL_REPLAN_REQUIREMENTS') {
+          // Local replan, requirements side (owner decision, 2026-11-02):
+          // the PM revises REQUIREMENTS.md FIRST when an owner decision
+          // mandates a wording change; decomposition depends on this task,
+          // so it starts only once the document stands human-approved.
+          // When the decision mandates no wording change, the PM confirms
+          // that and the gate closes at once.
+          const proj = store.getProject?.(task.projectId);
+          const ws = proj?.workspace;
+          const approved = ws ? requirementsStatus(ws).approved : false;
+          const noChange = result.result?.noRequirementsChange === true;
+          if (result.outcome === 'PLAN_ACCEPTED' && (approved || noChange)) {
+            return {
+              state: 'DONE',
+              transitionHistory: {
+                type: 'LOCAL_REPLAN_REQUIREMENTS_CLEARED', role: 'pm',
+                summary: noChange && !approved
+                  ? 'PM confirms the owner decision mandates no REQUIREMENTS.md wording change; decomposition may proceed.'
+                  : 'REQUIREMENTS.md stands human-approved for this local replan; decomposition may proceed.',
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          if (result.outcome === 'NEEDS_HUMAN' && pmEscalationHasQuestions(result)) {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'PM_HUMAN_DECISION', role: 'pm',
+                summary: result.summary ?? result.result?.reason ?? 'PM has prepared the requirements revision for human review.',
+                questions: result.result?.questions ?? [],
+                guidance: result.result?.guidance ?? null,
+                at: new Date().toISOString(),
+              },
+            };
+          }
+          return {
+            state: 'NEEDS_HUMAN',
+            transitionHistory: {
+              type: 'PM_HUMAN_DECISION', role: 'pm',
+              summary: 'The local replan mandates a REQUIREMENTS.md change that is not yet human-approved, so decomposition cannot start.',
+              questions: ['Have the PM finalize the REQUIREMENTS.md revision for this local replan, then review it and approve it with ariad project approve-requirements.'],
+              at: new Date().toISOString(),
+            },
+          };
+        }
         if (scopeOfTask(task) === 'delivery') {
           if (result.outcome === 'PRODUCT_DECISION') {
             const decision = result.result?.decision ?? result.result?.reason ?? result.summary ?? null;
@@ -1287,6 +1332,26 @@ export function createDefaultV2Roles({
     pm: {
       sessionPolicy: 'persistent',
       prepare: ({ project, task }) => {
+        if (task.input?.purpose === 'LOCAL_REPLAN_REQUIREMENTS') {
+          const reqStatus = requirementsStatus(project.workspace);
+          const humanDecision = [...(task.history ?? [])].reverse()
+            .find(entry => entry?.type === 'HUMAN_DECISION') ?? null;
+          const prompt = [
+            'You are Ariad\'s PM handling the requirements side of a LOCAL REPLAN. This task runs before any decomposition: planning for this batch proceeds only from requirements that stand in their final, human-approved form.',
+            'Read the project-owner decisions in the payload requests. Decide whether any of them mandates a change to the wording of .ariad/docs/REQUIREMENTS.md.',
+            'If one does: revise the document in place with the smallest edit that carries the decision - keep its structure and every settled statement that still stands, and keep the document high-level. Then submit NEEDS_HUMAN with result.questions asking the human to review the edited .ariad/docs/REQUIREMENTS.md and approve it (ariad project approve-requirements ' + project.id + '). Never submit PLAN_ACCEPTED for a wording change the human has not yet approved.',
+            'If the task history already contains a HUMAN_DECISION and the payload\'s requirementsStatus shows the document approved, submit PLAN_ACCEPTED to release decomposition.',
+            'If no decision in the batch mandates a requirements wording change, submit PLAN_ACCEPTED with result.noRequirementsChange=true.',
+            'Do not decompose, do not author or edit plan tasks, and do not edit any document other than .ariad/docs/REQUIREMENTS.md in this task.',
+            JSON.stringify({
+              project: { id: project.id, mode: project.mode ?? 'NEW', workspace: project.workspace },
+              requirementsStatus: reqStatus,
+              humanDecision,
+              requests: task.input?.requests ?? [],
+            }, null, 2),
+          ].join('\n\n');
+          return prepareLlm(task, prompt, { sessionKey: project.pmBinding ?? project.id });
+        }
         if (task.input?.purpose === 'REQUIREMENTS_AUTHORING') {
           const reqStatus = requirementsStatus(project.workspace);
           const humanDecision = [...(task.history ?? [])].reverse()

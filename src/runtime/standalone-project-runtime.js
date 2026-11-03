@@ -31,7 +31,7 @@ export const LOCAL_REPLAN_GUIDANCE = [
   'You may amend not-yet-started features and tasks, add bounded new tasks, and remove not-yet-started tasks (a task removed from the spec is obsoleted at promotion).',
   'Never modify, remove, or re-run DONE work or work in flight (WORKING / RESULT_READY); executed-work protection at promotion is a backstop, not permission to try.',
   'Do not stop the project, archive its store, or start a new iteration.',
-  'If the decision mandates a change to REQUIREMENTS.md wording, do not edit that document and do not plan against unapproved text: quote the exact proposed replacement wording in your submitted result, so the PM can carry the delta into plan review; the requirements change itself still needs owner approval of the new document hash.',
+  'If the decision mandates a change to REQUIREMENTS.md wording, the PM revises the document and obtains owner approval of the new hash before decomposition (the batch opens with that PM task); do not edit the document yourself, and do not plan against unapproved text.',
 ].join(' ');
 
 export class StandaloneProjectRuntime {

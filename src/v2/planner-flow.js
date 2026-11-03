@@ -39,6 +39,7 @@ export function plannerFlowTasks(batchId, requests) {
 
   const ids = {
     decompose: taskId(batchId, 'decompose'),
+    requirementsDelta: taskId(batchId, 'requirements-delta'),
     dependencies: taskId(batchId, 'dependencies'),
     featuresFunctional: taskId(batchId, 'features-functional'),
     validateFunctional: taskId(batchId, 'validate-functional'),
@@ -132,12 +133,34 @@ export function plannerFlowTasks(batchId, requests) {
     },
   ];
 
+  // Local replan (owner decision, 2026-11-02): when a batch carries an
+  // owner decision, the PM settles the requirements side FIRST - revising
+  // REQUIREMENTS.md and obtaining the owner's approval when the decision
+  // mandates a wording change. Decomposition depends on that task, so the
+  // Tech Lead only ever plans from requirements in their approved form.
+  const hasLocalReplan = requests.some(item => item?.request?.purpose === 'LOCAL_REPLAN');
+  const requirementsGateTasks = hasLocalReplan ? [{
+    id: ids.requirementsDelta,
+    stage: 'pm',
+    ...common,
+    input: {
+      ...common.input,
+      purpose: 'LOCAL_REPLAN_REQUIREMENTS',
+      requests: structuredClone(requests),
+    },
+  }] : [];
+  const decomposeDependsOn = [
+    ...(threePass ? [ids.repairNonfunctional] : []),
+    ...(hasLocalReplan ? [ids.requirementsDelta] : []),
+  ];
+
   return [
     ...featurePassTasks,
+    ...requirementsGateTasks,
     {
       id: ids.decompose,
       stage: 'tech_lead',
-      ...(threePass ? { dependsOn: [ids.repairNonfunctional] } : {}),
+      ...(decomposeDependsOn.length ? { dependsOn: decomposeDependsOn } : {}),
       ...common,
       input: {
         ...common.input,
