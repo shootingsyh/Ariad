@@ -4,7 +4,7 @@ import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
-import { developerTaskPolicyFailure } from './developer-task-policy.js';
+import { developerTaskPolicyFailure, isApprovalGateTask } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isAdhocAnalysis, queueOfTask, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
 function topologicalOrder(tasks) {
@@ -105,6 +105,11 @@ export class V2Scheduler {
     for (const { key, graph } of partitionExecutionGraphs(schedulableTasks)) {
       for (const task of graph.tasks) {
         if (!graph.isRunnable(task) || task.taskKind === TASK_KINDS.WORKFLOW) continue;
+        // Approval gates are control-plane authorization records, never
+        // developer work: the developer-task policy refuses them, and one
+        // gate in a plan must not fail the whole tick and block unrelated
+        // delivery work. Skip them like workflow parents above.
+        if (task.stage === 'developer' && isApprovalGateTask(task)) continue;
         candidates.push({
           task,
           graphKey: key,

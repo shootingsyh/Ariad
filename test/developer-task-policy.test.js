@@ -34,24 +34,26 @@ test('delivery compiler rejects V2 approval gate rather than silently assigning 
     }),/DEVELOPER_REQUIRES_MILESTONE/);
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
-test('scheduler fails closed without starting approval gate or ad-hoc developer work',async()=>{
+test('scheduler skips approval gates and still fails closed on milestone-less developer work',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ariad-dev-policy-'));
   const store=new SQLiteV2Store(join(dir,'state.db'));
   let calls=0;
   try{
     store.createProject({id:'P-runtime',deliveryEnabled:true,deliveryPlanVersion:1});
     store.createTask({ taskKind: 'MILESTONE_TASK',id:'admin',projectId:'P-runtime',scope:'delivery',stage:'developer',milestoneId:'V2.GATE'});
+    store.createTask({ taskKind: 'MILESTONE_TASK',id:'real-work',projectId:'P-runtime',scope:'delivery',stage:'developer',milestoneId:'V2.1'});
     const roles=new RoleRegistry();
     roles.register('developer',{prepare:()=>({provider:'fake'}),transition:()=>({state:'DONE'})});
     const providers=new ProviderRegistry();
     providers.register({id:'fake',start:async()=>{calls++;return{externalId:'fake'};},poll:async()=>({state:'RUNNING'}),cancel:async()=>{}});
     const scheduler=new V2Scheduler({store,roles,providers,resources:new ResourcePool({})});
-    await assert.rejects(()=>scheduler.tick('P-runtime'),/DEVELOPER_CANNOT_EXECUTE_APPROVAL_GATE/);
-    assert.equal(calls,0);
+    await scheduler.tick('P-runtime');
+    assert.equal(calls,1);
     assert.equal(store.getTask('admin').state,'READY');
+    assert.equal(store.getTask('real-work').state,'WORKING');
     store.updateTask('admin',store.getTask('admin').version,{milestoneId:null});
     await assert.rejects(()=>scheduler.tick('P-runtime'),/DEVELOPER_REQUIRES_MILESTONE/);
-    assert.equal(calls,0);
+    assert.equal(calls,1);
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
 
