@@ -166,7 +166,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning };
 }
 
 
@@ -264,7 +264,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly } = parse(argv);
   // Install-level role defaults (ariad config guide / assistant /
   // dashboard) are the create fallback: an operator who configured
   // defaults should not have to repeat them on every create. Explicit
