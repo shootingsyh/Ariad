@@ -1514,7 +1514,7 @@ test('unified Project Debugger routes a system-blocked oversized task to Tech Le
   }
 });
 
-test('unified Project Debugger hands true runtime failures to a human without reclassifying the business task', () => {
+test('unified Project Debugger hands operator-required runtime failures to a human without reclassifying the business task', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
@@ -1550,6 +1550,7 @@ test('unified Project Debugger hands true runtime failures to a human without re
         result: {
           reason: 'The runtime denied the required tool before business verification could run.',
           guidance: 'Repair the host tool permission.',
+          operatorRequired: true,
           evidence: ['TOOL_PERMISSION_DENIED'],
           affectedComponent: 'openclaw-runtime',
         },
@@ -1560,6 +1561,61 @@ test('unified Project Debugger hands true runtime failures to a human without re
     assert.equal(next.transitionHistory.role, 'project_debugger');
     assert.equal(next.transitionHistory.blockedTaskId, 'T-runtime');
     assert.equal(store.getTask('T-runtime').state, 'SYSTEM_BLOCKED');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unified Project Debugger auto-carries a runtime diagnosis into a developer work order', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-runtime-carry' });
+    store.createTask({ taskKind: 'MILESTONE_TASK',
+      id: 'T-carry',
+      projectId: 'P-runtime-carry',
+      scope: 'delivery',
+      stage: 'tester',
+      state: 'SYSTEM_BLOCKED',
+    });
+    store.createTask({ taskKind: 'DIAGNOSTIC',
+      id: 'debug:T-carry:1',
+      projectId: 'P-runtime-carry',
+      scope: 'control',
+      flowId: 'debug:T-carry:1',
+      stage: 'project_debugger',
+      state: 'READY',
+      input: { blockedTaskId: 'T-carry', systemIncident: { incidents: [{ failure: 'EVIDENCE_PIPELINE_STALE' }] } },
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const task = store.getTask('debug:T-carry:1');
+    const next = definitions.project_debugger.transition({
+      task,
+      result: {
+        outcome: 'SYSTEM_RUNTIME_FAILURE',
+        summary: 'Rendered evidence is stale; re-run the render matrix and recapture.',
+        result: {
+          reason: 'The evidence pipeline did not re-run after the art integration.',
+          guidance: 'Re-run the render matrix and recapture the UX evidence.',
+          evidence: ['EVIDENCE_PIPELINE_STALE'],
+          affectedComponent: 'evidence-pipeline',
+        },
+      },
+    });
+    assert.equal(next.state, 'DONE');
+    const blocked = store.getTask('T-carry');
+    assert.equal(blocked.state, 'READY');
+    assert.equal(blocked.stage, 'developer');
+    const routeEntry = (blocked.history ?? []).at(-1);
+    assert.equal(routeEntry.type, 'DEBUGGER_ROUTE');
+    assert.equal(routeEntry.autoCarried, true);
+    assert.equal(routeEntry.guidance, 'Re-run the render matrix and recapture the UX evidence.');
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -16,6 +16,38 @@ function failureCount(task) {
   return count;
 }
 
+// Owner rule (2026-11-03): a project_debugger diagnosis is carried into a
+// developer work order automatically - execution continues with the
+// diagnosis as guidance instead of parking at a human gate. The carry is
+// bounded: after DEBUGGER_AUTO_CARRY_LIMIT consecutive auto-carries for a
+// task (reset by a PASS or a human decision) the diagnosis parks as
+// NEEDS_HUMAN, matching the standing rule that only a system that stays
+// broken after retries, or a requirements problem, calls the human. A
+// debugger may also set result.operatorRequired=true when the fix is
+// genuinely outside project roles' power (operator must personally repair
+// infrastructure, credentials, or model/provider policy); that parks
+// immediately.
+export const DEBUGGER_AUTO_CARRY_LIMIT = 2;
+
+export function debuggerAutoCarries(task) {
+  let count = 0;
+  const history = task?.history ?? [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (!entry) continue;
+    if (entry.type === 'HUMAN_DECISION') break;
+    if (entry.type === 'ROLE_RESULT' && entry.outcome === 'PASS') break;
+    if (entry.type === 'DEBUGGER_ROUTE' && entry.autoCarried === true) count++;
+  }
+  return count;
+}
+
+export function debuggerAutoCarry(task, result) {
+  return ['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(result?.outcome)
+    && result?.result?.operatorRequired !== true
+    && debuggerAutoCarries(task) < DEBUGGER_AUTO_CARRY_LIMIT;
+}
+
 function consecutiveRoleFailures(task, role) {
   let count = 0;
   for (let i = (task.history ?? []).length - 1; i >= 0; i--) {
@@ -98,10 +130,11 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
           transitionHistory: blockedTaskId ? null : history,
         };
       }
+      const autoCarry = debuggerAutoCarry(task, result);
       if (outcome === 'WRONG_IMPLEMENTATION_APPROACH') signal = 'REPAIRED';
       else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
-      else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = 'NEEDS_HUMAN';
+      else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = autoCarry ? 'REPAIRED' : 'NEEDS_HUMAN';
       else signal = 'ROUTE_PM';
       const transition = executorTransitionFromResult(diagnostic
         ? { ...task, taskKind: TASK_KINDS.MILESTONE_TASK } : task, signal);
@@ -112,7 +145,14 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
         patch: { stage: route, state: 'READY', execution: null },
         history: {
           type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
-          diagnosis: outcome ?? 'UNKNOWN', guidance: result.result?.guidance ?? null,
+          diagnosis: outcome ?? 'UNKNOWN',
+          guidance: result.result?.guidance ?? (autoCarry ? (result.summary ?? result.result?.reason ?? null) : null),
+          ...(autoCarry ? {
+            autoCarried: true,
+            summary: result.summary ?? result.result?.reason ?? null,
+            evidence: result.result?.evidence ?? [],
+            affectedComponent: result.result?.affectedComponent ?? null,
+          } : {}),
           source: 'system_block_diagnosis', at: new Date().toISOString(),
         },
       } : null;
@@ -128,8 +168,15 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
           at: new Date().toISOString(),
         } : {
           type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
-          diagnosis: outcome ?? 'UNKNOWN', guidance: result.result?.guidance ?? null,
+          diagnosis: outcome ?? 'UNKNOWN',
+          guidance: result.result?.guidance ?? (autoCarry ? (result.summary ?? result.result?.reason ?? null) : null),
           ...(route === 'pm' ? { summary: result.summary ?? result.result?.reason ?? null } : {}),
+          ...(autoCarry ? {
+            autoCarried: true,
+            summary: result.summary ?? result.result?.reason ?? null,
+            evidence: result.result?.evidence ?? [],
+            affectedComponent: result.result?.affectedComponent ?? null,
+          } : {}),
           at: new Date().toISOString(),
         },
       };

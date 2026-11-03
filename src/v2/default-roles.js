@@ -29,6 +29,38 @@ export const PM_REVISION_ROUND_CAP = 5;
 // batch-26-27 parked for a human on its FIRST revision request because
 // the initial-planning rounds were still on the tally). A store without
 // task listing falls back to the raw project-wide count.
+// Owner rule (2026-11-03): a project_debugger diagnosis is carried into a
+// developer work order automatically - execution continues with the
+// diagnosis as guidance instead of parking at a human gate. The carry is
+// bounded: after DEBUGGER_AUTO_CARRY_LIMIT consecutive auto-carries for a
+// task (reset by a PASS or a human decision) the diagnosis parks as
+// NEEDS_HUMAN, matching the standing rule that only a system that stays
+// broken after retries, or a requirements problem, calls the human. A
+// debugger may also set result.operatorRequired=true when the fix is
+// genuinely outside project roles' power (operator must personally repair
+// infrastructure, credentials, or model/provider policy); that parks
+// immediately.
+export const DEBUGGER_AUTO_CARRY_LIMIT = 2;
+
+export function debuggerAutoCarries(task) {
+  let count = 0;
+  const history = task?.history ?? [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (!entry) continue;
+    if (entry.type === 'HUMAN_DECISION') break;
+    if (entry.type === 'ROLE_RESULT' && entry.outcome === 'PASS') break;
+    if (entry.type === 'DEBUGGER_ROUTE' && entry.autoCarried === true) count++;
+  }
+  return count;
+}
+
+export function debuggerAutoCarry(task, result) {
+  return ['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(result?.outcome)
+    && result?.result?.operatorRequired !== true
+    && debuggerAutoCarries(task) < DEBUGGER_AUTO_CARRY_LIMIT;
+}
+
 export function pmRevisionRoundsSinceAcceptance(store, projectId) {
   if (typeof store?.listPlanningRequests !== 'function') return 0;
   const revisions = store.listPlanningRequests(projectId)
@@ -1070,6 +1102,7 @@ export function createDefaultV2Roles({
           'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
           'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+          'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
           JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
         ].join('\n\n') : task.input?.previousGateFailure ? [
           "You are Ariad's Project Debugger for a planning gate failure.",
@@ -1175,6 +1208,26 @@ export function createDefaultV2Roles({
           };
         }
         if (result.outcome === 'SYSTEM_RUNTIME_FAILURE' || result.outcome === 'MODEL_CAPABILITY_MISMATCH') {
+          if (debuggerAutoCarry(blocked ?? task, result)) {
+            const history = {
+              type: 'DEBUGGER_ROUTE',
+              role: 'project_debugger',
+              route: 'developer',
+              diagnosis: result.outcome,
+              autoCarried: true,
+              summary: result.summary ?? result.result?.reason ?? null,
+              guidance: result.result?.guidance ?? result.summary ?? result.result?.reason ?? null,
+              evidence: result.result?.evidence ?? [],
+              affectedComponent: result.result?.affectedComponent ?? null,
+              ...(blocked ? { source: 'system_block_diagnosis' } : {}),
+              at: new Date().toISOString(),
+            };
+            if (blocked) {
+              routeBlocked({ stage: 'developer', state: 'READY', execution: null }, history);
+              return { state: 'DONE' };
+            }
+            return { stage: 'developer', state: 'READY', transitionHistory: history };
+          }
           return {
             state: 'NEEDS_HUMAN',
             transitionHistory: {

@@ -17,10 +17,36 @@ test('debugger asset diagnosis routes to artist', () => {
 test('debugger requirement diagnosis routes to PM', () => {
   assert.equal(milestoneResultTransition(task(), { outcome: 'REQUIREMENT_DECISION_REQUIRED' }).stage, 'pm');
 });
-test('debugger runtime failure requires human intervention', () => {
-  const next = milestoneResultTransition(task(), { outcome: 'MODEL_CAPABILITY_MISMATCH' });
+test('debugger runtime diagnosis is auto-carried into a developer work order', () => {
+  const next = milestoneResultTransition(task(), {
+    outcome: 'MODEL_CAPABILITY_MISMATCH', summary: 'Evidence pipeline stale; re-run the render matrix.',
+  });
+  assert.equal(next.state, 'READY');
+  assert.equal(next.stage, 'developer');
+  assert.equal(next.transitionHistory.type, 'DEBUGGER_ROUTE');
+  assert.equal(next.transitionHistory.route, 'developer');
+  assert.equal(next.transitionHistory.autoCarried, true);
+  assert.equal(next.transitionHistory.guidance, 'Evidence pipeline stale; re-run the render matrix.');
+});
+test('debugger runtime diagnosis parks when the debugger marks it operator-required', () => {
+  const next = milestoneResultTransition(task(), {
+    outcome: 'SYSTEM_RUNTIME_FAILURE',
+    summary: 'Host tool permission is broken.',
+    result: { operatorRequired: true },
+  });
   assert.equal(next.state, 'NEEDS_HUMAN');
   assert.equal(next.transitionHistory.type, 'SYSTEM_DIAGNOSIS');
+});
+test('debugger runtime diagnosis parks after the auto-carry limit, human decision resets it', () => {
+  const carried = { type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'developer', autoCarried: true };
+  const exhausted = { ...task(), history: [carried, carried] };
+  const next = milestoneResultTransition(exhausted, { outcome: 'SYSTEM_RUNTIME_FAILURE', summary: 'Still broken.' });
+  assert.equal(next.state, 'NEEDS_HUMAN');
+  assert.equal(next.transitionHistory.type, 'SYSTEM_DIAGNOSIS');
+  const decided = { ...task(), history: [carried, carried, { type: 'HUMAN_DECISION', decision: 'proceed' }] };
+  const afterDecision = milestoneResultTransition(decided, { outcome: 'SYSTEM_RUNTIME_FAILURE', summary: 'Still broken.' });
+  assert.equal(afterDecision.stage, 'developer');
+  assert.equal(afterDecision.transitionHistory.autoCarried, true);
 });
 test('unrecognized debugger diagnosis routes to PM', () => {
   const next = milestoneResultTransition(task(), { outcome: 'SOMETHING_NEW' });
