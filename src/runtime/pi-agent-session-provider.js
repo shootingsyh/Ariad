@@ -320,6 +320,31 @@ export function bashConfinementViolation(command, workspace) {
 }
 
 export function deliveryToolPolicy(role, toolName, context = {}) {
+  // Ariad state protection (2026-11-03 incident): a role session used the
+  // built-in edit/write tools on .ariad/state2.db as a binary file and
+  // zeroed the project's planning store, then reported the damage as a
+  // successful repair. Built-in file tools must never read or write the
+  // project's SQLite stores (any *.db / *.db-wal / *.db-shm /
+  // *.db-journal under .ariad/), and the append-only audit logs
+  // (debug-ops.jsonl, control-actions.jsonl) are write-protected for
+  // role sessions. Reads of the audit logs stay allowed.
+  if (toolName === 'read' || toolName === 'edit' || toolName === 'write') {
+    const target = context.input?.path ?? context.input?.file_path ?? context.input?.filePath;
+    if (typeof target === 'string' && target && context.workspace) {
+      const abs = resolve(context.workspace, target);
+      const rel = relative(context.workspace, abs).split('\\').join('/');
+      const base = rel.split('/').pop() ?? '';
+      const inAriad = rel === '.ariad' || rel.startsWith('.ariad/');
+      const isDbFile = /\.db(?:-wal|-shm|-journal)?$/i.test(base);
+      if (inAriad && isDbFile) {
+        return { block: true, reason: `PROTECTED_ARIAD_STATE: ${toolName} on ${rel} is denied - Ariad state databases under .ariad/ are never file-tool targets (a direct binary edit corrupted a project store on 2026-11-03). Use the Ariad tools (ariad_tree_patch for the spec tree) instead.` };
+      }
+      const isAuditLog = base === 'debug-ops.jsonl' || base === 'control-actions.jsonl';
+      if (inAriad && isAuditLog && toolName !== 'read') {
+        return { block: true, reason: `PROTECTED_ARIAD_AUDIT: ${toolName} on ${rel} is denied - .ariad/${base} is an append-only audit log written only by the Ariad system, never by a role session.` };
+      }
+    }
+  }
   if ((role === 'reviewer' || role === 'ux_reviewer') && REVIEWER_MUTATING_TOOLS.has(toolName)) {
     return { block: true, reason: `Ariad reviewer runtime policy denies mutating tool: ${toolName}` };
   }

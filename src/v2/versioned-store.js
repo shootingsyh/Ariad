@@ -395,13 +395,20 @@ export class VersionedStore {
   applyTreeOps(ops) {
     const draft = this.getOpenDraft();
     if (!draft) fail('NO_OPEN_DRAFT', 'no draft version is open');
-    if (!Array.isArray(ops) || !ops.length) fail('EMPTY_OPS', 'ops must be a non-empty array');
+    if (typeof ops === 'string') {
+      // Same string-encoded-ops tolerance as the tool layer: parse it
+      // here too so direct store callers get the same behaviour.
+      try { ops = JSON.parse(ops); } catch {
+        fail('OPS_NOT_ARRAY', 'ops must be an array of operation objects like [{"op":"upsertTask","task":{...}}]; the string passed was not valid JSON');
+      }
+    }
+    if (!Array.isArray(ops) || !ops.length) fail('OPS_NOT_ARRAY', 'ops must be a non-empty ARRAY of operation objects like [{"op":"upsertTask","task":{"id":"...","taskKind":"FEATURE_TASK","title":"..."}}] - pass the array itself, not a JSON string or a single object');
     const version = draft.version;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       ops.forEach((op, index) => {
         const at = `ops[${index}]`;
-        if (!op || typeof op !== 'object' || !op.op) fail('BAD_OP', `${at}: op.op is required`);
+        if (!op || typeof op !== 'object' || !op.op) fail('BAD_OP', `${at}: op.op is required - each ops entry must be an object like {"op":"upsertTask","task":{...}}, {"op":"removeTask","taskId":"..."}, {"op":"upsertContract","contract":{...}} or {"op":"removeContract","contractId":"..."}`);
         if (op.op === 'upsertTask') {
           const task = op.task ?? {};
           const { id, ...spec } = task;

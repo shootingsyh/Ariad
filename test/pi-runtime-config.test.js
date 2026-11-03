@@ -98,6 +98,32 @@ test('delivery roles share one tool declaration set while reviewer mutations are
   assert.equal(adhoc.includes('write'), false);
 });
 
+test('file tools can never touch Ariad state databases or audit logs (2026-11-03 incident)', () => {
+  const ws = { workspace: '/tmp/ariad-proj' };
+  for (const tool of ['read', 'edit', 'write']) {
+    for (const target of ['.ariad/state.db', '.ariad/state2.db', '.ariad/state.db-wal', '.ariad/state.db-shm', '.ariad/memory.db', '.ariad/notifications.db-journal']) {
+      const res = deliveryToolPolicy('tech_lead', tool, { ...ws, input: { path: target } });
+      assert.equal(res?.block, true, `${tool} ${target}`);
+      assert.match(res.reason, /PROTECTED_ARIAD_STATE/);
+    }
+  }
+  // absolute paths into the workspace are judged by their resolved form
+  assert.equal(deliveryToolPolicy('developer', 'write', { ...ws, input: { path: '/tmp/ariad-proj/.ariad/state.db' } })?.block, true);
+  // audit logs: writes denied for every role, reads allowed
+  for (const target of ['.ariad/debug-ops.jsonl', '.ariad/control-actions.jsonl']) {
+    for (const tool of ['edit', 'write']) {
+      const res = deliveryToolPolicy('developer', tool, { ...ws, input: { path: target } });
+      assert.equal(res?.block, true, `${tool} ${target}`);
+      assert.match(res.reason, /PROTECTED_ARIAD_AUDIT/);
+    }
+    assert.equal(deliveryToolPolicy('developer', 'read', { ...ws, input: { path: target } }), null);
+  }
+  // ordinary project files and non-.ariad databases stay untouched by this guard
+  assert.equal(deliveryToolPolicy('developer', 'write', { ...ws, input: { path: 'src/main.gd' } }), null);
+  assert.equal(deliveryToolPolicy('developer', 'edit', { ...ws, input: { path: '.ariad/docs/REQUIREMENTS.md' } }), null);
+  assert.equal(deliveryToolPolicy('developer', 'read', { ...ws, input: { path: 'data/save.db' } }), null);
+});
+
 test('planning roles get minimal tool tiers and bash stays confined to the workspace', () => {
   const tl = piToolsForTask({ role: 'tech_lead', taskKind: 'PLANNING_TASK' });
   assert.equal(tl.includes('write'), true, 'tech lead authors artifact files');

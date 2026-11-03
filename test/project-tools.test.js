@@ -538,9 +538,20 @@ test('ariad_tree_patch writes the draft into the runtime store file and surfaces
       { op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', featureId: 'feature.ab', title: 'Leaf' } },
     ] });
     assert.equal(applied.details.applied, 2);
+    // 2026-11-03: models encode ops as a JSON string - it must be parsed,
+    // not rejected with a bare BAD_OP loop.
+    const appliedFromString = await tool.execute('c4', { action: 'applyOps', ops: JSON.stringify([
+      { op: 'upsertTask', task: { id: 'a.c', taskKind: 'FEATURE_TASK', featureId: 'feature.ab', title: 'Leaf from string' } },
+    ]) });
+    assert.equal(appliedFromString.details.applied, 1);
+    const badString = await tool.execute('c5', { action: 'applyOps', ops: '[not json' });
+    assert.equal(badString.details.error, 'OPS_NOT_ARRAY');
+    assert.match(badString.details.message, /ARRAY of operation objects/);
+    const singleObject = await tool.execute('c6', { action: 'applyOps', ops: JSON.stringify({ op: 'removeTask', taskId: 'a.c' }) });
+    assert.equal(singleObject.details.error, 'OPS_NOT_ARRAY');
     const { VersionedStore } = await import('../src/v2/versioned-store.js');
     const vs = new VersionedStore(storeFile);
-    assert.equal(vs.listSpecTasks(1).length, 1);
+    assert.equal(vs.listSpecTasks(1).length, 2); // a.b (array ops) + a.c (string-encoded ops)
     vs.close();
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });

@@ -35,6 +35,15 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
   const resolveFile = file => {
     const path = resolve(workspace, file);
     if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
+    // Ariad state protection (2026-11-03 incident): Ariad's own file
+    // tools must never resolve a project state database under .ariad/
+    // (any *.db / *.db-wal / *.db-shm / *.db-journal). A role session
+    // edited one as a binary file and zeroed the planning store.
+    const rel = relative(workspace, path).split('\\').join('/');
+    const base = rel.split('/').pop() ?? '';
+    if ((rel === '.ariad' || rel.startsWith('.ariad/')) && /\.db(?:-wal|-shm|-journal)?$/i.test(base)) {
+      throw new Error(`PROTECTED_ARIAD_STATE: ${rel} is an Ariad state database and is never a file-tool target; use the Ariad tools (ariad_tree_patch for the spec tree) instead`);
+    }
     return path;
   };
   let lsp = null;
@@ -205,14 +214,29 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
     'Tech Lead only. DB-first planning: author the task tree and boundary contracts in the open DRAFT version of the project database (state2.db) with structured operations; nothing here touches the production version or the running delivery queue. Actions: "openDraft" (start a new draft copied from prod; fails if one is already open), "openRevisionDraft" (PM revision batches only: mint the NEXT version from the open PM-rejected draft - the rejected version is closed as superseded with its content retained and a new draft seeded from it becomes the open draft; fails with NOT_A_REVISION_BASE when the open draft is not the named revision base, e.g. the revision draft for this batch is already open - then continue it with applyOps), "applyOps" (ops: {op:"upsertTask",task} / {op:"removeTask",taskId} / {op:"upsertContract",contract} / {op:"removeContract",contractId}; the whole draft is validated after each call - dependency existence and acyclicity, contract behavior clauses, interface references - and a rejected call changes nothing), "diff" (draft vs prod change summary for review), "discardDraft" (refused while the open draft belongs to a pending PM plan revision lineage - continue that lineage with openRevisionDraft instead). Promotion to prod is PM-only and never happens through this tool. Task spec (upsertTask): {id, taskKind - required, one of "FEATURE_TASK"|"INTEGRATION_TASK"|"MILESTONE_TASK", title - required, parentId (optional parent task id; the task tree hierarchy uses parentId - there is no milestoneId field), dependsOn (optional array of task ids), interfaceIds (optional array of exported interface ids), featureId (FEATURE_TASK: required - the feature-tree contract this task implements; INTEGRATION_TASK: the feature it verifies; MILESTONE_TASK: never set), intent, acceptanceCriteria, testStrategy}. Contract spec (upsertContract): contracts form the FEATURE tree, the reference source of truth: {id, nodeType - required, "feature", parentId (optional parent feature contract id; builds the feature tree), behavior (non-empty array of clause strings, unless integrationScenarios carry acceptanceCriteria), exportedInterfaces, integrationScenarios}. There are no milestone contracts: milestones live only in the task tree. A rejected call returns {error, message, details} listing every validation problem - fix the named fields and resubmit; never resubmit an unchanged payload.',
     Type.Object({
       action: Type.Union([Type.Literal('openDraft'), Type.Literal('openRevisionDraft'), Type.Literal('applyOps'), Type.Literal('diff'), Type.Literal('discardDraft')]),
-      ops: Type.Optional(Type.Array(Type.Any(), { minItems: 1, maxItems: 200 })),
+      ops: Type.Optional(Type.Union([Type.Array(Type.Any(), { minItems: 1, maxItems: 200 }), Type.String()])),
     }, { additionalProperties: false }), async (params) => {
       if (taskContext?.role !== 'tech_lead') throw new Error('TREE_PATCH_REQUIRES_TECH_LEAD');
       const store = openTreeStore();
       try {
         if (params.action === 'openDraft') { const v = store.createDraft({ createdBy: 'tech_lead' }); return { draftVersion: v.version, baseVersion: v.base_version }; }
         if (params.action === 'openRevisionDraft') { const v = store.createRevisionDraft({ createdBy: 'tech_lead' }); return { draftVersion: v.version, baseVersion: v.base_version, supersededVersion: v.supersededVersion }; }
-        if (params.action === 'applyOps') return store.applyTreeOps(params.ops ?? []);
+        if (params.action === 'applyOps') {
+          // Models repeatedly encode ops as a JSON string instead of an
+          // array (the 2026-11-03 TL repair loop spun on BAD_OP for
+          // exactly this). Accept the string form; on failure teach the
+          // expected shape instead of returning a bare BAD_OP.
+          let ops = params.ops;
+          if (typeof ops === 'string') {
+            try { ops = JSON.parse(ops); } catch {
+              return { error: 'OPS_NOT_ARRAY', message: 'applyOps expects ops to be an ARRAY of operation objects, e.g. [{"op":"upsertTask","task":{"id":"...","taskKind":"FEATURE_TASK","title":"..."}}]. The string you passed is not valid JSON - pass the array itself, not a quoted string.', details: null };
+            }
+          }
+          if (!Array.isArray(ops)) {
+            return { error: 'OPS_NOT_ARRAY', message: 'applyOps expects ops to be an ARRAY of operation objects, e.g. [{"op":"upsertTask","task":{"id":"...","taskKind":"FEATURE_TASK","title":"..."}}] or {"op":"removeTask","taskId":"..."}. Pass the array itself, not a JSON string or a single object.', details: null };
+          }
+          return store.applyTreeOps(ops);
+        }
         if (params.action === 'diff') return store.diffDraft();
         if (params.action === 'discardDraft') return { discarded: store.discardDraft() };
         throw new Error(`unknown action ${params.action}`);
