@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { createDefaultV2Roles, pmRevisionRoundsSinceAcceptance } from '../src/v2/default-roles.js';
-import { plannerPrompt } from '../src/v2/role-prompts.js';
+import { plannerPrompt, criticPrompt } from '../src/v2/role-prompts.js';
 
 // Revision-lineage regression (2026-11-02, SRPG): PM plan revision
 // rounds never converged - five consecutive PLAN_REVISION_REQUIRED
@@ -184,4 +184,77 @@ test('the revision round counter resets at an owner decision on a PM task', () =
   // Only requests after the owner decision count; the developer-stage
   // decision must not reset the PM counter.
   assert.equal(pmRevisionRoundsSinceAcceptance(store, 'P'), 2);
+});
+
+// Third half of the lineage fix (SRPG batches 76-80, 2026-11-03): the
+// decompose pass kept landing the verbatim clauses, then the critic /
+// repair passes rewrote them away - critic-1 in batch-80 caught
+// malformed shells contradicting the decompose claims, and repair-1
+// "fixed" the shells by rewording the ACs into English-only text,
+// while the critic never saw the PM fidelity trace at all (its batch
+// payload stripped revision requests to purpose/title). So the
+// verbatim clauses now survive the whole chain: decompose verifies
+// after writing, and the critic and repair prompts carry the PM
+// revision review with a protected-strings rule.
+
+test('the decompose prompt orders verify-after-write for quoted clauses', () => {
+  const prompt = plannerPrompt({
+    project: { id: 'P', mode: 'NEW' },
+    task: {
+      id: 'planner:batch-9-9:decompose', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead',
+      input: {
+        purpose: 'PLANNER_DECOMPOSE',
+        requests: [{
+          id: 'P:replan:x:1',
+          request: { purpose: 'PM_PLAN_REVISION', reason: 'FAIL trace: clause missing', guidance: 'paste it verbatim', rejectedDraftVersion: 70 },
+          context: { sourceKind: 'pm-plan-revision' },
+        }],
+      },
+      history: [],
+    },
+  });
+  assert.match(prompt, /re-read the tasks you touched/);
+  assert.match(prompt, /a summary claiming a fix is not evidence/);
+});
+
+test('the repair prompt protects quoted clauses in a PM revision batch', () => {
+  const store = { listTasks: () => [] };
+  const prompt = plannerPrompt({
+    store,
+    project: { id: 'P', mode: 'NEW' },
+    task: {
+      id: 'planner:batch-9-9:repair-1', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead',
+      input: {
+        purpose: 'PLANNER_REPAIR',
+        requests: [{
+          id: 'P:replan:x:1',
+          request: { purpose: 'PM_PLAN_REVISION', reason: 'FAIL trace: clause missing', guidance: 'paste it verbatim', rejectedDraftVersion: 70 },
+          context: { sourceKind: 'pm-plan-revision' },
+        }],
+      },
+      dependsOn: [],
+      history: [],
+    },
+  });
+  assert.match(prompt, /VERBATIM-PROTECTED STRINGS/);
+  assert.match(prompt, /never let a critic finding rewrite them/);
+  assert.match(prompt, /FAIL trace: clause missing/);
+});
+
+test('the critic prompt carries the PM revision review and the protected rule', () => {
+  const store = {
+    listPlanningRequests: () => [{
+      batchId: 'batch-9-9',
+      request: { purpose: 'PM_PLAN_REVISION', reason: 'FAIL trace: clause missing', guidance: 'paste it verbatim', rejectedDraftVersion: 70 },
+    }],
+    listTasks: () => [],
+  };
+  const prompt = criticPrompt({
+    store,
+    project: { id: 'P' },
+    task: { id: 'planner:batch-9-9:critic-1', projectId: 'P', flowId: 'planner:batch-9-9', input: { purpose: 'PLANNER_CRITIC', planningBatchId: 'batch-9-9' }, dependsOn: [] },
+  });
+  assert.match(prompt, /VERBATIM FIDELITY/);
+  assert.match(prompt, /FAIL trace: clause missing/);
+  assert.match(prompt, /paste it verbatim/);
 });

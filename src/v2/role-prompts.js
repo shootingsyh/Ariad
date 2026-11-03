@@ -170,7 +170,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
       revisionRequests.length ? [
         'PM PLAN REVISION (CONTINUE THE REJECTED DRAFT AS A NEW VERSION)',
         'The PM rejected the previous plan draft; the requests below carry its full review: reason is the fidelity trace naming exactly which clauses failed, guidance is the repair list. The rejected draft (see rejectedDraftVersion in each request) is still open in the database. FIRST call ariad_tree_patch openRevisionDraft: it closes the rejected draft as superseded (content retained) and opens the NEXT version seeded from it - that new version is your working draft; apply the repairs to it with applyOps. NEVER call discardDraft and NEVER open a fresh draft from prod in this batch - a fresh draft is re-derived from prod and silently drops every fix already landed in the rejected draft, which is exactly what made earlier revision rounds fail to converge. If openRevisionDraft answers NOT_A_REVISION_BASE, the revision draft for this batch is already open: continue that one with applyOps.',
-        'Apply only the listed repairs. Every part of the draft the PM did not flag stays exactly as it is. Where the PM quotes required wording, paste it character-for-character - never paraphrase, merge, or reword a quoted clause.',
+        'Apply only the listed repairs. Every part of the draft the PM did not flag stays exactly as it is. Where the PM quotes required wording, paste it character-for-character - never paraphrase, merge, or reword a quoted clause. After applyOps, re-read the tasks you touched from the draft and confirm every quoted clause is present character-for-character before submitting: a summary claiming a fix is not evidence, the draft text is. If a clause is missing or altered after your writes, fix it in this pass before submitting.',
         JSON.stringify({ revisionRequests }, null, 2),
       ].join('\n\n') : null,
     ].filter(Boolean).join('\n\n');
@@ -203,13 +203,19 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
 
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
+    const repairRevisionRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'PM_PLAN_REVISION');
     return [
       'You are Ariad\'s Tech Lead repair pass.',
       'Repair only the affected parts of the open database draft using the critic findings below, with ariad_tree_patch applyOps. Do not rewrite or re-emit the complete project plan.',
       'Do not add unrelated scope.',
+      repairRevisionRequests.length ? [
+        'VERBATIM-PROTECTED STRINGS (PM PLAN REVISION)',
+        'This batch continues a PM-rejected draft. The PM revision review in this batch requests quotes required wording and lists (acceptance clauses, media and deliverable names) character-for-character. Those quoted strings are protected: never paraphrase, merge, split, rename, or drop them, and never let a critic finding rewrite them. Repair structural defects around them - malformed shells, missing parents, broken hierarchy - never through them. If a critic finding asks you to change a quoted clause or list, treat that finding as out of scope and leave the quoted text untouched.',
+        JSON.stringify({ revisionRequests: repairRevisionRequests }, null, 2),
+      ].join('\n\n') : null,
       JSON.stringify({ context, critic: previous }, null, 2),
       buildTechLeadPrompt({ projectContext: context, schema: null }),
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
   }
 
   return buildTechLeadPrompt({ projectContext: context, schema: null });
@@ -252,6 +258,11 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       purpose: item.request?.purpose ?? null,
       issueId: item.request?.issueId ?? null,
       title: item.request?.issue?.title ?? null,
+      ...(item.request?.purpose === 'PM_PLAN_REVISION' ? {
+        rejectedDraftVersion: item.request?.rejectedDraftVersion ?? null,
+        reason: item.request?.reason ?? null,
+        guidance: item.request?.guidance ?? null,
+      } : {}),
     }));
     const siblings = flowTasks(store, task);
     techLeadResults = ['features-functional', 'features-nonfunctional', 'decompose', 'dependencies'].map(name => {
@@ -273,6 +284,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
     'FIDELITY TO THE APPROVED REQUIREMENTS: read .ariad/docs/REQUIREMENTS.md - above all its delta - and compare it against the full draft in the validation plan payload. Return ISSUES when a delta addition or change is carried only by verification or regression tasks with no production task and no concrete existing evidence; when an enumerated requirement is diluted into generic acceptance language or covered only in part (a list covered only in part is not covered); or when a visual or media gap has no concrete art task with named deliverables, or visual tasks lack ux.required. The gap-analysis disposition in the Tech Lead result is part of what you review: a missing disposition, or one that rests on asset names and counts alone for enumerated qualities, is an ISSUE. Granularity is part of fidelity: a disposition or acceptance that accounts at section-headline level while the document enumerates individual clauses inside a paragraph (action sets, expression or scar variants, effects lists) is an ISSUE.',
+    'VERBATIM FIDELITY: when this batch continues a PM-rejected draft, the PM revision review in batchRequests quotes required wording and lists character-for-character. Those quoted strings are protected: a draft that paraphrases, merges, or drops them fails fidelity even if its structure is clean, and a finding that asks for them to be reworded is out of scope. A critic CLEAN on a draft missing a quoted clause is a missed defect.',
     'SUPPORTS DECLARATIONS: every feature in the draft must declare what it supports, in its feature document - a root functional feature names the requirements section or direction it supports, a child feature names its parent feature, and a non-functional feature names the functional feature it serves. A feature whose document declares no support target, or a non-functional feature serving no named functional feature, is an ISSUE.',
     'Submit the critic result through the provider\'s structured role-result mechanism when available. Use outcome CLEAN|MINOR_ONLY|ISSUES and include result.issues plus result.summary. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
     'On round 3, use MINOR_ONLY when only non-blocking polish remains.',
