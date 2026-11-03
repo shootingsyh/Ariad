@@ -266,7 +266,7 @@ export function createDefaultV2Roles({
             }
             let draftOpen = false;
             try {
-              const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state2.db'));
+              const vs = new VersionedStore(store.filePath ?? join(proj.workspace, '.ariad', 'state.db'));
               try { draftOpen = Boolean(vs.getOpenDraft()); } finally { vs.close(); }
             } catch { draftOpen = false; }
             if (!draftOpen) {
@@ -518,7 +518,7 @@ export function createDefaultV2Roles({
           let vlanded;
           let versionedStore = null;
           try {
-            versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state2.db'));
+            versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state.db'));
             vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace });
           } catch (error) {
             if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
@@ -582,7 +582,7 @@ export function createDefaultV2Roles({
           let rejectedDraftVersion = null;
           try {
             const revisionProject = store.getProject?.(task.projectId);
-            const draftDbPath = store.filePath ?? (revisionProject?.workspace ? join(revisionProject.workspace, '.ariad', 'state2.db') : null);
+            const draftDbPath = store.filePath ?? (revisionProject?.workspace ? join(revisionProject.workspace, '.ariad', 'state.db') : null);
             if (draftDbPath && existsSync(draftDbPath)) {
               const vs = new VersionedStore(draftDbPath);
               try { rejectedDraftVersion = vs.getOpenDraft()?.version ?? null; } finally { vs.close(); }
@@ -859,7 +859,7 @@ export function createDefaultV2Roles({
       outcome: 'NOT_PASS',
       result: { valid: false, plan: null, phase, error, errorCode },
     });
-    const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
+    const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state.db'));
     try {
       const draft = draftStore.getOpenDraft();
       if (!draft) {
@@ -1354,7 +1354,7 @@ export function createDefaultV2Roles({
             if (task.input?.purpose === 'PLANNER_VALIDATE_FEATURES') {
               return validateFeaturePhase({ task, validatorProject });
             }
-            const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state2.db'));
+            const draftStore = new VersionedStore(store.filePath ?? join(validatorProject.workspace, '.ariad', 'state.db'));
             try {
               const draft = draftStore.getOpenDraft();
               if (!draft) {

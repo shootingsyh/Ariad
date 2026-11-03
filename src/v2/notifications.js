@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 // SYSTEM_BLOCKED), the store appends one row to human_notifications
 // in notifications.db beside the project's state DB - inside the
 // project's .ariad directory (tracked in git like memory.db), so the
-// stream survives state-DB generations (state.db -> state2.db keeps
+// stream survives state-DB replacement at the fixed state.db path (its own notifications.db keeps
 // the same directory). Rows are never edited except for the read
 // check: consumers mark what they delivered with read_at, and unread
 // is simply read_at IS NULL. SQLite gives transactions, an

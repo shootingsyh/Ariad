@@ -18,7 +18,7 @@ const F = { id: 'f-1', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', tit
 
 function makeFacade(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-vts-'));
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   const runtime = new SQLiteV2Store(file);
   runtime.createProject({ id: 'proj', name: 'P', versionedTree: true });
   const seed = new VersionedStore(file);
@@ -98,7 +98,7 @@ test('a second promotion keeps exec state; nothing is ever copied into the runti
 test('standalone runtime wraps versioned projects in the facade and sees the prod task tree', async (t) => {
   const { StandaloneProjectRuntime } = await import('../src/runtime/standalone-project-runtime.js');
   const dir = mkdtempSync(join(tmpdir(), 'ariad-vts-rt-'));
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const seedRuntime = new SQLiteV2Store(file);
   seedRuntime.createProject({ id: 'proj', name: 'P', versionedTree: true, workspace: dir });

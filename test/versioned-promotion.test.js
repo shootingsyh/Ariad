@@ -19,7 +19,7 @@ const C = { id: 'c-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', 
 
 function makeStores(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-vp-'));
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   const runtime = new SQLiteV2Store(file);
   runtime.createProject({ id: 'proj', name: 'P' });
   const vs = new VersionedStore(file);

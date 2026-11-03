@@ -37,7 +37,7 @@ function seedRevisionBase(dbPath, { version, state = 'PENDING' }) {
 
 test('discardDraft refuses while the open draft is a live revision base', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revbase-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const store = new VersionedStore(dbPath);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.initProject('P');
@@ -57,7 +57,7 @@ test('discardDraft refuses while the open draft is a live revision base', (t) =>
 
 test('an operator force-discard overrides the revision-base guard', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revforce-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const store = new VersionedStore(dbPath);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.initProject('P');
@@ -70,7 +70,7 @@ test('an operator force-discard overrides the revision-base guard', (t) => {
 
 test('a PM rejection carries the full reason and the rejected draft version', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revcarry-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const vs = new VersionedStore(dbPath);
   t.after(() => { try { vs.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
   vs.initProject('P');
@@ -122,7 +122,7 @@ test('the decompose prompt orders continuation of the rejected draft for a PM re
 
 test('createRevisionDraft mints the next version from the rejected draft and supersedes it', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revmint-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const store = new VersionedStore(dbPath);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.initProject('P');
@@ -146,7 +146,7 @@ test('createRevisionDraft mints the next version from the rejected draft and sup
 
 test('createRevisionDraft refuses when the open draft is not a named revision base', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revmint-no-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const store = new VersionedStore(dbPath);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.initProject('P');
@@ -157,7 +157,7 @@ test('createRevisionDraft refuses when the open draft is not a named revision ba
 
 test('discardDraft stays refused for the minted continuation while the revision is live', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-revguard2-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   const store = new VersionedStore(dbPath);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.initProject('P');

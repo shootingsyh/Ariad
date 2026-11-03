@@ -11,11 +11,13 @@ import { ensureAriadGitignore, ensureWorkspaceGitignore } from '../runtime/works
 
 // begin-iteration: the system-side head of an iteration (replan) cycle.
 // It archives the project's current store, creates a fresh DB-first
-// store, writes a plain-file inventory of the old store under
+// store AT THE SAME fixed path (.ariad/state.db - the live store's
+// name never changes; owner ruling 2026-11-03), writes a plain-file
+// inventory of the old store under
 // .ariad/artifacts/inventory/ (what it holds, what its schema looks
 // like - documentation for the PM/TL to discover from, never an
-// import), creates the project record in the new store, and flips
-// the project's dbFile pointer.
+// import), creates the project record in the new store, and pins the
+// project's dbFile pointer at the fixed name.
 // The rebuild itself is NOT done here: PM authors/approves the version
 // requirements and TL replans into a draft inside Ariad afterwards.
 //
@@ -30,12 +32,12 @@ function fail(code, message) {
 const parse = (s) => { try { return JSON.parse(s); } catch { return {}; } };
 const sha256File = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-function nextDbFileName(currentFile) {
-  const m = basename(currentFile).match(/^state(\d*)\.db$/);
-  if (!m) return 'state2.db';
-  const n = m[1] === '' ? 2 : Number(m[1]) + 1;
-  return `state${n}.db`;
-}
+// The live store's file name is FIXED (owner ruling 2026-11-03): it is
+// always state.db. The generation-counter naming (state2.db, state3.db,
+// ...) is abolished - previous generations live only as archives under
+// backups/. Any legacy pointer (e.g. state2.db) is migrated to the fixed
+// name by the begin-iteration that replaces it.
+export const LIVE_DB_FILE = 'state.db';
 
 function archiveStore({ oldDbPath, workspace, projectId, now }) {
   const stamp = now.toISOString().replace(/[:T]/g, '-').slice(0, 19);
@@ -106,17 +108,31 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     fail('ITERATION_DELIVERY_IN_FLIGHT', `delivery tasks still in flight: ${inFlight.join(', ')}`);
   }
 
-  const newDbFile = dbFile ?? nextDbFileName(oldDbPath);
-  if (basename(newDbFile) !== newDbFile || !newDbFile.endsWith('.db')) {
-    fail('ITERATION_BAD_DB_FILE', `--db-file must be a plain .db file name, got ${newDbFile}`);
+  if (dbFile != null && dbFile !== LIVE_DB_FILE) {
+    fail('ITERATION_DB_FILE_FIXED', `the live store file name is fixed as ${LIVE_DB_FILE}; --db-file ${dbFile} is not accepted (previous generations are archived under backups/, never renamed forward)`);
   }
+  const newDbFile = LIVE_DB_FILE;
   const newDbPath = join(paths.ariad, newDbFile);
-  if (existsSync(newDbPath)) fail('ITERATION_TARGET_EXISTS', `target store already exists: ${newDbPath}`);
 
   ensureAriadGitignore(paths.ariad);
   ensureWorkspaceGitignore(paths.workspace);
 
   const archive = archiveStore({ oldDbPath, workspace: paths.workspace, projectId: project.id, now });
+
+  // The old store is fully archived above (VACUUM INTO snapshot +
+  // manifest), so its live files are retired now: the new store is
+  // created at the fixed path .ariad/state.db. When the outgoing store
+  // lived at a legacy name (state2.db) and a still older state.db file
+  // is lying around, that stale file is preserved inside the archive
+  // as superseded-state.db rather than silently overwritten.
+  if (newDbPath !== oldDbPath && existsSync(newDbPath)) {
+    renameSync(newDbPath, join(archive.dir, 'superseded-state.db'));
+  }
+  for (const f of [oldDbPath, `${oldDbPath}-wal`, `${oldDbPath}-shm`, `${oldDbPath}-journal`,
+    `${newDbPath}-wal`, `${newDbPath}-shm`, `${newDbPath}-journal`]) {
+    rmSync(f, { force: true });
+  }
+  if (newDbPath !== oldDbPath) rmSync(oldDbPath, { force: true });
 
   // Planner artifacts are the pre-DB-first plan medium: the new store's
   // drafts replace them, and leaving the old bundle in the workspace
@@ -173,7 +189,7 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     // The inventory is documentation, not a migration: its failure must
     // not block the cutover (the archive still holds the full record),
     // so a failure is reported in the result instead of thrown.
-    const old = new DatabaseSync(oldDbPath, { readOnly: true });
+    const old = new DatabaseSync(join(archive.dir, 'state.db'), { readOnly: true });
     try {
       inventory = writeInventoryArtifact({ db: old, workspace: paths.workspace, project, oldDbPath, archiveDir: archive.dir, now });
     } catch (err) {
@@ -186,8 +202,9 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     throw err;
   }
 
-  // Flip the pointer last: before this line the project still resolves
-  // to the old store and nothing about the running setup has changed.
+  // Pin the pointer at the fixed name last: before this line the
+  // project still resolves to the old store and nothing about the
+  // running setup has changed.
   let pointer;
   if (paths.adopted) {
     const ref = JSON.parse(readFileSync(paths.adoptedRef, 'utf8'));

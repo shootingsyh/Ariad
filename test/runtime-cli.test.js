@@ -61,7 +61,7 @@ test('ariad project begin-iteration runs through the CLI entry', () => {
     const result = runAriadCli(['project', 'begin-iteration', 'demo', '--projects-root', projectsRoot]);
     assert.equal(result.action, 'begin-iteration');
     assert.equal(result.iteration.project, 'demo');
-    assert.ok(fs.existsSync(path.join(workspace, '.ariad', 'state2.db')));
+    assert.ok(fs.existsSync(path.join(workspace, '.ariad', 'state.db')));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -7,7 +7,7 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 
 function makeStore(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-vs-'));
-  const store = new VersionedStore(join(dir, 'state2.db'));
+  const store = new VersionedStore(join(dir, 'state.db'));
   store.initProject('proj');
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   return store;

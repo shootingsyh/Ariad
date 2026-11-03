@@ -87,7 +87,7 @@ test('a clean phase critic skips only its own phase repair', () => {
 
 function phaseValidatorSetup({ withDraft = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-phaseval-'));
-  const dbPath = join(dir, 'state2.db');
+  const dbPath = join(dir, 'state.db');
   if (withDraft) {
     const vs = new VersionedStore(dbPath);
     vs.initProject('P');

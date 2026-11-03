@@ -58,7 +58,7 @@ test('begin-iteration archives, writes the inventory artifact, creates versioned
   const manager = new AriadProjectManager({ projectsRoot });
   const report = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:00:00.000Z') });
 
-  assert.equal(report.newDbFile, 'state2.db');
+  assert.equal(report.newDbFile, 'state.db');
   assert.equal(report.pointer, 'project-ref.json');
   assert.equal(report.inventory.tasks, 3);
   assert.equal(report.inventory.done, 1);
@@ -77,10 +77,10 @@ test('begin-iteration archives, writes the inventory artifact, creates versioned
   assert.equal(dumpedTasks.length, 4);
   assert.equal(dumpedTasks.find(t => t.id === 't-done').historyEntries, 2);
 
-  const newDbPath = join(workspace, '.ariad', 'state2.db');
+  const newDbPath = join(workspace, '.ariad', 'state.db');
   assert.ok(existsSync(newDbPath));
   const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
-  assert.equal(ref.dbFile, 'state2.db');
+  assert.equal(ref.dbFile, 'state.db');
   assert.equal(manager.resolveProjectPaths('demo').db, newDbPath);
 
   const manifest = JSON.parse(readFileSync(join(report.archiveDir, 'manifest.json'), 'utf8'));
@@ -103,9 +103,15 @@ test('begin-iteration archives, writes the inventory artifact, creates versioned
   assert.equal(project.desiredState, 'STOPPED');
   runtime.db.close();
 
-  const old = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
+  // Fixed-name rule: the old store was replaced at .ariad/state.db by
+  // the fresh store; its content survives only in the pre-iterate
+  // archive under backups/.
+  const old = new SQLiteV2Store(join(report.archiveDir, 'state.db'));
   assert.equal(old.db.prepare('SELECT COUNT(*) AS n FROM v2_tasks').get().n, 4);
   old.db.close();
+  const fresh = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
+  assert.equal(fresh.db.prepare('SELECT COUNT(*) AS n FROM v2_tasks').get().n, 0);
+  fresh.db.close();
 });
 
 test('begin-iteration refuses a project that is not STOPPED', () => {
@@ -119,15 +125,29 @@ test('begin-iteration refuses while a delivery task is in flight', () => {
   const { projectsRoot, workspace } = makeAdoptedProject({ tasks });
   const manager = new AriadProjectManager({ projectsRoot });
   assert.throws(() => beginIteration({ manager, name: 'demo' }), /ITERATION_DELIVERY_IN_FLIGHT/);
-  assert.ok(!existsSync(join(workspace, '.ariad', 'state2.db')));
+  assert.ok(!existsSync(join(workspace, 'backups')), 'no archive may be created when the guard refuses');
 });
 
-test('begin-iteration refuses an existing target store', () => {
+test('begin-iteration refuses a dbFile other than the fixed state.db', () => {
   const { projectsRoot } = makeAdoptedProject({ tasks: baseTasks });
   const manager = new AriadProjectManager({ projectsRoot });
-  assert.throws(() => beginIteration({ manager, name: 'demo', dbFile: 'state.db' }), /ITERATION_TARGET_EXISTS/);
+  assert.throws(() => beginIteration({ manager, name: 'demo', dbFile: 'state2.db' }), /ITERATION_DB_FILE_FIXED/);
   const ref = JSON.parse(readFileSync(join(projectsRoot, 'demo', 'project-ref.json'), 'utf8'));
   assert.equal(ref.dbFile, undefined);
+});
+
+test('begin-iteration twice keeps the fixed name and archives each generation', () => {
+  const { projectsRoot, workspace } = makeAdoptedProject({ tasks: baseTasks });
+  const manager = new AriadProjectManager({ projectsRoot });
+  const first = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T14:00:00.000Z') });
+  assert.equal(first.newDbFile, 'state.db');
+  assert.equal(first.previousDb, 'state.db');
+  const second = beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T15:00:00.000Z') });
+  assert.equal(second.newDbFile, 'state.db');
+  assert.ok(existsSync(join(second.archiveDir, 'state.db')));
+  assert.ok(existsSync(join(workspace, '.ariad', 'state.db')));
+  assert.ok(!existsSync(join(workspace, '.ariad', 'state2.db')));
+  assert.ok(!existsSync(join(workspace, '.ariad', 'state3.db')));
 });
 
 // Regression (2026-10-31, found live on iterprobe): production project
@@ -175,7 +195,7 @@ test('status reports the store resolved from the dbFile pointer, not the stale m
   const manager = new AriadProjectManager({ projectsRoot });
   assert.equal(manager.status('demo').stateDb, join(workspace, '.ariad', 'state.db'));
   beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T12:45:00.000Z') });
-  assert.equal(manager.status('demo').stateDb, join(workspace, '.ariad', 'state2.db'));
+  assert.equal(manager.status('demo').stateDb, join(workspace, '.ariad', 'state.db'));
 });
 
 test('begin-iteration resets the manifest executionState so the new version is not born SUCCEEDED', () => {
@@ -198,10 +218,10 @@ test('begin-iteration starts the new version with the delivery gate closed', () 
   store.db.close();
   const manager = new AriadProjectManager({ projectsRoot });
   beginIteration({ manager, name: 'demo', now: new Date('2026-10-31T13:00:00.000Z') });
-  const next = new SQLiteV2Store(join(workspace, '.ariad', 'state2.db'));
+  const next = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
   try {
     assert.equal(next.getProject('demo').deliveryEnabled, false);
-    assert.ok(next.filePath.endsWith('state2.db'));
+    assert.ok(next.filePath.endsWith('state.db'));
   } finally { next.db.close(); }
 });
 

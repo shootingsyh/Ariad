@@ -140,7 +140,7 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 
 test('versioned decompose without a DB draft is rejected at submission, not at the gate', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-nodraft-'));
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   const vs = new VersionedStore(file);
   vs.initProject('P');
   vs.close();
@@ -161,7 +161,7 @@ import { recordRequirementsApproval } from '../src/v2/project-docs.js';
 test('versioned decompose is bounced at submission when requirements are missing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-reqgate-'));
   mkdirSync(join(dir, '.ariad', 'docs'), { recursive: true });
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   const vs = new VersionedStore(file);
   vs.initProject('P');
   vs.close();
@@ -189,7 +189,7 @@ test('approved requirements let the decompose submission reach the draft check',
   mkdirSync(join(dir, '.ariad', 'docs'), { recursive: true });
   writeFileSync(join(dir, '.ariad', 'docs', 'REQUIREMENTS.md'), '# Requirements\n\nBaseline.\n');
   recordRequirementsApproval(dir, { approvedBy: 'test' });
-  const file = join(dir, 'state2.db');
+  const file = join(dir, 'state.db');
   const vs = new VersionedStore(file);
   vs.initProject('P');
   vs.close();
@@ -213,7 +213,7 @@ test('requirements authoring request becomes a single PM stage', () => {
 
 test('PM requirements stage parks for human review with questions', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-reqstage-'));
-  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const out = roles.pm.transition({
     task: { id: 'r1', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'REQUIREMENTS_AUTHORING', planningBatchId: 'b1' } },
@@ -230,7 +230,7 @@ test('approved requirements close the PM stage and enqueue initial planning', ()
   writeFileSync(join(dir, '.ariad', 'docs', 'REQUIREMENTS.md'), '# Requirements\n\nBaseline.\n');
   recordRequirementsApproval(dir, { approvedBy: 'test' });
   const enqueued = [];
-  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: arg => enqueued.push(arg) });
   const out = roles.pm.transition({
     task: { id: 'r2', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'REQUIREMENTS_AUTHORING', planningBatchId: 'b1' } },
@@ -244,7 +244,7 @@ test('approved requirements close the PM stage and enqueue initial planning', ()
 
 test('PM requirements-authoring prompt carries the document standards', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-reqprompt-'));
-  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G' }) };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({
     project: { id: 'P', workspace: dir, mode: 'TAKEOVER', goal: 'G' },
@@ -259,7 +259,7 @@ test('PM requirements-authoring prompt carries the document standards', () => {
 
 test('debug hold parks the PM plan review for the human, never the failure ladder', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-debughold-'));
-  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}) };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}) };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {}, debugHoldAfterPlanReview: true });
   const accept = { outcome: 'PLAN_ACCEPTED', summary: 'plan accepted', result: { reason: 'Plan covers the approved requirements.', startDelivery: true } };
   const out = roles.pm.transition({
@@ -286,7 +286,7 @@ test('PM plan-review prompt carries the human decision and the correction rule',
   const decision = 'Send it back: add ux.required to the presentation task before delivery.';
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: 18 } } }] };
   const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [{ type: 'DEBUG_HOLD' }, { type: 'HUMAN_DECISION', decision }], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
-  const store = { filePath: join(dir, 'state2.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listPlanningRequests: () => [] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listPlanningRequests: () => [] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;
