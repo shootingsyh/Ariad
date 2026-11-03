@@ -119,7 +119,7 @@ export function restoreRequirementsCheckpoint({ manager, name, expectedSha256 = 
 
   if (draftVersion != null) {
     const versioned = new VersionedStore(paths.db);
-    try { versioned.discardDraft(); } finally { versioned.close(); }
+    try { versioned.discardDraft({ force: true }); } finally { versioned.close(); }
   }
 
   const approvals = readApprovals(paths.workspace);

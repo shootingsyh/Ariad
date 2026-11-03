@@ -12,7 +12,7 @@ import { executorTransitionFromResult } from './role-executor-transition.js';
 import { completeTakeoverReview } from './takeover-gate.js';
 import { VersionedStore } from './versioned-store.js';
 import { promoteVersionedDraft } from './versioned-promotion.js';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export const PLAN_RESULT_TRANSITION = Symbol('planResultTransition');
@@ -530,10 +530,28 @@ export function createDefaultV2Roles({
               },
             };
           }
+          // Carry the FULL review forward, not just the guidance: the
+          // fidelity trace (reason) names exactly which clauses failed
+          // and their current defective text, and the rejected draft
+          // version pins the lineage the revision must continue. The
+          // rejected draft stays open; the next batch edits it in
+          // place (see the PM PLAN REVISION prompt section and the
+          // VersionedStore discard guard).
+          let rejectedDraftVersion = null;
+          try {
+            const revisionProject = store.getProject?.(task.projectId);
+            const draftDbPath = store.filePath ?? (revisionProject?.workspace ? join(revisionProject.workspace, '.ariad', 'state2.db') : null);
+            if (draftDbPath && existsSync(draftDbPath)) {
+              const vs = new VersionedStore(draftDbPath);
+              try { rejectedDraftVersion = vs.getOpenDraft()?.version ?? null; } finally { vs.close(); }
+            }
+          } catch { rejectedDraftVersion = null; }
           enqueuePlanning?.({
             request: {
               purpose: 'PM_PLAN_REVISION',
               guidance: result.result?.guidance ?? result.result ?? null,
+              reason: result.result?.reason ?? result.summary ?? null,
+              rejectedDraftVersion,
             },
           });
           return { state: 'DONE' };

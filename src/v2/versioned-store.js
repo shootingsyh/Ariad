@@ -161,9 +161,38 @@ export class VersionedStore {
     return this.#versionRow(version);
   }
 
-  discardDraft() {
+  // The open draft named as the base of a live PM plan revision is the
+  // lineage the next planning batch must CONTINUE, not a scratch draft:
+  // discarding it forces the revision to be re-derived from prod, which
+  // is how already-accepted fixes kept evaporating between revision
+  // rounds (SRPG 2026-11-02: drafts v64-v69 were each re-seeded from
+  // prod v63 and discarded, so the same PM findings survived five
+  // rounds). The planning tables share this database file in
+  // production; a store file without them (unit fixtures) simply has
+  // no revision base.
+  revisionBaseDraftVersion() {
+    const draft = this.getOpenDraft();
+    if (!draft) return null;
+    try {
+      const table = this.db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'v2_planning_requests'").get();
+      if (!table) return null;
+      const rows = this.db.prepare("SELECT data_json FROM v2_planning_requests WHERE state IN ('PENDING', 'CLAIMED')").all();
+      for (const row of rows) {
+        let parsed = null;
+        try { parsed = JSON.parse(row.data_json); } catch { continue; }
+        const request = parsed?.request ?? null;
+        if (request?.purpose === 'PM_PLAN_REVISION' && Number(request?.rejectedDraftVersion) === draft.version) return draft.version;
+      }
+    } catch { return null; }
+    return null;
+  }
+
+  discardDraft({ force = false } = {}) {
     const draft = this.getOpenDraft();
     if (!draft) fail('NO_OPEN_DRAFT', 'no draft version is open');
+    if (!force && this.revisionBaseDraftVersion() != null) {
+      fail('DRAFT_IS_REVISION_BASE', `draft v${draft.version} is the rejected plan a pending PM revision must continue; discarding it would re-derive the revision from prod and drop fixes already landed in it - edit this draft in place instead (an operator may force-discard through the debug checkpoint)`);
+    }
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('DELETE FROM spec_tasks WHERE version = ?').run(draft.version);
