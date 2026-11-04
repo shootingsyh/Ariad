@@ -1,6 +1,7 @@
 import { isAdhocAnalysis } from './control-task-policy.js';
 import { applyTaskEvent } from './state-machine.js';
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
+import { isTransientProviderFailure, transientRetryCooldownMs, transientWindowExpired } from './transient-provider-failure.js';
 
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
   if (!attemptId) return null;
@@ -174,8 +175,14 @@ export class V2Supervisor {
       const failure = status?.failure ?? status?.state ?? 'EXECUTION_LOST';
       const incident = await this.#incident(task, failure);
       incidents.push(incident);
-      const consumeAttempt = status?.consumeAttempt !== false;
-      const blocked = isNonretryableProviderFailure(failure) || (consumeAttempt && systemFailureCount(current) >= 2);
+      // Transient provider unavailability does not consume an attempt and
+      // parks the task in a cooldown instead of burning the failure
+      // ladder; see transient-provider-failure.js for the rationale.
+      const transient = isTransientProviderFailure(failure);
+      const consumeAttempt = transient ? false : status?.consumeAttempt !== false;
+      const blocked = transient
+        ? transientWindowExpired(current)
+        : isNonretryableProviderFailure(failure) || (consumeAttempt && systemFailureCount(current) >= 2);
       this.store.appendTaskHistory(task.id, current.version, {
         type: 'SYSTEM_INTERRUPTION',
         role: task.stage,
@@ -184,13 +191,19 @@ export class V2Supervisor {
         protocolVersion: execution?.protocolVersion ?? null,
         projectVersion: execution?.projectVersion ?? null,
         consumeAttempt,
+        ...(transient ? { transient: true } : {}),
         executionContext: structuredClone(status?.executionContext ?? null),
         ...(status?.restartOrphan === true ? { restartOrphan: true } : {}),
         at: incident.at,
       }, applyTaskEvent(
         current,
         blocked ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
-        { execution: null },
+        {
+          execution: null,
+          retryNotBefore: transient && !blocked
+            ? new Date(Date.now() + transientRetryCooldownMs()).toISOString()
+            : null,
+        },
       ));
       this.resources.release(task.id);
     }

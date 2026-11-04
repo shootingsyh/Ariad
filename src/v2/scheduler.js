@@ -1,4 +1,5 @@
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
+import { isInTransientCooldown, isTransientProviderFailure, transientRetryCooldownMs, transientWindowExpired } from './transient-provider-failure.js';
 import { RoleResultDispatcher } from './role-result-dispatcher.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
@@ -135,6 +136,9 @@ export class V2Scheduler {
     for (const candidate of candidates) {
       const task = this.store.getTask(candidate.task.id);
       if (task.state !== 'READY') continue;
+      // A task cooling down after a transient provider failure is not
+      // dispatchable yet; START clears retryNotBefore when it runs.
+      if (isInTransientCooldown(task)) continue;
 
       // Rebuild the task's graph from fresh durable state before claiming it.
       const sameGraphTasks = this.store.listTasks(projectId)
@@ -171,6 +175,7 @@ export class V2Scheduler {
 
       try {
         this.store.updateTask(task.id, task.version, applyTaskEvent(task, 'START', {
+          retryNotBefore: null,
           execution: {
             provider: spec.provider,
             externalId: null,
@@ -217,17 +222,32 @@ export class V2Scheduler {
         started.push(task.id);
       } catch (error) {
         const current = this.store.getTask(task.id);
-        const blocked = isNonretryableProviderFailure(error?.message) || systemFailureCount(current) >= 2;
+        const failure = error?.message ?? String(error);
+        // Transient provider unavailability is an environment condition:
+        // it does not consume an attempt, and the task waits out a
+        // cooldown instead of burning its retries inside the provider's
+        // recovery window. Only an outage that outlives the maximum
+        // transient window escalates to SYSTEM_BLOCKED.
+        const transient = isTransientProviderFailure(failure);
+        const blocked = transient
+          ? transientWindowExpired(current)
+          : isNonretryableProviderFailure(failure) || systemFailureCount(current) >= 2;
         this.store.appendTaskHistory(task.id, current.version, {
           type: 'SYSTEM_INTERRUPTION',
           role: task.stage,
-          failure: error?.message ?? String(error),
-          consumeAttempt: true,
+          failure,
+          consumeAttempt: !transient,
+          ...(transient ? { transient: true } : {}),
           at: new Date().toISOString(),
         }, applyTaskEvent(
           current,
           blocked ? 'BLOCK_SYSTEM_FAILURE' : 'RETRY_SYSTEM_FAILURE',
-          { execution: null },
+          {
+            execution: null,
+            retryNotBefore: transient && !blocked
+              ? new Date(Date.now() + transientRetryCooldownMs()).toISOString()
+              : null,
+          },
         ));
         this.resources.release(task.id);
       }
