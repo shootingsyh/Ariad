@@ -759,6 +759,7 @@ export function createDefaultV2Roles({
         ...executionMetadata,
       },
       workspace,
+      ...(codeIntelligence ? { codeIntelligence } : {}),
       ...(task.stage === 'tech_lead' && insertTriagedFixTask ? { insertTriagedFixTask } : {}),
       ...(task.stage === 'tech_lead' && projectStoreFile ? { projectStoreFile } : {}),
       ...(sharedDeliveryContext && reportIssue ? {

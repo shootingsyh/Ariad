@@ -1,7 +1,6 @@
 import { Type } from 'typebox';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { GodotLspProvider } from './code-intelligence/godot-lsp-provider.js';
 import { ProjectMemoryStore } from './project-memory.js';
 import { codeSearch, interfaceSearch } from './project-search-tools.js';
 import { searchWeb, fetchWebPage } from './web-research.js';
@@ -31,7 +30,7 @@ export const ARIAD_PROJECT_TOOL_NAMES = Object.freeze([
   'ariad_web_search', 'ariad_web_fetch',
 ]);
 
-export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, requestPlanning = null, taskContext = null }) {
+export function registerAriadProjectTools(pi, { workspace, projectStoreFile = null, reportIssue = null, insertTriagedFixTask = null, requestPlanning = null, taskContext = null, codeIntelligence = null }) {
   const resolveFile = file => {
     const path = resolve(workspace, file);
     if (relative(workspace, path).startsWith('..') || (isAbsolute(file) && !path.startsWith(workspace + '/'))) throw new Error('FILE_OUTSIDE_WORKSPACE');
@@ -46,10 +45,16 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
     }
     return path;
   };
-  let lsp = null;
+  // The project's language server belongs to the project runtime and
+  // shares the project's lifecycle: sessions only use it - they never
+  // start one of their own and never shut it down. (Per-session editor
+  // processes leaked for days before this: every session spawned a godot
+  // editor that nothing ever reaped.)
   const languageServer = () => {
-    if (!lsp) lsp = new GodotLspProvider({ projectPath: workspace, port: 7200 + [...workspace].reduce((n, c) => (n + c.charCodeAt(0)) % 1000, 0) });
-    return lsp;
+    if (!codeIntelligence) {
+      throw new Error('LSP_UNAVAILABLE: no project language server is attached to this session (the project runtime owns it)');
+    }
+    return codeIntelligence;
   };
   const addTool = (name, description, parameters, run) => pi.registerTool({
     name, label: name, description, parameters,

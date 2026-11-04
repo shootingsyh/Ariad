@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -14,6 +16,60 @@ function flattenDocumentSymbols(items, out = []) {
     if (Array.isArray(item.children)) flattenDocumentSymbols(item.children, out);
   }
   return out;
+}
+
+// The project's language server is owned by the project runtime and
+// shares the project's lifecycle: the runtime creates exactly one
+// GodotLspProvider per project, every session only uses it, and only the
+// runtime closes it. Editor processes spawned here carry a birthmark so a
+// later daemon generation can reap the ones a hard-killed daemon could
+// not shut down.
+export const LSP_CHILD_MARK_ENV = 'ARIAD_LSP_CHILD';
+
+export function lspChildMarkFor(projectPath) {
+  return createHash('sha256').update(resolve(projectPath)).digest('hex').slice(0, 16);
+}
+
+export function sweepOrphanedLspChildren(mark, port) {
+  let entries;
+  try {
+    entries = readdirSync('/proc');
+  } catch {
+    return 0; // no /proc (non-Linux): nothing to sweep
+  }
+  let killed = 0;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    if (pid === process.pid) continue;
+    try {
+      const environ = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+      if (!environ.includes(`${LSP_CHILD_MARK_ENV}=${mark}`)) continue;
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ');
+      if (!cmdline.includes('--editor')) continue;
+      if (!cmdline.includes(`--lsp-port ${port}`) && !cmdline.includes(`--lsp-port=${port}`)) continue;
+      process.kill(pid, 'SIGTERM');
+      killed += 1;
+    } catch {
+      // Already gone or not readable: not ours to reap.
+    }
+  }
+  if (killed > 0) {
+    console.log(`[godot-lsp] reaped ${killed} orphaned editor process(es) from a previous daemon generation`);
+  }
+  return killed;
+}
+
+const sweptChildMarks = new Set();
+
+function sweepOrphanedLspChildrenOnce(mark, port) {
+  if (sweptChildMarks.has(mark)) return;
+  sweptChildMarks.add(mark);
+  try {
+    sweepOrphanedLspChildren(mark, port);
+  } catch {
+    // The sweep must never break language-server startup.
+  }
 }
 
 export class GodotLspProvider {
@@ -36,25 +92,44 @@ export class GodotLspProvider {
     this.client = new JsonRpcTcpClient({ host, port, requestTimeoutMs });
     this.process = null;
     this.initialized = false;
+    this.starting = null;
+    this.childMark = lspChildMarkFor(this.projectPath);
   }
 
   async start() {
     if (this.initialized) return;
+    if (!this.starting) {
+      this.starting = this.#startOnce().finally(() => {
+        this.starting = null;
+      });
+    }
+    return this.starting;
+  }
+
+  async #startOnce() {
     if (this.launch && !this.process) {
-      this.process = spawn(this.godotBinary, [
+      sweepOrphanedLspChildrenOnce(this.childMark, this.port);
+      const child = spawn(this.godotBinary, [
         '--editor',
         '--path', this.projectPath,
         '--lsp-port', String(this.port),
         '--headless',
       ], {
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, [LSP_CHILD_MARK_ENV]: this.childMark },
       });
-      this.process.once('exit', (code, signal) => {
-        if (!this.initialized && code !== 0) {
-          // Connection retry below surfaces startup failure deterministically.
-        }
-        this.process = null;
-      });
+      this.process = child;
+      const onGone = () => {
+        if (this.process === child) this.process = null;
+        // The editor is gone. The owner keeps this server alive for the
+        // project's whole lifetime, so forget the initialized state and
+        // drop the client: the next use revives the editor instead of
+        // talking to a corpse.
+        this.initialized = false;
+        try { this.client.close(); } catch { /* noop */ }
+      };
+      child.once('exit', onGone);
+      child.once('error', onGone);
     }
 
     const deadline = Date.now() + this.startupTimeoutMs;
@@ -150,6 +225,10 @@ export class GodotLspProvider {
   }
 
   async close() {
+    if (this.starting) {
+      // Never let a close race an in-flight start into a leaked editor.
+      try { await this.starting; } catch { /* start failed; nothing live to shut down */ }
+    }
     if (this.initialized) {
       try { await this.client.request('shutdown'); } catch {}
       try { await this.client.notify('exit'); } catch {}

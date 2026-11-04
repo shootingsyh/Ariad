@@ -550,6 +550,7 @@ export async function createDefaultPiRunSession(spec) {
     extensionFactories: [(pi) => {
       registerAriadProjectTools(pi, {
         workspace,
+        codeIntelligence: spec.codeIntelligence ?? null,
         projectStoreFile: spec.projectStoreFile ?? null,
         reportIssue: spec.reportIssue ?? null,
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,

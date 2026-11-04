@@ -555,3 +555,23 @@ test('ariad_tree_patch writes the draft into the runtime store file and surfaces
     vs.close();
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
+
+test('project LSP tools delegate to the runtime-owned language server and never spawn their own', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-lsp-tools-'));
+  try {
+    fs.writeFileSync(path.join(workspace, 'entry.gd'), 'extends Node\n\nfunc new_game():\n\treturn true\n');
+    const solo = new Map();
+    registerAriadProjectTools({ registerTool(tool) { solo.set(tool.name, tool); } }, { workspace });
+    await assert.rejects(
+      () => solo.get('ariad_document_symbols').execute('call-1', { file: 'entry.gd' }),
+      /LSP_UNAVAILABLE/,
+    );
+    const shared = new Map();
+    const codeIntelligence = { documentSymbols: async () => [{ name: 'new_game' }] };
+    registerAriadProjectTools({ registerTool(tool) { shared.set(tool.name, tool); } }, { workspace, codeIntelligence });
+    const out = await shared.get('ariad_document_symbols').execute('call-2', { file: 'entry.gd' });
+    assert.equal(out.details.symbols[0].name, 'new_game');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
