@@ -68,6 +68,9 @@ export function resolveAriadPiModelRef(modelRef) {
 
 export const ARIAD_PI_DELIVERY_TOOLS = Object.freeze([
   ...ARIAD_PI_DEFAULT_TOOLS,
+  // Companions of the supervised bash (managed-bash.js): a delivery role
+  // that can start a long command must be able to wait on it or kill it.
+  'bash_wait', 'bash_kill',
   'ariad_code_search', 'ariad_interface_search', 'ariad_interface_contract', 'ariad_anchor_lookup',
   'ariad_document_symbols', 'ariad_definition', 'ariad_references', 'ariad_workspace_symbols', 'ariad_call_graph',
   'ariad_memory_search', 'ariad_memory_write',

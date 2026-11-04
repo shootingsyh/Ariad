@@ -15,6 +15,7 @@ import { Check, Errors } from 'typebox/value';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 import { registerAriadProjectTools } from './pi-project-tools.js';
+import { managedBashCheckIntervalMs, registerManagedBashTools, sweepManagedBashOrphans } from './managed-bash.js';
 
 import {
   piToolsForTask,
@@ -532,6 +533,7 @@ export async function createDefaultPiRunSession(spec) {
   });
   const mcpExtensionPath = bundledPiMcpExtensionPath();
   const mcpServers = MCP_ROLES.has(spec.role) ? readProjectMcpServers(paths.root) : [];
+  let managedBash = null;
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir: paths.root,
@@ -553,6 +555,10 @@ export async function createDefaultPiRunSession(spec) {
         insertTriagedFixTask: spec.insertTriagedFixTask ?? null,
         taskContext: { taskId: spec.taskId ?? null, role: spec.role ?? null, projectId: spec.projectId ?? null },
       });
+      // Supervised bash (managed-bash.js) shadows the built-in bash in the
+      // SDK tool registry for every session; the role allowlist still
+      // decides which sessions actually see it.
+      managedBash = registerManagedBashTools(pi, { workspace, checkIntervalMs: managedBashCheckIntervalMs() });
       for (const [name, config] of mcpServers) {
         try {
           pi.registerMcpServer(name, config);
@@ -637,6 +643,10 @@ export async function createDefaultPiRunSession(spec) {
   });
   if (mcpServers.length) session.setActiveToolsByName(roleTools);
   await session.bindExtensions({ mode: 'json' });
+  // Supervised bash dies with its session: anything the session left
+  // running is terminated when the provider disposes the session.
+  const disposeSession = session.dispose?.bind(session);
+  session.dispose = () => { try { managedBash?.dispose(); } catch { /* noop */ } return disposeSession?.(); };
   // A resumed persistent session always runs this run's configured
   // model, whatever model its stored transcript was created with.
   if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
@@ -655,6 +665,13 @@ export class PiAgentSessionProvider {
     this.createRunSession = createRunSession;
     this.runs = new Map();
     this.sequence = 0;
+    // Reap supervised-bash orphans left behind by a previous daemon
+    // generation (and, on this startup sweep only, the legacy e2e orphans
+    // that predate the birthmark system).
+    try {
+      const reaped = sweepManagedBashOrphans({ includeLegacyE2e: true, throttleMs: 0 });
+      if (reaped.length > 0) console.log('[managed-bash] startup sweep reaped ' + reaped.length + ' orphaned process(es): ' + reaped.map((r) => r.pid + '(' + r.reason + ')').join(', '));
+    } catch { /* the sweeper must never break provider construction */ }
   }
 
   async start(spec) {
@@ -670,6 +687,7 @@ export class PiAgentSessionProvider {
       startedAt: new Date().toISOString(),
     };
     this.runs.set(externalId, record);
+    try { sweepManagedBashOrphans({}); } catch { /* throttled internally; best effort */ }
 
     const buildRunPrompt = (runSpec, { quotaRetry = false } = {}) => [
       buildStandaloneRolePrompt(runSpec.context ?? {}, runSpec.prompt ?? ''),
