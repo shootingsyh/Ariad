@@ -129,7 +129,7 @@ test('mock project retries business failure through developer and then succeeds'
   }
 });
 
-test('mock project blocks after repeated runtime failures and resume requeues it', async () => {
+test('mock project system block is diagnosed and the debugger requeues it', async () => {
   const { root, manager, project } = createMockProject('ariad-mock-recovery-');
   let developerRuns = 0;
 
@@ -146,6 +146,15 @@ test('mock project blocks after repeated runtime failures and resume requeues it
           };
         }
       }
+      if (context.role === 'project_debugger') {
+        return {
+          kind: 'test',
+          model: 'project_debugger',
+          outcome: 'SYSTEM_RUNTIME_FAILURE',
+          summary: 'Mock runtime failure: sessions ended without submitting results.',
+          result: { guidance: 'Re-run the developer with a fresh session.' },
+        };
+      }
       return {
         kind: 'test',
         result: context.role === 'test_engineer' ? { testPlan: { testCases: [{ entry: 'src/index.js', command: 'node --check src/index.js', covers: [], executionScope: ['src/index.js'] }] } } : {},
@@ -161,32 +170,31 @@ test('mock project blocks after repeated runtime failures and resume requeues it
   try {
     await service.ensureRunning(project.id);
 
-    const failed = await reconcileUntil(
+    // The system-blocked task no longer parks the project at FAILED: a
+    // diagnostic task picks it up and the debugger's runtime-failure
+    // verdict is auto-carried back into a developer work order.
+    const diagnosed = await reconcileUntil(
       service,
       project.id,
-      ({ status }) => status.executionState === 'FAILED',
+      ({ task }) => task.history.some(entry => entry.type === 'DEBUGGER_ROUTE' && entry.autoCarried === true),
     );
 
-    assert.equal(failed.task.state, 'SYSTEM_BLOCKED');
-    assert.equal(failed.task.stage, 'developer');
-    assert.equal(developerRuns, 3);
     assert.equal(
-      failed.task.history.filter(entry => entry.type === 'SYSTEM_INTERRUPTION').length,
+      diagnosed.task.history.filter(entry => entry.type === 'SYSTEM_INTERRUPTION').length,
       3,
     );
+    const route = diagnosed.task.history.find(entry => entry.type === 'DEBUGGER_ROUTE');
+    assert.equal(route.diagnosis, 'SYSTEM_RUNTIME_FAILURE');
+    assert.equal(route.route, 'developer');
 
-    const resumed = await service.ensureResumed(project.id);
-    assert.deepEqual(resumed.recoveredTasks, ['T-mock']);
-
-    const afterResumeStore = new SQLiteV2Store(project.stateDb);
-    const afterResume = afterResumeStore.getTask('T-mock');
-    afterResumeStore.close();
-    assert.equal(afterResume.state, 'READY');
-    assert.equal(afterResume.stage, 'developer');
-    assert.equal(
-      afterResume.history.filter(entry => entry.type === 'SYSTEM_RECOVERY').length,
-      1,
-    );
+    const diagStore = new SQLiteV2Store(project.stateDb);
+    const diagnosis = diagStore.getTask('debug:T-mock:1');
+    diagStore.close();
+    assert.ok(diagnosis);
+    assert.equal(diagnosis.taskKind, 'DIAGNOSTIC');
+    assert.equal(diagnosis.state, 'DONE');
+    assert.equal(diagnosis.input.blockedTaskId, 'T-mock');
+    assert.equal(diagnosis.input.systemIncident.failure, 'UnexpectedModelBehavior: Exceeded maximum output retries (1)');
 
     const recovered = await reconcileUntil(
       service,
@@ -196,6 +204,7 @@ test('mock project blocks after repeated runtime failures and resume requeues it
 
     assert.equal(recovered.task.state, 'DONE');
     assert.equal(recovered.status.executionState, 'SUCCEEDED');
+    assert.equal(developerRuns, 4);
     assert.deepEqual(
       recovered.task.history
         .filter(entry => entry.type === 'ROLE_RESULT')

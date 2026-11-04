@@ -2,6 +2,7 @@ import { isAdhocAnalysis } from './control-task-policy.js';
 import { applyTaskEvent } from './state-machine.js';
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
 import { isTransientProviderFailure, transientRetryCooldownMs, transientWindowExpired } from './transient-provider-failure.js';
+import { ensureSystemBlockDiagnosis } from './system-block-diagnosis.js';
 
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
   if (!attemptId) return null;
@@ -207,6 +208,17 @@ export class V2Supervisor {
       ));
       this.resources.release(task.id);
     }
+    // A delivery task blocked through the system path cannot escalate
+    // itself into the project debugger, so park a diagnostic task next to
+    // it; the debugger's verdict routes the blocked task onward (or parks
+    // it for the operator) through the existing diagnosis transitions.
+    try {
+      const { failures } = ensureSystemBlockDiagnosis(this.store, projectId);
+      for (const failure of failures) {
+        const blockedTask = this.store.getTask(failure.taskId);
+        if (blockedTask) incidents.push(await this.#incident(blockedTask, failure.failure));
+      }
+    } catch { /* the diagnosis sweep must never break supervision; the next audit retries */ }
     return { incidents };
   }
 }
