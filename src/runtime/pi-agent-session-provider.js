@@ -461,34 +461,40 @@ export function piSessionManagerForSpec(spec, paths, workspace) {
     : SessionManager.create(workspace, sessionDir);
 }
 
-// Owner decision 2026-11-04: the PM keeps its persistent session, but it
-// must compact before a run once its context grows past 70% of the model
-// window, so it can never reach the provider's hard context limit the way
-// the pre-2026-11-04 persistent TL session did. The threshold is
-// overridable via ARIAD_PM_COMPACT_RATIO for tests/operations.
-export const PM_SESSION_COMPACT_RATIO = 0.7;
+// Owner decision 2026-11-04: the persistent-session roles that stay
+// persistent (PM, project debugger) must compact before a run once their
+// context grows past 70% of the model window, so they can never reach
+// the provider's hard context limit the way the pre-2026-11-04 persistent
+// TL session did (TL now runs fresh per task instead). The threshold is
+// overridable via ARIAD_SESSION_COMPACT_RATIO (legacy alias:
+// ARIAD_PM_COMPACT_RATIO) for tests/operations.
+export const SESSION_COMPACT_RATIO = 0.7;
+export const PM_SESSION_COMPACT_RATIO = SESSION_COMPACT_RATIO;
+const COMPACT_GUARDED_ROLES = new Set(['pm', 'project_debugger']);
 
-export function pmSessionCompactRatio(env = process.env) {
-  const parsed = Number(env?.ARIAD_PM_COMPACT_RATIO);
+export function sessionCompactRatio(env = process.env) {
+  const parsed = Number(env?.ARIAD_SESSION_COMPACT_RATIO ?? env?.ARIAD_PM_COMPACT_RATIO);
   if (Number.isFinite(parsed) && parsed > 0.05 && parsed < 0.99) return parsed;
-  return PM_SESSION_COMPACT_RATIO;
+  return SESSION_COMPACT_RATIO;
 }
+export const pmSessionCompactRatio = sessionCompactRatio;
 
-export async function maybeCompactPmSessionBeforeRun(session, spec, { ratio = pmSessionCompactRatio() } = {}) {
-  if (spec?.role !== 'pm' || spec?.sessionPolicy !== 'persistent') return false;
+export async function maybeCompactPersistentSessionBeforeRun(session, spec, { ratio = sessionCompactRatio() } = {}) {
+  if (!COMPACT_GUARDED_ROLES.has(spec?.role) || spec?.sessionPolicy !== 'persistent') return false;
   let usage = null;
   try { usage = session?.getContextUsage?.(); } catch { usage = null; }
   if (!usage || usage.tokens == null || !(usage.contextWindow > 0)) return false;
   if (usage.tokens <= ratio * usage.contextWindow) return false;
   try {
     await session.compact();
-    console.log(`[pi-session] pm persistent session compacted before run (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'} context=${usage.tokens}/${usage.contextWindow})`);
+    console.log(`[pi-session] ${spec.role} persistent session compacted before run (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'} context=${usage.tokens}/${usage.contextWindow})`);
     return true;
   } catch (err) {
-    console.warn(`[pi-session] pm session compaction failed (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'}): ${err?.message ?? err}`);
+    console.warn(`[pi-session] ${spec.role} session compaction failed (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'}): ${err?.message ?? err}`);
     return false;
   }
 }
+export const maybeCompactPmSessionBeforeRun = maybeCompactPersistentSessionBeforeRun;
 
 // The Pi SDK ships a built-in MCP extension, but the package exports do not
 // expose the built-in extension registry, so Ariad loads the extension file
@@ -682,7 +688,7 @@ export async function createDefaultPiRunSession(spec) {
   if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
     await session.setModel(model, { persist: false });
   }
-  await maybeCompactPmSessionBeforeRun(session, spec);
+  await maybeCompactPersistentSessionBeforeRun(session, spec);
 
   return {
     session,
