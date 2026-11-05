@@ -743,7 +743,7 @@ export function createDefaultV2Roles({
       ? buildTaskContextArtifact({ task, boundaryContext: roleBoundaryContext, artifactRoot })
       : null;
     const taskArtifactPath = taskArtifact ? writeTaskContextArtifact(artifactRoot, taskArtifact) : null;
-    const persistentSessionKey = ['pm', 'tech_lead', 'project_debugger'].includes(task.stage)
+    const persistentSessionKey = ['pm', 'project_debugger'].includes(task.stage)
       ? `${task.stage}:${task.projectId}`
       : null;
     const modelRef = typeof executionMetadata.modelRef === 'string'
@@ -1289,7 +1289,11 @@ export function createDefaultV2Roles({
     },
 
     tech_lead: {
-      sessionPolicy: 'persistent',
+      // Owner decision 2026-11-04: TL runs a fresh session per task. The
+      // durable project model lives in the store/docs and every TL prompt
+      // is self-contained; the former persistent TL session grew past the
+      // model context window and hard-blocked planning (SRPG batch-40).
+      sessionPolicy: 'fresh',
       prepare: ({ project, task }) => {
         if (task.taskKind === 'ADHOC_ANALYSIS') {
           const prompt = [

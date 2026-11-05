@@ -461,6 +461,35 @@ export function piSessionManagerForSpec(spec, paths, workspace) {
     : SessionManager.create(workspace, sessionDir);
 }
 
+// Owner decision 2026-11-04: the PM keeps its persistent session, but it
+// must compact before a run once its context grows past 70% of the model
+// window, so it can never reach the provider's hard context limit the way
+// the pre-2026-11-04 persistent TL session did. The threshold is
+// overridable via ARIAD_PM_COMPACT_RATIO for tests/operations.
+export const PM_SESSION_COMPACT_RATIO = 0.7;
+
+export function pmSessionCompactRatio(env = process.env) {
+  const parsed = Number(env?.ARIAD_PM_COMPACT_RATIO);
+  if (Number.isFinite(parsed) && parsed > 0.05 && parsed < 0.99) return parsed;
+  return PM_SESSION_COMPACT_RATIO;
+}
+
+export async function maybeCompactPmSessionBeforeRun(session, spec, { ratio = pmSessionCompactRatio() } = {}) {
+  if (spec?.role !== 'pm' || spec?.sessionPolicy !== 'persistent') return false;
+  let usage = null;
+  try { usage = session?.getContextUsage?.(); } catch { usage = null; }
+  if (!usage || usage.tokens == null || !(usage.contextWindow > 0)) return false;
+  if (usage.tokens <= ratio * usage.contextWindow) return false;
+  try {
+    await session.compact();
+    console.log(`[pi-session] pm persistent session compacted before run (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'} context=${usage.tokens}/${usage.contextWindow})`);
+    return true;
+  } catch (err) {
+    console.warn(`[pi-session] pm session compaction failed (project=${spec.projectId ?? '?'} task=${spec.taskId ?? '?'}): ${err?.message ?? err}`);
+    return false;
+  }
+}
+
 // The Pi SDK ships a built-in MCP extension, but the package exports do not
 // expose the built-in extension registry, so Ariad loads the extension file
 // from the installed package on disk. If the SDK layout ever changes, MCP
@@ -653,6 +682,7 @@ export async function createDefaultPiRunSession(spec) {
   if (session.model?.provider !== model.provider || session.model?.id !== model.id) {
     await session.setModel(model, { persist: false });
   }
+  await maybeCompactPmSessionBeforeRun(session, spec);
 
   return {
     session,

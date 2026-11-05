@@ -641,7 +641,7 @@ test('default runtime keeps only PM Tech Lead and Project Debugger persistent', 
     workspace: process.cwd(),
   });
   assert.equal(registry.pm.sessionPolicy, 'persistent');
-  assert.equal(registry.tech_lead.sessionPolicy, 'persistent');
+  assert.equal(registry.tech_lead.sessionPolicy, 'fresh');
   assert.equal(registry.project_debugger.sessionPolicy, 'persistent');
   assert.equal(registry.developer.sessionPolicy, undefined);
   assert.equal(registry.tester.sessionPolicy, undefined);
