@@ -466,6 +466,8 @@ export class VersionedStore {
       else if (changed(baseContracts.get(id), c)) out.contracts.changed.push(id);
     }
     for (const id of baseContracts.keys()) if (!draftContracts.has(id)) out.contracts.removed.push(id);
+    out.protectedTasks = this.protectedTasks();
+    out.promotionBlockers = this.promotionBlockers(draft.version);
     return out;
   }
 
@@ -475,29 +477,66 @@ export class VersionedStore {
     return sha256(stableStringify({ tasks, contracts }));
   }
 
+  // Executed-work protection, made visible BEFORE promotion: the frozen
+  // set (DONE / NEEDS_HUMAN / SYSTEM_BLOCKED) and the in-flight set
+  // (WORKING / RESULT_READY) are execution-side facts that spec drafts do
+  // not carry, so planners historically learned them one promotion refusal
+  // at a time (SRPG batch-60: three gate rounds, one task each).
+  // protectedTasks lists them; promotionBlockers checks a draft against
+  // prod for ALL of them at once.
+  protectedTasks() {
+    const frozen = [];
+    const inFlight = [];
+    for (const ex of this.listExecTasks()) {
+      if (ex.embedded) continue;
+      const state = ex.data?.state;
+      if (GATE_STATES_FROZEN.includes(state)) frozen.push({ id: ex.id, state });
+      else if (GATE_STATES_IN_FLIGHT.includes(state)) inFlight.push({ id: ex.id, state });
+    }
+    return { frozen, inFlight };
+  }
+
+  promotionBlockers(draftVersion) {
+    const prod = this.getProdVersion();
+    const blockers = [];
+    for (const ex of this.listExecTasks()) {
+      if (ex.embedded) continue;
+      const state = ex.data?.state;
+      const frozen = GATE_STATES_FROZEN.includes(state);
+      if (!frozen && !GATE_STATES_IN_FLIGHT.includes(state)) continue;
+      const draftSpec = this.getSpecTask(draftVersion, ex.id);
+      const prodSpec = prod == null ? null : this.getSpecTask(prod, ex.id);
+      if (!draftSpec) {
+        blockers.push(frozen
+          ? { id: ex.id, state, reason: 'removed', code: 'PROMOTION_REMOVES_EXECUTED_TASK', message: `draft removes ${state} task ${ex.id}` }
+          : { id: ex.id, state, reason: 'removed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
+      } else if (prodSpec && gateSignature(draftSpec) !== gateSignature(prodSpec)) {
+        blockers.push(frozen
+          ? { id: ex.id, state, reason: 'gate-signature-changed', code: state === 'DONE' ? 'REVISE_COMPLETED_TASK' : 'REVISE_BLOCKED_TASK', message: `draft changes the gate signature of ${state} task ${ex.id}` }
+          : { id: ex.id, state, reason: 'gate-signature-changed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
+      }
+    }
+    return blockers;
+  }
+
   promoteDraft({ approvedBy = null } = {}) {
     const draft = this.getOpenDraft();
     if (!draft) fail('NO_OPEN_DRAFT', 'no draft version is open');
     const errors = this.validateVersion(draft.version);
     if (errors.length) fail('TREE_VALIDATION_FAILED', `draft version ${draft.version} failed validation`, errors);
-    const prod = this.getProdVersion();
-    // Promotion guards: executed work is never silently rewritten or dropped.
-    for (const ex of this.listExecTasks()) {
-      if (ex.embedded) continue;
-      const state = ex.data?.state;
-      const draftSpec = this.getSpecTask(draft.version, ex.id);
-      const prodSpec = prod == null ? null : this.getSpecTask(prod, ex.id);
-      if (GATE_STATES_FROZEN.includes(state)) {
-        if (!draftSpec) fail('PROMOTION_REMOVES_EXECUTED_TASK', `draft removes ${state} task ${ex.id}`, { taskId: ex.id, state });
-        if (prodSpec && gateSignature(draftSpec) !== gateSignature(prodSpec)) {
-          fail(state === 'DONE' ? 'REVISE_COMPLETED_TASK' : 'REVISE_BLOCKED_TASK',
-            `draft changes the gate signature of ${state} task ${ex.id}`, { taskId: ex.id, state });
-        }
-      } else if (GATE_STATES_IN_FLIGHT.includes(state)) {
-        if (!draftSpec || (prodSpec && gateSignature(draftSpec) !== gateSignature(prodSpec))) {
-          fail('UNIFIED_TASK_DELIVERY_IN_FLIGHT', `draft touches in-flight task ${ex.id}; promotion defers`, { taskId: ex.id, state });
-        }
-      }
+    // Promotion guards: executed work is never silently rewritten or
+    // dropped. ALL blockers are reported at once - reporting only the
+    // first turned every repair round into whack-a-mole (SRPG batch-60:
+    // the gate named one DONE task per round, three rounds running).
+    const blockers = this.promotionBlockers(draft.version);
+    if (blockers.length === 1) {
+      const b = blockers[0];
+      fail(b.code, b.message, { taskId: b.id, state: b.state, violations: blockers });
+    }
+    if (blockers.length > 1) {
+      fail('PROMOTION_BLOCKED_BY_EXECUTED_WORK',
+        `draft violates executed-work protection on ${blockers.length} tasks - restore every one of them to its production spec (or restore the removed task) before resubmitting: ${blockers.map(b => `${b.id} (${b.state}: ${b.reason})`).join(', ')}`,
+        { violations: blockers });
     }
     const hash = this.contentHash(draft.version);
     const ts = nowIso();
