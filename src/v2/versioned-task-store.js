@@ -1,5 +1,6 @@
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { scopeOfTask } from './control-task-policy.js';
+import { resolveReplannedTasks } from './replan-resolution.js';
 
 // De-materialized task store for DB-first (versionedTree) projects
 // (owner model, 2026-10-31). Two trees, one store file:
@@ -181,6 +182,18 @@ export class VersionedTaskStore {
       resolved.push(issue.id);
     }
     return resolved;
+  }
+
+  // Planning-batch completion: the runtime store settles the batch in
+  // its own tables (request states, issue bookkeeping); the facade then
+  // resolves any debugger-requested task replans against the merged
+  // spec+exec view, so a task parked in WAITING_REPLAN is obsoleted when
+  // the split replaced it or returns to READY when its spec survived
+  // (see replan-resolution.js).
+  completePlanningBatch(projectId, batchId) {
+    const batch = this.runtime.completePlanningBatch(projectId, batchId);
+    resolveReplannedTasks(this, projectId, batch);
+    return batch;
   }
 
   // Composite executor routes, composed over the routed primitives (the

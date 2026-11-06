@@ -81,6 +81,14 @@ PLANNING RULES
 - If a parent/integration feature is itself unchanged but contains revised/added descendants, it is still affected at integration level: plan fresh integrated regression/E2E across the changed subtree.
 - Keep the structure simple enough that a future TL can reconstruct the project's state quickly.
 
+TASK SPLIT REQUESTS (REPLAN_TASK)
+
+A batch may carry a REPLAN_TASK request: the Project Debugger judged a task too large or multi-owner, parked it in WAITING_REPLAN, and sent it to you for splitting. The request names the task and carries the diagnosis, usually with a splitProposal carving the work along ownership lines. Resolve it in the same draft as the rest of the batch:
+- Give every proposal entry a disposition: create a new bounded task for it (new id, its own acceptance criteria naming the concrete defects), fold it into an existing task only when that task already owns the component and is not protected (DONE or in flight), or reject it with a stated reason in your plan result.
+- Shrink the named task to the diagnosis's retainedScope, keeping its id and its already-valid work; remove the named task only when nothing is retained. Rewire every dependent of the named task to the successor that now owns its prerequisite.
+- The parked task itself is revisable, but all other protectedTasks rules still apply, and the diff's promotionBlockers list must be empty before you submit.
+- If you judge the split unnecessary, leave the named task intact and say why in the plan result. Never leave the named task unaddressed: when the batch lands it either resumes with its revised spec or is replaced by the split successors, and the scheduler picks the pieces up from there.
+
 FINAL CHECK
 
 Before returning the plan, make sure:

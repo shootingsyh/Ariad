@@ -1097,11 +1097,24 @@ export function createDefaultV2Roles({
     project_debugger: {
       sessionPolicy: 'persistent',
       prepare: ({ task }) => {
+        // Owner rule (2026-11-05): on every diagnosis the debugger judges
+        // the SIZE and OWNERSHIP of the remaining fix work. Work that is
+        // too large for one task, or that belongs to other tasks or
+        // components, is not sent back as one work order - it goes to the
+        // Tech Lead as TASK_TOO_LARGE with a split proposal; the TL splits
+        // it and the pieces are scheduled separately.
+        const splitAssessment = [
+          'Before choosing a route, judge the SIZE and OWNERSHIP of the remaining fix work:',
+          '- Size: can one role still execute all of it as one coherent task? A heterogeneous bundle (for example capture-pipeline fixes plus art-asset rework plus unrelated UI repairs) is not one task, however small each piece is.',
+          '- Ownership: does every defect belong to the component and acceptance scope this task itself owns? Defects in other components that the deliverable of this task merely exposes or captures (an inconsistent art asset it screenshots, UI defects of another screen, the subsystem of another task) belong to their owners, not to this task.',
+          'If the remaining work is too large for one task OR any part of it belongs to another owner, return TASK_TOO_LARGE instead of a repair route for the whole pile. In result.splitProposal, carve the work along ownership lines - one entry per successor scope: {scope, ownerTaskId (an existing task id when that owner already exists, otherwise null), ownerComponent, findings[]} - and set result.retainedScope to the part that stays in the original task (null when nothing stays). The Tech Lead splits the task from your proposal; do not send multi-owner work back to the developer of this task as one work order.',
+        ].join('\n');
         return prepareLlm(task, task.input?.blockedTaskId ? [
           "You are Ariad's unified Project Debugger.",
           'Automatic execution retry has been exhausted for the blocked business task below.',
           'Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
-          'A runtime symptom does not imply a runtime root cause. If task size/shape likely caused repeated stalls, use TASK_TOO_LARGE so Tech Lead can split/replan it.',
+          'A runtime symptom does not imply a runtime root cause.',
+          splitAssessment,
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
           'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
           JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
@@ -1111,7 +1124,14 @@ export function createDefaultV2Roles({
           'Gate failure:', JSON.stringify(task.input.previousGateFailure, null, 2),
           'Treat the named artifacts as the prime suspect: re-read and re-parse them yourself before judging plan semantics - a semantics-only check misses defects like malformed JSON.',
           'If a bounded artifact repair is viable, return RETRY_WITH_GUIDANCE with guidance naming the exact file and fix. Otherwise submit a structured diagnosis; never override validator or critic.',
-        ].join('\n') : null);
+        ].join('\n') : [
+          "You are Ariad's unified Project Debugger.",
+          'A delivery task has been escalated to you after repeated failures or a review rejection. Diagnose the root cause across BOTH project/task causes and execution/runtime/model causes.',
+          splitAssessment,
+          'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+          'For WRONG_IMPLEMENTATION_APPROACH, state the corrected approach concretely in summary/guidance so a developer can execute it directly.',
+          'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
+        ].join('\n\n'));
       },
       transition: ({ task, result }) => {
         if (task.taskKind === TASK_KINDS.PLANNING) return planResultTransition(task, result);

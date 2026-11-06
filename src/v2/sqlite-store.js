@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 import { notifyHumanAttentionTransition } from './notifications.js';
+import { resolveReplannedTasks } from './replan-resolution.js';
 
 function encode(value) {
   return JSON.stringify(value ?? null);
@@ -642,6 +643,7 @@ export class SQLiteV2Store {
         },
       });
     }
+    resolveReplannedTasks(this, projectId, batch);
     return this.listPlanningRequests(projectId).filter(item => item.batchId === batchId);
   }
 
