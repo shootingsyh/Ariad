@@ -10,6 +10,31 @@ import { createHash } from 'node:crypto';
 export const DELIVERY_KINDS = ['FEATURE_TASK', 'INTEGRATION_TASK', 'MILESTONE_TASK'];
 const GATE_STATES_FROZEN = ['DONE', 'NEEDS_HUMAN', 'SYSTEM_BLOCKED'];
 const GATE_STATES_IN_FLIGHT = ['WORKING', 'RESULT_READY'];
+// Terminal states carry no unfinished work, so a draft may drop their
+// specs without losing anything the promotion gate exists to protect.
+const GATE_STATES_TERMINAL = ['SKIPPED', 'OBSOLETE'];
+
+// Executed work survives in the exec record even when the task itself is
+// back in READY between stages: a recorded role result, a consumed
+// interruption (the attempt ran and may have left working-tree changes),
+// or a live execution handle. A task with none of these has never started.
+function hasExecutedWork(data) {
+  if (!data) return false;
+  if (data.execution) return true;
+  return (data.history ?? []).some(entry =>
+    entry?.type === 'ROLE_RESULT'
+    || (entry?.type === 'SYSTEM_INTERRUPTION' && entry?.consumeAttempt !== false));
+}
+
+// A started task sits between stages (typically READY) with executed
+// stages already in its history: not frozen, not in flight, but dropping
+// or re-signing its spec would orphan the finished stages.
+function isStartedTask(state, data) {
+  return !GATE_STATES_FROZEN.includes(state)
+    && !GATE_STATES_IN_FLIGHT.includes(state)
+    && !GATE_STATES_TERMINAL.includes(state)
+    && hasExecutedWork(data);
+}
 
 function nowIso() { return new Date().toISOString(); }
 function encode(v) { return JSON.stringify(v ?? null); }
@@ -478,22 +503,25 @@ export class VersionedStore {
   }
 
   // Executed-work protection, made visible BEFORE promotion: the frozen
-  // set (DONE / NEEDS_HUMAN / SYSTEM_BLOCKED) and the in-flight set
-  // (WORKING / RESULT_READY) are execution-side facts that spec drafts do
-  // not carry, so planners historically learned them one promotion refusal
-  // at a time (SRPG batch-60: three gate rounds, one task each).
-  // protectedTasks lists them; promotionBlockers checks a draft against
-  // prod for ALL of them at once.
+  // set (DONE / NEEDS_HUMAN / SYSTEM_BLOCKED), the in-flight set
+  // (WORKING / RESULT_READY) and the started set (between stages, e.g.
+  // READY, with executed stages in history) are execution-side facts
+  // that spec drafts do not carry, so planners historically learned them
+  // one promotion refusal at a time (SRPG batch-60: three gate rounds,
+  // one task each). protectedTasks lists them; promotionBlockers checks
+  // a draft against prod for ALL of them at once.
   protectedTasks() {
     const frozen = [];
     const inFlight = [];
+    const started = [];
     for (const ex of this.listExecTasks()) {
       if (ex.embedded) continue;
       const state = ex.data?.state;
       if (GATE_STATES_FROZEN.includes(state)) frozen.push({ id: ex.id, state });
       else if (GATE_STATES_IN_FLIGHT.includes(state)) inFlight.push({ id: ex.id, state });
+      else if (isStartedTask(state, ex.data)) started.push({ id: ex.id, state });
     }
-    return { frozen, inFlight };
+    return { frozen, inFlight, started };
   }
 
   promotionBlockers(draftVersion) {
@@ -503,17 +531,28 @@ export class VersionedStore {
       if (ex.embedded) continue;
       const state = ex.data?.state;
       const frozen = GATE_STATES_FROZEN.includes(state);
-      if (!frozen && !GATE_STATES_IN_FLIGHT.includes(state)) continue;
+      const inFlight = GATE_STATES_IN_FLIGHT.includes(state);
+      // Started tasks are executed work too (SRPG fix-cinematic,
+      // 2026-11-06: developer PASS recorded, task back in READY at
+      // test_engineer, a later promotion dropped its spec and the
+      // orphan was silently reclassified OBSOLETE - the project
+      // SUCCEEDED without it). Protect them like frozen tasks.
+      const started = isStartedTask(state, ex.data);
+      if (!frozen && !inFlight && !started) continue;
       const draftSpec = this.getSpecTask(draftVersion, ex.id);
       const prodSpec = prod == null ? null : this.getSpecTask(prod, ex.id);
       if (!draftSpec) {
         blockers.push(frozen
           ? { id: ex.id, state, reason: 'removed', code: 'PROMOTION_REMOVES_EXECUTED_TASK', message: `draft removes ${state} task ${ex.id}` }
-          : { id: ex.id, state, reason: 'removed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
+          : started
+            ? { id: ex.id, state, reason: 'removed', code: 'PROMOTION_REMOVES_STARTED_TASK', message: `draft removes ${state} task ${ex.id} with executed stages in its history` }
+            : { id: ex.id, state, reason: 'removed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
       } else if (prodSpec && gateSignature(draftSpec) !== gateSignature(prodSpec)) {
         blockers.push(frozen
           ? { id: ex.id, state, reason: 'gate-signature-changed', code: state === 'DONE' ? 'REVISE_COMPLETED_TASK' : 'REVISE_BLOCKED_TASK', message: `draft changes the gate signature of ${state} task ${ex.id}` }
-          : { id: ex.id, state, reason: 'gate-signature-changed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
+          : started
+            ? { id: ex.id, state, reason: 'gate-signature-changed', code: 'REVISE_STARTED_TASK', message: `draft changes the gate signature of ${state} task ${ex.id} with executed stages in its history` }
+            : { id: ex.id, state, reason: 'gate-signature-changed', code: 'UNIFIED_TASK_DELIVERY_IN_FLIGHT', message: `draft touches in-flight task ${ex.id}; promotion defers` });
       }
     }
     return blockers;

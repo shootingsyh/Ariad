@@ -106,3 +106,67 @@ test('a single violation keeps its legacy code and gains the violations list', (
     return true;
   });
 });
+
+const TASK_D = { id: 'd-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Delta task', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+const TASK_E = { id: 'e-task', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', title: 'Epsilon task', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+
+function seedStarted(store) {
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([
+    { op: 'upsertContract', contract: FEATURE_CONTRACT },
+    { op: 'upsertTask', task: TASK_D },
+    { op: 'upsertTask', task: TASK_E },
+  ]);
+  store.promoteDraft({ approvedBy: 'pm' });
+  // d-task finished its developer stage and sits in READY for the next
+  // stage: executed work, but neither frozen nor in flight (the SRPG
+  // fix-cinematic shape).
+  store.upsertExecTask({ id: 'd-task', projectId: 'proj', state: 'READY', stage: 'test_engineer', history: [{ type: 'ROLE_RESULT', role: 'developer', outcome: 'PASS' }] });
+  // e-task has never started: dropping it is a legitimate plan change.
+  store.upsertExecTask({ id: 'e-task', projectId: 'proj', state: 'READY', stage: 'developer', history: [] });
+}
+
+test('protectedTasks lists started tasks (READY with executed stages), not unstarted ones', (t) => {
+  const store = makeStore(t);
+  seedStarted(store);
+  const { started } = store.protectedTasks();
+  assert.deepEqual(started, [{ id: 'd-task', state: 'READY' }]);
+});
+
+test('promotion cannot drop a started task, but may drop an unstarted one', (t) => {
+  const store = makeStore(t);
+  seedStarted(store);
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([
+    { op: 'removeTask', taskId: 'd-task' },
+    { op: 'removeTask', taskId: 'e-task' },
+  ]);
+  const blockers = store.diffDraft().promotionBlockers;
+  assert.equal(blockers.length, 1);
+  assert.equal(blockers[0].id, 'd-task');
+  assert.equal(blockers[0].reason, 'removed');
+  assert.equal(blockers[0].code, 'PROMOTION_REMOVES_STARTED_TASK');
+  assert.throws(() => store.promoteDraft({ approvedBy: 'pm' }), (e) => {
+    assert.equal(e.code, 'PROMOTION_REMOVES_STARTED_TASK');
+    assert.equal(e.details.taskId, 'd-task');
+    return true;
+  });
+  // Restoring the started task lets the same draft promote; the
+  // unstarted removal goes through.
+  store.applyTreeOps([{ op: 'upsertTask', task: TASK_D }]);
+  assert.deepEqual(store.diffDraft().promotionBlockers, []);
+  const res = store.promoteDraft({ approvedBy: 'pm' });
+  assert.equal(store.getProdVersion(), res.version);
+});
+
+test('promotion cannot change the gate signature of a started task', (t) => {
+  const store = makeStore(t);
+  seedStarted(store);
+  store.createDraft({ createdBy: 'tl' });
+  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_D, dependsOn: ['e-task'] } }]);
+  const blockers = store.diffDraft().promotionBlockers;
+  assert.equal(blockers.length, 1);
+  assert.equal(blockers[0].id, 'd-task');
+  assert.equal(blockers[0].reason, 'gate-signature-changed');
+  assert.equal(blockers[0].code, 'REVISE_STARTED_TASK');
+});
