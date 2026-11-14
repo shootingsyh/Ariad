@@ -87,3 +87,47 @@ test('dispatcher still propagates other transition errors', async () => {
   const roles = { get: () => ({ transition: () => { throw new Error('BOOM'); } }) };
   await assert.rejects(new RoleResultDispatcher({ store, roles }).advanceResults('P'), /BOOM/);
 });
+
+
+test('dispatcher refuses DONE while the latest UX verdict is NOT_PASS (2026-11-14)', async () => {
+  const task = {
+    id: 'U', projectId: 'P', version: 2, taskKind: 'FEATURE_TASK', scope: 'delivery',
+    state: 'RESULT_READY', stage: 'reviewer', execution: { externalId: 'old' },
+    history: [
+      { type: 'ROLE_RESULT', role: 'artist', outcome: 'PASS' },
+      { type: 'ROLE_RESULT', role: 'ux_reviewer', outcome: 'NOT_PASS' },
+      { type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' },
+    ],
+  };
+  const updates = [];
+  const store = {
+    listTasks: () => [task],
+    updateTask(id, version, patch) { updates.push(patch); return { ...task, ...patch, version: 3 }; },
+    appendTaskHistory(id, version) { return { ...task, version: version + 1 }; },
+  };
+  const roles = { get: () => ({ transition: () => ({ state: 'DONE' }) }) };
+  await new RoleResultDispatcher({ store, roles }).advanceResults('P');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].state, 'READY');
+  assert.equal(updates[0].stage, 'ux_reviewer');
+});
+
+test('dispatcher allows DONE once the latest UX verdict is PASS (2026-11-14)', async () => {
+  const task = {
+    id: 'V', projectId: 'P', version: 2, taskKind: 'FEATURE_TASK', scope: 'delivery',
+    state: 'RESULT_READY', stage: 'reviewer', execution: { externalId: 'old' },
+    history: [
+      { type: 'ROLE_RESULT', role: 'ux_reviewer', outcome: 'NOT_PASS' },
+      { type: 'ROLE_RESULT', role: 'ux_reviewer', outcome: 'PASS' },
+      { type: 'ROLE_RESULT', role: 'reviewer', outcome: 'PASS' },
+    ],
+  };
+  let final;
+  const store = {
+    listTasks: () => [task],
+    updateTask(id, version, patch) { final = { ...task, ...patch, version: 3 }; return final; },
+  };
+  const roles = { get: () => ({ transition: () => ({ state: 'DONE' }) }) };
+  await new RoleResultDispatcher({ store, roles }).advanceResults('P');
+  assert.equal(final.state, 'DONE');
+});

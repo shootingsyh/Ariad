@@ -30,6 +30,40 @@ const DELIVERY_RESULT_STAGES = new Set([
   'developer', 'test_engineer', 'tester', 'reviewer', 'ux_reviewer', 'project_debugger',
 ]);
 
+// Scheduler completion gate (owner rule, 2026-11-14): a delivery task
+// whose latest UX verdict is NOT_PASS must not reach DONE through another
+// stage's PASS. Observed failure: T-store-materials was closed on a
+// reviewer PASS after a replan dropped the task's ux flag, while four UX
+// NOT_PASS verdicts were still standing - the flagged assets shipped
+// unreviewed. The gate keys off history, not the (losable) ux flag: any
+// task that has ever been UX-reviewed stays in the UX regime until a UX
+// PASS lands. Debugger/planning close-outs (blockedRoute/planningRequest)
+// and the UX reviewer's own PASS are exempt.
+export function latestUxOutcome(task) {
+  const history = task?.history ?? [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.type === 'ROLE_RESULT' && entry?.role === 'ux_reviewer') return entry.outcome ?? null;
+  }
+  return null;
+}
+
+export function applyUxCompletionGate(task, next) {
+  if (!next || next.state !== 'DONE') return next;
+  if (next.blockedRoute || next.planningRequest) return next;
+  if (task?.stage === 'ux_reviewer') return next;
+  const uxOutcome = latestUxOutcome(task);
+  if (uxOutcome === null || uxOutcome === 'PASS') return next;
+  return {
+    stage: 'ux_reviewer', state: 'READY',
+    transitionHistory: {
+      type: 'UX_COMPLETION_GATE', role: 'scheduler',
+      reason: 'LATEST_UX_VERDICT_NOT_PASS', latestUxOutcome: uxOutcome,
+      at: new Date().toISOString(),
+    },
+  };
+}
+
 export class RoleResultDispatcher {
   constructor({ store, roles, uxReviewEnabled = false }) {
     this.store = store;
@@ -84,8 +118,9 @@ export class RoleResultDispatcher {
       const role = this.roles.get(task.stage);
       const entry = table[task.taskKind];
       try {
-        const next = (entry ? entry(task, result, role) : null)
+        const proposed = (entry ? entry(task, result, role) : null)
           ?? await fallbackTransition(role, task, result);
+        const next = applyUxCompletionGate(task, proposed);
         await persistRoleExecutorTransition({ store: this.store, roles: this.roles, task, result, next });
       } catch (error) {
         // A transition that must wait for in-flight delivery execution is

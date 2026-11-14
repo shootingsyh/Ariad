@@ -9,7 +9,7 @@ export const milestoneMachine = defineExecutorMachine({
     TEST_ENGINEER: { operation: 'runTestEngineer', transitions: { PASS: 'TEST', FIX_PLAN: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     TEST: { operation: 'runTester', transitions: { PASS: 'REVIEW', REPLAN_TESTS: 'TEST_ENGINEER', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
     REVIEW: { operation: 'runReviewer', transitions: { PASS: 'COMPLETE', UX_REVIEW: 'UX_REVIEW', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
-    UX_REVIEW: { operation: 'runUxReviewer', transitions: { PASS: 'COMPLETE', RETRY: 'DEVELOP', ESCALATE: 'DEBUG' } },
+    UX_REVIEW: { operation: 'runUxReviewer', transitions: { PASS: 'COMPLETE', RETRY: 'DEVELOP', RETRY_ARTIST: 'ARTIST', ESCALATE: 'DEBUG' } },
     DEBUG: { operation: 'runDebugger', transitions: { REPAIRED: 'DEVELOP', ROUTE_ARTIST: 'ARTIST', ROUTE_PM: 'PM', WAIT_REPLAN: 'REPLAN_PENDING', NEEDS_HUMAN: 'FAILED' } },
     ARTIST: { operation: 'runArtist', transitions: { PASS: 'DEVELOP', ESCALATE: 'DEBUG' } },
     PM: { operation: 'runPM', transitions: { PASS: 'DEVELOP', NEEDS_HUMAN: 'FAILED' } },

@@ -49,6 +49,16 @@ export function recordArtifactIncidentOnce(store, task, artifactRef, failure) {
   });
 }
 
+// Owner rule (2026-11-14): a UX rejection concerns the produced assets
+// first. When the task's flow includes an artist (the artist produced the
+// deliverables under review), rework starts at the artist and then flows
+// through the developer again - never straight to the developer, who
+// cannot repair asset-level defects and can only sign them off.
+export function taskHasArtistFlow(task) {
+  if (task?.art?.required === true || task?.input?.art?.required === true) return true;
+  return (task?.history ?? []).some(h => h?.type === 'ROLE_RESULT' && h?.role === 'artist');
+}
+
 export function failureCount(task) {
   const history = task.history ?? [];
   let count = 0;

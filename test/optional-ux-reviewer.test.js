@@ -51,3 +51,11 @@ test('project UX flag defaults off and requires STOPPED to change', async () => 
     assert.throws(() => manager.setUxReview('ux', { enabled: false }), /REQUIRES_STOPPED_PROJECT/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('UX rejection returns to the artist first when the task has an artist in its flow (2026-11-14)', () => {
+  const withArtist = { ux: { required: true }, history: [{ type: 'ROLE_RESULT', role: 'artist', outcome: 'PASS' }] };
+  assert.deepEqual(roles(true).ux_reviewer.transition({ task: withArtist, result: { outcome: 'NOT_PASS' } }), { stage: 'artist', state: 'READY' });
+  const artFlag = { ux: { required: true }, art: { required: true }, history: [] };
+  assert.deepEqual(roles(true).ux_reviewer.transition({ task: artFlag, result: { outcome: 'NOT_PASS' } }), { stage: 'artist', state: 'READY' });
+});

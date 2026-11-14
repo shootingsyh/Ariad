@@ -1,6 +1,7 @@
 import { isDeliveryKind, TASK_KINDS } from './control-task-policy.js';
 import { executorTransitionFromResult } from './role-executor-transition.js';
 import { acceptanceCriterionIds } from './acceptance.js';
+import { taskHasArtistFlow } from './planning-helpers.js';
 
 // Milestone owns role transitions. Never interpret a failed or unknown result
 // as PASS. Tester evidence and reviewer source-control checks remain enforced
@@ -102,7 +103,8 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       break;
     case 'ux_reviewer':
       signal = outcome === 'PASS' ? 'PASS'
-        : outcome === 'NOT_PASS' && failureCount(task) < 3 ? 'RETRY' : 'ESCALATE';
+        : outcome === 'NOT_PASS' && failureCount(task) < 3
+          ? (taskHasArtistFlow(task) ? 'RETRY_ARTIST' : 'RETRY') : 'ESCALATE';
       break;
     case 'project_debugger': {
       // A separate diagnostic task may need to mutate its blocked task.

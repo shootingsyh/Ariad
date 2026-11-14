@@ -54,3 +54,17 @@ test('test engineer malformed AC mapping retries locally with precise feedback, 
  const fixed={outcome:'PASS',result:{testPlan:{testCases:[{entry:'test.js',command:'node --test test.js',covers:['AC1','AC2'],executionScope:[]}]}}};
  assert.equal(milestoneResultTransition(t,fixed).stage,'tester');
 });
+
+
+test('ux rejection returns to the artist first when the task flow includes one (2026-11-14)', () => {
+  const artistResult = { type: 'ROLE_RESULT', role: 'artist', outcome: 'PASS' };
+  const withArtist = task('ux_reviewer', { history: [artistResult] });
+  assert.equal(milestoneResultTransition(withArtist, { outcome: 'NOT_PASS' }).stage, 'artist');
+  const artFlag = task('ux_reviewer', { art: { required: true } });
+  assert.equal(milestoneResultTransition(artFlag, { outcome: 'NOT_PASS' }).stage, 'artist');
+  // No artist in flow: code-only tasks keep the developer route.
+  assert.equal(milestoneResultTransition(task('ux_reviewer'), { outcome: 'NOT_PASS' }).stage, 'developer');
+  // Escalation bound is unchanged.
+  const history = Array.from({ length: 3 }, () => ({ type: 'ROLE_RESULT', role: 'ux_reviewer', outcome: 'NOT_PASS' }));
+  assert.equal(milestoneResultTransition(task('ux_reviewer', { history: [artistResult, ...history] }), { outcome: 'NOT_PASS' }).stage, 'project_debugger');
+});

@@ -92,7 +92,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
   }).length;
 }
 
-import { pmEscalationHasQuestions, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
+import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -1023,7 +1023,7 @@ export function createDefaultV2Roles({
         if (result.outcome === 'PASS') return { state: 'DONE' };
         return failureCount(task) >= 3
           ? { stage: 'project_debugger', state: 'READY' }
-          : { stage: 'developer', state: 'READY' };
+          : { stage: taskHasArtistFlow(task) ? 'artist' : 'developer', state: 'READY' };
       },
       async afterPersist({ task, result }) {
         const issueFollowUp = processDiscoveredIssues(task, result);
@@ -1130,6 +1130,7 @@ export function createDefaultV2Roles({
           splitAssessment,
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
           'For WRONG_IMPLEMENTATION_APPROACH, state the corrected approach concretely in summary/guidance so a developer can execute it directly.',
+          'Choose the diagnosis by where the defect lives: defects in the produced visual assets themselves - an asset whose style clashes with the rest of the deliverable, capture or recording artifacts baked into a deliverable (engine splash frames, a visible cursor), duplicated or missing asset states, a placeholder-grade asset - are ASSET_ISSUE and route to the artist for rework (the flow then continues to the developer on its own). Reserve WRONG_IMPLEMENTATION_APPROACH for defects in code or in the implementation approach. When a UX reviewer rejection is what escalated this task, presume its findings are asset-level (ASSET_ISSUE) unless the evidence clearly shows a code defect.',
           'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
         ].join('\n\n'));
       },
