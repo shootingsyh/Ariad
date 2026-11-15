@@ -49,6 +49,20 @@ export function debuggerAutoCarry(task, result) {
     && debuggerAutoCarries(task) < DEBUGGER_AUTO_CARRY_LIMIT;
 }
 
+// A blocked PLANNING task has no delivery stages: its recovery route is
+// the planning stage that owns its purpose (the stage the planner flow
+// created it with), so a re-run re-enters the planning flow where the
+// task left off. Verdicts that ask for a product or requirements
+// decision cannot be expressed as a planning stage; those park the
+// planning task at its human gate instead (see the blockedRoute patch
+// in the project_debugger case below).
+export function plannerHomeStage(purpose) {
+  if (purpose === 'PLANNER_PM_REVIEW' || purpose === 'REQUIREMENTS_AUTHORING') return 'pm';
+  if (typeof purpose === 'string' && purpose.includes('VALIDATE')) return 'plan_validator';
+  if (typeof purpose === 'string' && purpose.includes('CRITIC')) return 'tech_lead_critic';
+  return 'tech_lead';
+}
+
 function consecutiveRoleFailures(task, role) {
   let count = 0;
   for (let i = (task.history ?? []).length - 1; i >= 0; i--) {
@@ -119,6 +133,19 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
           ...(blockedTaskId ? { source: 'system_block_diagnosis' } : {}),
           at: new Date().toISOString(),
         };
+        if (blockedTaskId && task.input?.blockedTaskKind === TASK_KINDS.PLANNING) {
+          // A planning task owns no delivery work to replan: its tech
+          // lead re-runs the step with the split proposal as guidance.
+          return {
+            state: 'DONE',
+            blockedRoute: {
+              taskId: blockedTaskId,
+              patch: { stage: 'tech_lead', state: 'READY', execution: null },
+              history,
+            },
+            transitionHistory: null,
+          };
+        }
         return {
           ...(blockedTaskId ? { state: 'DONE', blockedRoute: {
             taskId: blockedTaskId,
@@ -142,11 +169,19 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
         ? { ...task, taskKind: TASK_KINDS.MILESTONE_TASK } : task, signal);
       const route = { REPAIRED: 'developer', ROUTE_ARTIST: 'artist', ROUTE_PM: 'pm' }[signal];
       const blockedTaskId = task.input?.blockedTaskId ?? null;
-      const blockedRoute = blockedTaskId && route ? {
+      const blockedPlanning = blockedTaskId != null
+        && task.input?.blockedTaskKind === TASK_KINDS.PLANNING;
+      const blockedRouteStage = blockedPlanning && signal === 'REPAIRED'
+        ? plannerHomeStage(task.input?.blockedTaskPurpose) : route;
+      const blockedPatch = !route ? null
+        : blockedPlanning && signal !== 'REPAIRED'
+          ? { state: 'NEEDS_HUMAN', execution: null }
+          : { stage: blockedRouteStage, state: 'READY', execution: null };
+      const blockedRoute = blockedTaskId && blockedPatch ? {
         taskId: blockedTaskId,
-        patch: { stage: route, state: 'READY', execution: null },
+        patch: blockedPatch,
         history: {
-          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
+          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: blockedRouteStage,
           diagnosis: outcome ?? 'UNKNOWN',
           guidance: result.result?.guidance ?? (autoCarry ? (result.summary ?? result.result?.reason ?? null) : null),
           ...(autoCarry ? {
@@ -154,6 +189,10 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
             summary: result.summary ?? result.result?.reason ?? null,
             evidence: result.result?.evidence ?? [],
             affectedComponent: result.result?.affectedComponent ?? null,
+          } : {}),
+          ...(blockedPlanning && signal !== 'REPAIRED' ? {
+            summary: result.summary ?? result.result?.reason ?? null,
+            questions: result.result?.questions ?? [],
           } : {}),
           source: 'system_block_diagnosis', at: new Date().toISOString(),
         },
@@ -169,10 +208,10 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
           questions: ['Review the diagnosis, repair the runtime/model policy as appropriate, then explicitly resume the project.'],
           at: new Date().toISOString(),
         } : {
-          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route,
+          type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: blockedRouteStage,
           diagnosis: outcome ?? 'UNKNOWN',
           guidance: result.result?.guidance ?? (autoCarry ? (result.summary ?? result.result?.reason ?? null) : null),
-          ...(route === 'pm' ? { summary: result.summary ?? result.result?.reason ?? null } : {}),
+          ...(blockedRouteStage === 'pm' ? { summary: result.summary ?? result.result?.reason ?? null } : {}),
           ...(autoCarry ? {
             autoCarried: true,
             summary: result.summary ?? result.result?.reason ?? null,

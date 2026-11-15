@@ -67,3 +67,52 @@ test('side-effectful debugger cases stay on existing atomic routing path', () =>
   assert.equal(replan.state, 'WAITING_REPLAN');
   assert.equal(replan.planningRequest.request.purpose, 'REPLAN_TASK');
 });
+
+const diagTask = (input = {}) => ({
+  taskKind: 'DIAGNOSTIC', stage: 'project_debugger', input,
+});
+const planningDiag = (purpose) => diagTask({
+  blockedTaskId: 'P-blocked', blockedTaskKind: 'PLANNING', blockedTaskPurpose: purpose,
+});
+test('debugger runtime diagnosis returns a blocked planning gate to its validator stage', () => {
+  const next = milestoneResultTransition(planningDiag('PLANNER_FINAL_VALIDATE'), {
+    outcome: 'SYSTEM_RUNTIME_FAILURE', summary: 'Validator misread the accounting; fixed in the new build.',
+  });
+  assert.equal(next.state, 'DONE');
+  assert.equal(next.blockedRoute.taskId, 'P-blocked');
+  assert.deepEqual(next.blockedRoute.patch, { stage: 'plan_validator', state: 'READY', execution: null });
+  assert.equal(next.blockedRoute.history.route, 'plan_validator');
+  assert.equal(next.blockedRoute.history.autoCarried, true);
+});
+test('debugger diagnosis returns blocked planning tasks to their home stage', () => {
+  const cases = [
+    ['PLANNER_DECOMPOSE', 'tech_lead'],
+    ['PLANNER_REPAIR', 'tech_lead'],
+    ['PLANNER_VALIDATE', 'plan_validator'],
+    ['PLANNER_CRITIC', 'tech_lead_critic'],
+    ['PLANNER_PM_REVIEW', 'pm'],
+  ];
+  for (const [purpose, stage] of cases) {
+    const next = milestoneResultTransition(planningDiag(purpose), { outcome: 'WRONG_IMPLEMENTATION_APPROACH' });
+    assert.equal(next.blockedRoute.patch.stage, stage, purpose);
+    assert.equal(next.blockedRoute.patch.state, 'READY', purpose);
+  }
+});
+test('debugger decision verdict parks a blocked planning task at its human gate', () => {
+  const next = milestoneResultTransition(planningDiag('PLANNER_DECOMPOSE'), {
+    outcome: 'REQUIREMENT_DECISION_REQUIRED', summary: 'Scope question for the owner.',
+    result: { questions: ['Widen the scope?'] },
+  });
+  assert.equal(next.state, 'DONE');
+  assert.equal(next.blockedRoute.patch.state, 'NEEDS_HUMAN');
+  assert.equal(next.blockedRoute.patch.stage, undefined);
+  assert.equal(next.blockedRoute.history.route, 'pm');
+  assert.equal(next.blockedRoute.history.summary, 'Scope question for the owner.');
+  assert.deepEqual(next.blockedRoute.history.questions, ['Widen the scope?']);
+});
+test('debugger too-large verdict sends a blocked planning task back to its tech lead without a replan request', () => {
+  const next = milestoneResultTransition(planningDiag('PLANNER_DECOMPOSE'), { outcome: 'TASK_TOO_LARGE' });
+  assert.equal(next.state, 'DONE');
+  assert.deepEqual(next.blockedRoute.patch, { stage: 'tech_lead', state: 'READY', execution: null });
+  assert.equal(next.planningRequest, undefined);
+});

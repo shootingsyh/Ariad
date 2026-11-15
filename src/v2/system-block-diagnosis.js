@@ -4,13 +4,20 @@ import { debuggerAutoCarries, DEBUGGER_AUTO_CARRY_LIMIT } from './milestone-resu
 // A delivery task that reaches SYSTEM_BLOCKED through the system path
 // (provider/session failure in the supervisor or scheduler) cannot escalate
 // itself into the project debugger the way a role-flow failure can: it is
-// frozen in place. The rest of the diagnosis machinery (control-task
-// policy, unified dispatch, blocked-task routing transitions, FAILED
-// suppression while a diagnosis is active) already supports a separate
-// DIAGNOSTIC task carrying { blockedTaskId, systemIncident }; this module
-// is the missing creation step. It is idempotent: an active diagnosis is
-// never duplicated, and a task that blocks again after a completed
-// diagnosis gets the next sequence number.
+// frozen in place. A PLANNING task lands in the same state from the other
+// direction: its own in-flow debugger's terminal diagnosis is mapped to
+// SYSTEM_BLOCKED by design (never a per-task human decision), on the
+// assumption that this system-level sweep picks it up. The rest of the
+// diagnosis machinery (control-task policy, unified dispatch, blocked-task
+// routing transitions, FAILED suppression while a diagnosis is active)
+// already supports a separate DIAGNOSTIC task carrying
+// { blockedTaskId, systemIncident }; this module is the missing creation
+// step. It is idempotent: an active diagnosis is never duplicated, and a
+// task that blocks again after a completed diagnosis gets the next
+// sequence number. The blocked task's kind and planning purpose are
+// snapshotted into the diagnosis input so the result executor can route
+// a planning task back to its own planning stage instead of a delivery
+// stage.
 
 const ACTIVE_DIAGNOSIS_STATES = new Set(['READY', 'WORKING', 'RESULT_READY']);
 
@@ -60,8 +67,14 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
   const failures = [];
   for (const task of tasks) {
     if (task.state !== 'SYSTEM_BLOCKED') continue;
-    if (!isDeliveryKind(task.taskKind)) continue;
-    if (task.stage === 'project_debugger') continue;
+    const planning = task.taskKind === TASK_KINDS.PLANNING;
+    if (!isDeliveryKind(task.taskKind) && !planning) continue;
+    // A delivery task already sitting in the debugger stage is inside
+    // the debugger's own flow; a planning task in that stage is the
+    // opposite - its in-flow debugger already delivered the terminal
+    // diagnosis that parked it, so the separate diagnosis is its only
+    // way back.
+    if (!planning && task.stage === 'project_debugger') continue;
     if (autoCarryExhausted(task)) continue;
     const mine = diagnoses.filter(d => d.input.blockedTaskId === task.id);
     if (mine.some(d => ACTIVE_DIAGNOSIS_STATES.has(d.state))) continue;
@@ -79,6 +92,8 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
         title: `Diagnose system-blocked task ${task.id}`,
         input: {
           blockedTaskId: task.id,
+          blockedTaskKind: task.taskKind,
+          blockedTaskPurpose: task.input?.purpose ?? null,
           systemIncident: systemIncidentFromHistory(task),
         },
         version: 1,

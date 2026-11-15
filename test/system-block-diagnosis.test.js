@@ -89,17 +89,68 @@ test('ensure sequences a fresh diagnosis after the previous one completed', () =
   }
 });
 
-test('ensure skips planning tasks, debugger-stage tasks and unblocked tasks', () => {
+test('ensure covers planning tasks but skips debugger-stage delivery tasks and unblocked tasks', () => {
   const { dir, file } = tempDb();
   try {
     const store = new SQLiteV2Store(file);
     store.createProject({ id: 'P-diag3' });
-    store.createTask({ taskKind: 'PLANNING', id: 'T-plan', projectId: 'P-diag3', stage: 'tech_lead', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag3' });
+    store.createTask({ taskKind: 'PLANNING', id: 'T-plan', projectId: 'P-diag3', stage: 'tech_lead', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag3', input: { purpose: 'PLANNER_DECOMPOSE' } });
     store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-dbg', projectId: 'P-diag3', stage: 'project_debugger', state: 'SYSTEM_BLOCKED' });
     store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-ready', projectId: 'P-diag3', stage: 'developer', state: 'READY' });
     const { created, failures } = ensureSystemBlockDiagnosis(store, 'P-diag3');
-    assert.equal(created.length, 0);
     assert.equal(failures.length, 0);
+    assert.equal(created.length, 1);
+    const diagnosis = store.getTask('debug:T-plan:1');
+    assert.ok(diagnosis);
+    assert.equal(diagnosis.input.blockedTaskKind, 'PLANNING');
+    assert.equal(diagnosis.input.blockedTaskPurpose, 'PLANNER_DECOMPOSE');
+    assert.equal(store.getTask('debug:T-dbg:1'), null);
+    assert.equal(store.getTask('debug:T-ready:1'), null);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensure diagnoses a planning task parked in the debugger stage by its own terminal diagnosis', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag6' });
+    store.createTask({ taskKind: 'PLANNING', id: 'T-gate', projectId: 'P-diag6', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag6', input: { purpose: 'PLANNER_FINAL_VALIDATE' } });
+    const task = store.getTask('T-gate');
+    store.appendTaskHistory('T-gate', task.version, {
+      type: 'PLAN_DEBUGGER_DIAGNOSIS', outcome: 'SYSTEM_RUNTIME_FAILURE', at: '2026-11-15T21:38:54.000Z',
+    }, { execution: null });
+    const { created, failures } = ensureSystemBlockDiagnosis(store, 'P-diag6');
+    assert.equal(failures.length, 0);
+    assert.equal(created.length, 1);
+    const diagnosis = store.getTask('debug:T-gate:1');
+    assert.ok(diagnosis);
+    assert.equal(diagnosis.input.blockedTaskKind, 'PLANNING');
+    assert.equal(diagnosis.input.blockedTaskPurpose, 'PLANNER_FINAL_VALIDATE');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensure stops diagnosing a planning task once auto-carries are exhausted', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag7' });
+    store.createTask({ taskKind: 'PLANNING', id: 'T-loop', projectId: 'P-diag7', stage: 'plan_validator', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag7', input: { purpose: 'PLANNER_VALIDATE' } });
+    const carried = {
+      type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'plan_validator',
+      diagnosis: 'SYSTEM_RUNTIME_FAILURE', autoCarried: true, at: '2026-11-15T21:40:00.000Z',
+    };
+    let task = store.getTask('T-loop');
+    store.appendTaskHistory('T-loop', task.version, carried, { execution: null });
+    task = store.getTask('T-loop');
+    store.appendTaskHistory('T-loop', task.version, carried, { execution: null });
+    const { created } = ensureSystemBlockDiagnosis(store, 'P-diag7');
+    assert.equal(created.length, 0);
     store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

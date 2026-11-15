@@ -208,10 +208,10 @@ export class V2Supervisor {
       ));
       this.resources.release(task.id);
     }
-    // A delivery task blocked through the system path cannot escalate
-    // itself into the project debugger, so park a diagnostic task next to
-    // it; the debugger's verdict routes the blocked task onward (or parks
-    // it for the operator) through the existing diagnosis transitions.
+    // A blocked task cannot escalate itself into the project debugger,
+    // so park a diagnostic task next to it; the debugger's verdict routes
+    // the blocked task onward (or parks it for the operator) through the
+    // existing diagnosis transitions.
     try {
       const { failures } = ensureSystemBlockDiagnosis(this.store, projectId);
       for (const failure of failures) {
