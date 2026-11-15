@@ -19,7 +19,9 @@ import { debuggerAutoCarries, DEBUGGER_AUTO_CARRY_LIMIT } from './milestone-resu
 // a planning task back to its own planning stage instead of a delivery
 // stage.
 
-const ACTIVE_DIAGNOSIS_STATES = new Set(['READY', 'WORKING', 'RESULT_READY']);
+// A diagnosis parked at NEEDS_HUMAN is still open: it is waiting on the
+// operator, and a duplicate would only race the gate.
+const ACTIVE_DIAGNOSIS_STATES = new Set(['READY', 'WORKING', 'RESULT_READY', 'NEEDS_HUMAN']);
 
 export function systemIncidentFromHistory(task) {
   const history = task?.history ?? [];
@@ -58,6 +60,27 @@ export function autoCarryExhausted(task) {
   return debuggerAutoCarries(task) >= DEBUGGER_AUTO_CARRY_LIMIT;
 }
 
+// A system diagnosis closed by a human decision hands the block to the
+// operator: the decision marks the project FAILED and the operator's
+// resume performs the recovery (SYSTEM_RECOVERY on the blocked task).
+// Creating the next diagnosis before that resume only repeats the same
+// verdict on the same evidence, and an active diagnosis suppresses the
+// FAILED state the resume path keys on - the decision is discarded and
+// the block loops through identical diagnoses. Hold off until the
+// recovery lands.
+export function diagnosisDecidedAwaitingResume(task, diagnoses) {
+  const decided = diagnoses.filter(
+    d => d.state === 'DONE' && (d.history ?? []).some(e => e?.type === 'HUMAN_DECISION'),
+  ).at(-1);
+  if (!decided) return false;
+  const decidedAt = [...(decided.history ?? [])].reverse()
+    .find(e => e?.type === 'HUMAN_DECISION')?.at ?? null;
+  if (!decidedAt) return false;
+  return !(task.history ?? []).some(
+    e => e?.type === 'SYSTEM_RECOVERY' && (e.at ?? '') > decidedAt,
+  );
+}
+
 export function ensureSystemBlockDiagnosis(store, projectId) {
   const tasks = store.listTasks(projectId);
   const diagnoses = tasks.filter(
@@ -78,6 +101,7 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
     if (autoCarryExhausted(task)) continue;
     const mine = diagnoses.filter(d => d.input.blockedTaskId === task.id);
     if (mine.some(d => ACTIVE_DIAGNOSIS_STATES.has(d.state))) continue;
+    if (diagnosisDecidedAwaitingResume(task, mine)) continue;
     const id = `debug:${task.id}:${mine.length + 1}`;
     if (store.getTask(id)) continue;
     try {

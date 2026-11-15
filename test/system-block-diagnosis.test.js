@@ -203,3 +203,52 @@ test('supervisor audit sweeps a diagnostic task for a pre-blocked delivery task'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('ensure does not duplicate a diagnosis parked at the human gate', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag8' });
+    blockedDeliveryTask(store, 'P-diag8');
+    ensureSystemBlockDiagnosis(store, 'P-diag8');
+    const diagnosis = store.getTask('debug:T-blocked:1');
+    store.updateTask(diagnosis.id, diagnosis.version, { state: 'NEEDS_HUMAN' });
+    const again = ensureSystemBlockDiagnosis(store, 'P-diag8');
+    assert.equal(again.created.length, 0);
+    assert.equal(store.getTask('debug:T-blocked:2'), null);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensure holds off after a human decision until the operator resume lands', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag9' });
+    blockedDeliveryTask(store, 'P-diag9');
+    ensureSystemBlockDiagnosis(store, 'P-diag9');
+    const diagnosis = store.getTask('debug:T-blocked:1');
+    store.appendTaskHistory(diagnosis.id, diagnosis.version, {
+      type: 'HUMAN_DECISION', decision: 'Runtime repaired; resume.', at: '2026-11-04T18:20:00.000Z',
+    }, { state: 'DONE', execution: null });
+    // The decision closed the gate; re-diagnosing before the resume
+    // would repeat the verdict and suppress the FAILED state it needs.
+    const held = ensureSystemBlockDiagnosis(store, 'P-diag9');
+    assert.equal(held.created.length, 0);
+    // Once the resume recovers the task and it blocks again, the sweep
+    // is free to diagnose the new block.
+    let task = store.getTask('T-blocked');
+    store.appendTaskHistory(task.id, task.version, {
+      type: 'SYSTEM_RECOVERY', role: 'developer', reason: 'MANUAL_RESUME_AFTER_FAILED_PROJECT',
+      at: '2026-11-04T18:25:00.000Z',
+    }, { execution: null });
+    const afterRecovery = ensureSystemBlockDiagnosis(store, 'P-diag9');
+    assert.equal(afterRecovery.created.length, 1);
+    assert.ok(store.getTask('debug:T-blocked:2'));
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
