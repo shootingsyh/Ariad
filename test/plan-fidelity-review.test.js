@@ -65,6 +65,8 @@ test('PM plan-review prompt carries the fidelity standard', () => {
   assert.match(prompt, /ACCOUNTING - YOUR RESULT MUST CARRY THE TRACE ITSELF/);
   assert.match(prompt, /clause granularity/);
   assert.match(prompt, /expression or scar variant/);
+  assert.match(prompt, /EXISTING TASK SWEEP/);
+  assert.match(prompt, /SWEEP ACCOUNTING/);
 });
 
 test('batch critic prompt carries the fidelity review', () => {

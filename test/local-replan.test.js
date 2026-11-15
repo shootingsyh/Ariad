@@ -154,6 +154,9 @@ test('the decompose prompt carries a LOCAL REPLAN section with the owner request
   });
   assert.match(prompt, /LOCAL REPLAN \(PROJECT-OWNER DECISION\)/);
   assert.match(prompt, /Amend the battle presentation tasks\./);
+  assert.match(prompt, /EXISTING TASK SWEEP/);
+  assert.match(prompt, /SWEEP ACCOUNTING/);
+  assert.match(prompt, /not unrelated/);
 });
 
 // PM-first gate (owner ruling, 2026-11-02): a requirements-touching local

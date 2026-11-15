@@ -164,7 +164,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
       ].join('\n\n') : null,
       replanRequests.length ? [
         'LOCAL REPLAN (PROJECT-OWNER DECISION)',
-        'One or more planning requests are project-owner decisions to actualize as a bounded change to the current plan; each request carries its own guidance in its guidance field - follow it. Make the smallest correct change and leave every unrelated part of the plan untouched.',
+        'One or more planning requests are project-owner decisions to actualize as a bounded change to the current plan; each request carries its own guidance in its guidance field - follow it. Make the smallest correct change and leave every unrelated part of the plan untouched. A pre-existing task whose text conflicts with a decision in this batch is not unrelated: it belongs to the EXISTING TASK SWEEP below.',
         JSON.stringify({ replanRequests }, null, 2),
       ].join('\n\n') : null,
       revisionRequests.length ? [
@@ -173,6 +173,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         'Apply only the listed repairs. Every part of the draft the PM did not flag stays exactly as it is. Where the PM quotes required wording, paste it character-for-character - never paraphrase, merge, or reword a quoted clause. After applyOps, re-read the tasks you touched from the draft and confirm every quoted clause is present character-for-character before submitting: a summary claiming a fix is not evidence, the draft text is. If a clause is missing or altered after your writes, fix it in this pass before submitting.',
         JSON.stringify({ revisionRequests }, null, 2),
       ].join('\n\n') : null,
+      'EXISTING TASK SWEEP (MANDATORY WHEN THIS BATCH CARRIES NEW OR CHANGED REQUIREMENTS): owner decisions, a requirements delta, or PM revision guidance that changes what the product must be all trigger this sweep. Read the full existing task list in the open draft - not only the tasks you are adding - and check every pre-existing task against the new requirements. A pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements is in scope for this batch, however unrelated it looks: revise its text to the new requirements in this same draft, retire or merge it, or explicitly re-scope it to the part that remains valid. Never leave a stale task standing beside new work that contradicts it, and never gate new-requirement work behind a stale task whose own acceptance criteria embody the superseded requirement: restructure the dependency so the new work is not blocked on completing and accepting the old construction first. Respect the promotion rules for tasks that have already started: what cannot be revised or removed there, flag explicitly in your result with a proposed disposition instead of leaving it silently stale. Your result must carry the SWEEP ACCOUNTING: one line per affected pre-existing task (revised / retired / merged / re-scoped / flagged, with the reason), plus a statement that the remaining pre-existing tasks were checked and do not conflict.',
     ].filter(Boolean).join('\n\n');
   }
 
