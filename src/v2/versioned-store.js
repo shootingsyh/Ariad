@@ -296,6 +296,17 @@ export class VersionedStore {
     const row = this.db.prepare('SELECT spec_json FROM spec_tasks WHERE version = ? AND task_id = ?').get(version, taskId);
     return row ? { ...decode(row.spec_json), id: taskId } : null;
   }
+  // First-seen time of a task in the versioned spec: the created_at of the
+  // earliest spec version containing it. Dispatch fairness uses it as the
+  // earliest moment a dependency-free task could have started; a task
+  // whose prerequisites completed later uses the latest prerequisite
+  // completion instead (see dispatch-fairness.js).
+  specFirstSeenAt(taskId) {
+    const row = this.db.prepare(
+      'SELECT MIN(sv.created_at) AS first_seen FROM spec_versions sv JOIN spec_tasks st ON st.version = sv.version WHERE st.task_id = ?'
+    ).get(taskId);
+    return row?.first_seen ?? null;
+  }
   listSpecContracts(version) {
     return this.db.prepare('SELECT contract_id, contract_json FROM spec_contracts WHERE version = ? ORDER BY rowid')
       .all(version).map(r => ({ ...decode(r.contract_json), id: r.contract_id }));

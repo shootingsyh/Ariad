@@ -3,6 +3,7 @@ import { isInTransientCooldown, isTransientProviderFailure, transientRetryCooldo
 import { RoleResultDispatcher } from './role-result-dispatcher.js';
 import { graphKey } from './sqlite-store.js';
 import { buildExecutionGraph, partitionExecutionGraphs } from './execution-graph.js';
+import { auditTasks, orderCandidates } from './dispatch-fairness.js';
 import { createNextPlanningBatch, isPlannerTask } from './planner-flow.js';
 import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure, isApprovalGateTask } from './developer-task-policy.js';
@@ -131,9 +132,47 @@ export class V2Scheduler {
       || a.task.id.localeCompare(b.task.id)
     );
 
+    // Dispatch fairness (SRPG 2026-11-14): impact-ordered dispatch has no
+    // aging, so a runnable low-impact task can starve for a whole iteration
+    // while higher-impact work keeps arriving — and nothing alarms. Age
+    // starved runnable work to the front of this tick and record each
+    // starved task once so project status can name it.
+    const fairnessAudit = auditTasks(
+      schedulableTasks.filter(task => scopeOfTask(task) === 'delivery'),
+      {
+        nowMs: Date.now(),
+        firstSeenAt: new Map(
+          schedulableTasks
+            .filter(task => scopeOfTask(task) === 'delivery')
+            .map(task => [task.id, this.store.specFirstSeenAt?.(task.id) ?? task.createdAt ?? null])
+            .filter(([, at]) => at != null),
+        ),
+      },
+    );
+    const fairnessById = new Map(fairnessAudit.map(entry => [entry.id, entry]));
+    if (typeof this.store.listIncidents === 'function' && typeof this.store.recordIncident === 'function') {
+      const seenStarved = new Set(
+        this.store.listIncidents(projectId)
+          .filter(incident => incident?.type === 'TASK_DISPATCH_STARVED')
+          .map(incident => incident?.taskId),
+      );
+      for (const entry of fairnessAudit) {
+        if (!entry.starved || seenStarved.has(entry.id)) continue;
+        this.store.recordIncident({
+          projectId,
+          taskId: entry.id,
+          type: 'TASK_DISPATCH_STARVED',
+          runnableSince: new Date(entry.runnableSinceMs).toISOString(),
+          waitMs: entry.waitMs,
+        });
+        seenStarved.add(entry.id);
+      }
+    }
+    const orderedCandidates = orderCandidates(candidates, fairnessById);
+
     const started = [];
 
-    for (const candidate of candidates) {
+    for (const candidate of orderedCandidates) {
       const task = this.store.getTask(candidate.task.id);
       if (task.state !== 'READY') continue;
       // A task cooling down after a transient provider failure is not

@@ -11,6 +11,8 @@ import { FunctionProvider } from '../v2/function-provider.js';
 import { createDefaultV2Roles } from '../v2/default-roles.js';
 import { ensureTakeoverReviewState } from '../v2/takeover-gate.js';
 import { applyTaskEvent } from '../v2/state-machine.js';
+import { scopeOfTask } from '../v2/control-task-policy.js';
+import { auditTasks } from '../v2/dispatch-fairness.js';
 import { CURRENT_STORAGE_VERSION } from '../v2/schema-version.js';
 
 /**
@@ -297,6 +299,22 @@ export class StandaloneProjectRuntime {
   status() {
     const tasks = this.store.listTasks(this.projectId);
     const project = this.store.getProject(this.projectId);
+    // Dispatch fairness (SRPG 2026-11-14): READY conflates three states —
+    // runnable and queued, blocked on unfinished dependencies, and
+    // runnable-but-starved. Name the latter two so the watch and the
+    // operator stop reading a synthetic READY as real progress.
+    const fairnessAudit = auditTasks(
+      tasks.filter(task => scopeOfTask(task) === 'delivery'),
+      {
+        nowMs: Date.now(),
+        firstSeenAt: new Map(
+          tasks
+            .filter(task => scopeOfTask(task) === 'delivery')
+            .map(task => [task.id, this.store.specFirstSeenAt?.(task.id) ?? task.createdAt ?? null])
+            .filter(([, at]) => at != null),
+        ),
+      },
+    );
     return {
       projectId: this.projectId,
       deliveryEnabled: project?.deliveryEnabled === true,
@@ -313,6 +331,12 @@ export class StandaloneProjectRuntime {
       activeTasks: tasks
         .filter(task => !['DONE', 'SKIPPED', 'OBSOLETE'].includes(task.state))
         .map(task => ({ id: task.id, stage: task.stage, state: task.state })),
+      starvedTasks: fairnessAudit
+        .filter(entry => entry.starved)
+        .map(entry => ({ id: entry.id, runnableSinceMs: entry.runnableSinceMs, waitMs: entry.waitMs })),
+      blockedTasks: fairnessAudit
+        .filter(entry => !entry.runnable && entry.blockedBy.length > 0)
+        .map(entry => ({ id: entry.id, blockedBy: entry.blockedBy })),
     };
   }
 

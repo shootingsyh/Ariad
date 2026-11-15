@@ -116,3 +116,48 @@ test('task tracker direct task tree runs dependency-first through milestone exec
   assert.equal(store.getProject('tracker').deliveryPlanVersion??0,0);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('unified scheduler ages a long-waiting runnable task ahead of higher-impact fresh work', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ariad-scheduler-aging-'));
+  const store = new SQLiteV2Store(join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'aging', spec: 'fixture', deliveryEnabled: true, unifiedTaskCompilerVersion: 1, deliveryPlanVersion: 3 });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const mkTask = (id, deps, createdAt) => ({
+      id, projectId: 'aging', taskKind: 'MILESTONE_TASK', stage: 'developer', state: 'READY',
+      milestoneId: 'A', parentId: null, executionMode: 'implementation', unifiedTaskSchemaVersion: 1,
+      dependsOn: deps, interfaceIds: ['iface'], input: { interfaceIds: ['iface'], milestoneId: 'A' },
+      history: [], createdAt,
+    });
+    store.createTask(mkTask('small', [], old));
+    store.createTask(mkTask('big', [], new Date().toISOString()));
+    store.createTask(mkTask('child', ['big'], new Date().toISOString()));
+    const roles = new RoleRegistry();
+    roles.register('developer', {
+      prepare: () => ({ provider: 'fake', resources: ['gpu'] }),
+      transition: () => { throw new Error('legacy role transition invoked'); },
+    });
+    const starts = [];
+    const provider = {
+      id: 'fake',
+      async start(spec) { starts.push(spec.taskId); return { externalId: `f-${spec.taskId}` }; },
+      async poll() { return { state: 'RUNNING' }; },
+      async cancel() {},
+    };
+    const providers = new ProviderRegistry();
+    providers.register(provider);
+    const scheduler = new V2Scheduler({ store, roles, providers, resources: new ResourcePool({ gpu: 1 }) });
+    const result = await scheduler.tick('aging');
+    // Without aging, 'big' (impact 1 via 'child') would start first. 'small'
+    // has been runnable for two hours, so it jumps the queue.
+    assert.deepEqual(result.started, ['small']);
+    assert.deepEqual(starts, ['small']);
+    assert.equal(store.getTask('big').state, 'READY');
+    // A starved-task incident is recorded exactly once.
+    const starved = store.listIncidents('aging').filter(i => i?.type === 'TASK_DISPATCH_STARVED');
+    assert.equal(starved.length, 1);
+    assert.equal(starved[0].taskId, 'small');
+    await scheduler.tick('aging');
+    assert.equal(store.listIncidents('aging').filter(i => i?.type === 'TASK_DISPATCH_STARVED').length, 1);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});

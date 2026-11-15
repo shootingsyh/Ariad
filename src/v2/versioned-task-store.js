@@ -58,6 +58,10 @@ export class VersionedTaskStore {
     try { this.runtime.reopen(); } finally { this.versioned.reopen(); }
   }
 
+  specFirstSeenAt(taskId) {
+    return this.versioned.specFirstSeenAt(taskId);
+  }
+
   #effectiveById() {
     return new Map(this.versioned.effectiveTasks().map(t => [t.id, t]));
   }
