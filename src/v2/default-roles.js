@@ -93,7 +93,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
 }
 
 import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
-import { batchRequiresSweepAccounting, evaluateSweepAccounting, authorshipResultsForBatch } from './sweep-accounting.js';
+import { batchRequiresSweepAccounting, evaluateSweepAccounting, authorshipResultsForBatch, sweepAccountingRaw } from './sweep-accounting.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -1586,6 +1586,27 @@ export function createDefaultV2Roles({
         } catch {
           priorReview = null;
         }
+        // Sweep accounting visibility (2026-11-15 fix): the PM prompt's
+        // EXISTING TASK SWEEP clause orders the PM to judge the Tech
+        // Lead's sweep, but the review payload never carried it - the
+        // PM received only the draft, so batches were rejected for a
+        // missing accounting that existed in the Tech Lead result
+        // (SRPG batch-54; batch-53's PM found it only by fetching the
+        // result itself). Attach the batch's latest accounting
+        // verbatim, as the critic payload now does.
+        let sweepAccounting = null;
+        try {
+          if (batchRequiresSweepAccounting(planningBatchRequests(store, task))) {
+            const authored = authorshipResultsForBatch(store, task);
+            const lastAuthored = authored[authored.length - 1];
+            if (lastAuthored) {
+              const raw = sweepAccountingRaw(lastAuthored.result);
+              if (raw != null) sweepAccounting = { sourceTaskId: lastAuthored.taskId, accounting: raw };
+            }
+          }
+        } catch {
+          sweepAccounting = null;
+        }
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain: fold the human\'s latest requirements into it and obtain human approval before any new-version decomposition is planned. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
@@ -1597,6 +1618,7 @@ export function createDefaultV2Roles({
           'The project/root plan must culminate in a product-level end-to-end journey that demonstrates the intended user can start from a realistic initial state and obtain the product\'s promised value. Require setup/onboarding/persistence/recovery or other lifecycle steps only when they are truly part of that product experience; do not invent unrelated commercial requirements.',
           'PLAN FIDELITY - JUDGE THE DRAFT ITSELF, NOT SUMMARIES OF IT: the payload plan carries the full draft (every task with intent, acceptanceCriteria, testStrategy and flags, plus the feature contracts). Trace every requirement in the approved requirements document - above all every addition or change in its delta - to the task or tasks that carry it, and judge each carrying task by the text of its own acceptanceCriteria. Return PLAN_REVISION_REQUIRED when you find any of these: (a) a requirement is carried only by verification or regression wording (reuse the existing implementation, verify, repair only what verification finds) while the document presents it as something this version adds, changes, or completes, and the plan names no concrete existing evidence that the current implementation already satisfies it exactly as written - work the document calls for must be produced by a production task, not presumed already present; (b) acceptance criteria dilute an enumerated requirement into generic language (for example: no placeholders remain, assets are consistent) that would pass without the enumerated specifics existing - every enumerated item in the document (each named action, variant, deliverable, or member of a list) must appear in the acceptance criteria of some task, complete and not sampled; a list covered only in part is not covered; (c) a visual or media requirement is carried by tasks lacking the markings the quality flow relies on - media production needs art.required with named deliverables and the artist stage, and visual delivery needs ux.required so the rendered-evidence review actually runs; (d) the plan treats existing assets or implementation as satisfying a requirement on the basis of names, counts, or file presence alone, without evidence at the granularity the requirement enumerates. When you return PLAN_REVISION_REQUIRED for any of these, quote the requirement and name the missing or diluted item in result.guidance so the Tech Lead can repair it without guessing. Validator PASS and critic CLEAN establish structure only; they are not evidence of fidelity, and accepting on their summaries alone is a review failure. ACCOUNTING - YOUR RESULT MUST CARRY THE TRACE ITSELF: in result.reason (and in result.guidance when you revise), list every enumerated item you traced, one line per item at clause granularity, naming the carrying task and your verdict. A document section is a list of clauses, not a headline: an item buried in the middle of a dense paragraph (an expression or scar variant set inside a presentation paragraph, one named effect inside an effects list) counts exactly as much as a headline item, and the sections the delta touches are in scope, not only the lines of the delta itself. An acceptance whose reason does not enumerate the traced items is an incomplete review: if you cannot account for an item, return PLAN_REVISION_REQUIRED for it instead of accepting.',
           'EXISTING TASK SWEEP - WHEN THIS PLAN EMBODIES NEW OR CHANGED REQUIREMENTS, THE SWEEP IS PART OF FIDELITY: the Tech Lead must have swept the full pre-existing task list against the new requirements, not only authored new tasks. Verify from the draft itself and from the SWEEP ACCOUNTING in the Tech Lead result that every pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements was revised to the new requirements in this draft, retired, merged, or explicitly re-scoped - and that no new-requirement task is gated behind a stale task whose own acceptance criteria embody the superseded requirement, so new work never waits for the old construction to be completed and accepted first. A draft that adds new tasks while a contradictory pre-existing task stands unrevised, or a missing sweep accounting in a batch that changed requirements, is PLAN_REVISION_REQUIRED: name the stale task and its conflicting text in result.guidance. A task the promotion rules protect because it already started may stand only when the plan flags it explicitly with a proposed disposition.',
+          'The Tech Lead\'s sweep accounting for this batch, when the batch carries one, is included in the payload as sweepAccounting (verbatim, from the batch\'s latest Tech Lead result). Judge the dispositions from it; do not report the accounting missing when it is present in the payload.',
           'For takeover, compare the known authoritative roadmap/docs and the logical tree against the milestone list. Do not accept if known later major scope is missing from milestones, or if the milestone list contains placeholder/unused/TBD entries instead of real checkpoints.',
           'If this is a game project, do not accept a plan whose completion evidence only shows that maps/levels were launched, traversed, or exercised. The product-level E2E must begin from a normal player entry/start state and play through the required progression to an actual win/clear; directly opening the final level or injecting progression state is not a valid full playthrough. Ariad must know how to execute that successful path autonomously without relying on external human players unless the user explicitly requested a human study.',
           takeover
@@ -1612,6 +1634,7 @@ export function createDefaultV2Roles({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
             plan: validation?.plan ?? null,
+            sweepAccounting,
             humanDecision,
             priorReview,
             humanDecisions: inheritedHumanDecisions,

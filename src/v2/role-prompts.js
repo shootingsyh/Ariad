@@ -4,6 +4,7 @@ import { acceptanceCriterionIds } from './acceptance.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { resolve } from 'node:path';
 import { flowTasks, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
+import { authorshipResultsForBatch, batchRequiresSweepAccounting, sweepAccountingEntries, sweepAccountingRaw } from './sweep-accounting.js';
 
 export const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
@@ -205,6 +206,28 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     const repairRevisionRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'PM_PLAN_REVISION');
+    // Sweep accounting delivery (2026-11-15 fix): the EXISTING TASK
+    // SWEEP clause ships only in the decompose prompt above, so repair
+    // passes never saw the mandate - while the deterministic gate
+    // judges the batch by its LAST Tech Lead result, so a bounded
+    // repair that dropped the accounting sank the whole batch (SRPG
+    // batches 53-55). When this batch requires the accounting, state
+    // the mandate in the repair prompt itself and carry the previous
+    // result's accounting forward in the payload, so the repair
+    // updates it instead of regenerating it from scratch.
+    let sweepRequired = false;
+    let previousSweepAccounting = null;
+    try {
+      sweepRequired = batchRequiresSweepAccounting(planningBatchRequests(store, task));
+      if (sweepRequired) {
+        const authored = authorshipResultsForBatch(store, task);
+        const lastAuthored = authored[authored.length - 1];
+        previousSweepAccounting = lastAuthored ? sweepAccountingRaw(lastAuthored.result) : null;
+      }
+    } catch {
+      sweepRequired = false;
+      previousSweepAccounting = null;
+    }
     return [
       'You are Ariad\'s Tech Lead repair pass.',
       'Repair only the affected parts of the open database draft using the critic findings below, with ariad_tree_patch applyOps. Do not rewrite or re-emit the complete project plan.',
@@ -214,7 +237,10 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         'This batch continues a PM-rejected draft. The PM revision review in this batch requests quotes required wording and lists (acceptance clauses, media and deliverable names) character-for-character. Those quoted strings are protected: never paraphrase, merge, split, rename, or drop them, and never let a critic finding rewrite them. Repair structural defects around them - malformed shells, missing parents, broken hierarchy - never through them. If a critic finding asks you to change a quoted clause or list, treat that finding as out of scope and leave the quoted text untouched.',
         JSON.stringify({ revisionRequests: repairRevisionRequests }, null, 2),
       ].join('\n\n') : null,
-      JSON.stringify({ context, critic: previous }, null, 2),
+      sweepRequired ? [
+        'SWEEP ACCOUNTING (MANDATORY FOR THIS BATCH - THE GATE JUDGES YOUR RESULT): this batch carries new or changed requirements, so your repair result must carry the complete SWEEP ACCOUNTING in result.sweepAccounting - at the TOP LEVEL of your result, not nested inside validationPlan or any other field. One entry for EVERY pre-existing task of the draft\'s base version, each naming the task ID with its disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and the reason. The deterministic plan validator reads only the batch\'s latest Tech Lead result: an accounting left behind by the decompose, or a delta naming only the tasks you touched, fails validation (SWEEP_ACCOUNTING_INCOMPLETE) and the batch cannot reach PM review. The previous Tech Lead result\'s accounting is in the payload as previousSweepAccounting: carry it forward, updating the entries for the tasks your repair changed, and re-submit the complete list.',
+      ].join('\n\n') : null,
+      JSON.stringify({ context, critic: previous, ...(sweepRequired ? { previousSweepAccounting } : {}) }, null, 2),
       buildTechLeadPrompt({ projectContext: context, schema: null }),
     ].filter(Boolean).join('\n\n');
   }
@@ -266,19 +292,52 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       } : {}),
     }));
     const siblings = flowTasks(store, task);
-    techLeadResults = ['features-functional', 'features-nonfunctional', 'decompose', 'dependencies'].map(name => {
-      const sibling = siblings.find(item => item.id?.endsWith(`:${name}`));
+    const summarize = (stage, sibling) => {
       const entry = sibling ? latestRoleResult(sibling) : null;
-      return entry ? { stage: name, outcome: entry.outcome ?? null, summary: entry.summary ?? null } : null;
-    }).filter(Boolean);
+      if (!entry) return null;
+      const entries = sweepAccountingEntries(entry.result);
+      return {
+        stage,
+        outcome: entry.outcome ?? null,
+        summary: entry.summary ?? null,
+        ...(entries ? { sweepAccountingEntries: entries.length } : {}),
+      };
+    };
+    techLeadResults = [
+      ...['features-functional', 'features-nonfunctional', 'decompose', 'dependencies']
+        .map(name => summarize(name, siblings.find(item => item.id?.endsWith(`:${name}`)))),
+      ...siblings
+        .filter(item => /:repair-\d+$/.test(item.id ?? ''))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+        .map(sibling => summarize(String(sibling.id).split(':').pop(), sibling)),
+    ].filter(Boolean);
   } catch {
     // Batch context is advisory prompt material; never fail the prompt over it.
     batchRequests = [];
     techLeadResults = [];
   }
+  // Review payload completeness (2026-11-15 fix): the critic is told to
+  // judge the Tech Lead's sweep disposition, but its payload carried
+  // only result summaries - the accounting itself never reached it, so
+  // critics reported it missing in batches where it existed (SRPG
+  // batch-55 critic-1, against a decompose result carrying 47 entries).
+  // Attach the batch's latest accounting verbatim, as the PM payload
+  // now does.
+  let sweepAccounting = null;
+  try {
+    const authored = authorshipResultsForBatch(store, task);
+    const lastAuthored = authored[authored.length - 1];
+    if (lastAuthored) {
+      const raw = sweepAccountingRaw(lastAuthored.result);
+      if (raw != null) sweepAccounting = { sourceTaskId: lastAuthored.taskId, accounting: raw };
+    }
+  } catch {
+    sweepAccounting = null;
+  }
   return [
     'You are Ariad\'s delivery-plan critic.',
     'BATCH SCOPE: You are reviewing exactly one planning batch. Its requests and the Tech Lead results for it are included below as batchRequests and techLeadResults.',
+    'SWEEP ACCOUNTING: when this batch carries new or changed requirements, the Tech Lead\'s sweep accounting is included in the payload as sweepAccounting (verbatim, from the batch\'s latest Tech Lead result). Judge its dispositions against the draft; do not report the accounting missing when it is present in the payload.',
     'Review what this batch produced or changed, and its consistency with the surrounding accepted plan. Properties of the pre-existing accepted plan that this batch did not create or modify are out of scope: if you notice such a concern, report it in result.observations only - never in result.issues - and do not let it change your outcome.',
     'Return ISSUES only for defects in this batch\'s own product: a wrong triage or assignment, a broken boundary or dependency change it introduced, or artifacts it wrote.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
@@ -295,6 +354,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       validation,
       batchRequests,
       techLeadResults,
+      sweepAccounting,
       plan: validation?.plan ?? null,
     }, null, 2),
   ].join('\n\n');

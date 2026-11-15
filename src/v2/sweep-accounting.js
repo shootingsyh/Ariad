@@ -41,11 +41,23 @@ function escapeRegExp(text) {
 //   - an array of objects ({ taskId } / { id })
 //   - an object keyed by disposition, values arrays of the above
 // Returns null when the payload carries no accounting at all.
-export function sweepAccountingEntries(result) {
+// Resolve the raw accounting value from a Tech Lead result payload, in
+// every location sessions have been observed to put it. The 2026-11-15
+// batch-55 repair-3 result carried the complete accounting nested under
+// result.validationPlan: the validator read only the top level, reported
+// the accounting absent, and the batch burned its remaining rounds on a
+// placement dispute instead of a content gap.
+export function sweepAccountingRaw(result) {
   const payload = result && typeof result === 'object' ? result : null;
   if (!payload) return null;
-  const raw = payload.sweepAccounting ?? payload.completeSweepAccounting
-    ?? payload.result?.sweepAccounting ?? payload.result?.completeSweepAccounting;
+  return payload.sweepAccounting ?? payload.completeSweepAccounting
+    ?? payload.result?.sweepAccounting ?? payload.result?.completeSweepAccounting
+    ?? payload.validationPlan?.sweepAccounting ?? payload.validationPlan?.completeSweepAccounting
+    ?? null;
+}
+
+export function sweepAccountingEntries(result) {
+  const raw = sweepAccountingRaw(result);
   if (raw == null) return null;
   const entries = [];
   const push = (value) => {
@@ -128,7 +140,7 @@ export function authorshipResultsForBatch(store, task) {
     const round = Number(t.input?.round);
     return Number.isFinite(round) && round > 0 ? round : 99;
   };
-  return (store.listTasks(task.projectId) ?? [])
+  const authored = (store.listTasks(task.projectId) ?? [])
     .filter(t => t?.input?.planningBatchId === batchId && SWEEP_AUTHORSHIP_PURPOSES.includes(t?.input?.purpose))
     .map(t => {
       const entry = [...(t.history ?? [])].reverse().find(h => h?.type === 'ROLE_RESULT');
@@ -137,4 +149,19 @@ export function authorshipResultsForBatch(store, task) {
     .filter(item => item && item.result != null)
     .sort((a, b) => a.order - b.order)
     .map(({ taskId, result }) => ({ taskId, result }));
+  // Gate-repair submissions (2026-11-15 fix): when the final-validate
+  // gate fails, the Tech Lead repairs ON the validate task itself and
+  // its result is recorded in that task's own history
+  // (GATE_REPAIR_RETURNED). The validate task is not an authorship task,
+  // so the scan above never sees those submissions: a gate repair could
+  // not satisfy this gate, the re-check failed identically, and the
+  // batch escalated to SYSTEM_BLOCKED (SRPG batch-55). Count the
+  // validate task's latest Tech Lead result as the batch's latest
+  // authorship result.
+  if (task?.input?.purpose === 'PLANNER_VALIDATE' || task?.input?.purpose === 'PLANNER_FINAL_VALIDATE') {
+    const own = [...(task.history ?? [])].reverse()
+      .find(h => h?.type === 'ROLE_RESULT' && h?.role === 'tech_lead' && h.result != null);
+    if (own) authored.push({ taskId: task.id, result: own.result });
+  }
+  return authored;
 }

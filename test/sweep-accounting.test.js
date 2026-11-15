@@ -6,7 +6,9 @@ import {
   sweepAccountingCoverage,
   evaluateSweepAccounting,
   authorshipResultsForBatch,
+  sweepAccountingRaw,
 } from '../src/v2/sweep-accounting.js';
+import { plannerPrompt, criticPrompt } from '../src/v2/role-prompts.js';
 
 const BASE = ['T-battle', 'T-combat', 'I-root'];
 
@@ -119,4 +121,102 @@ test('authorshipResultsForBatch: flow order, authorship purposes only, latest re
   };
   const out = authorshipResultsForBatch(store, { projectId: 'p', input: { planningBatchId: 'b' } });
   assert.deepEqual(out.map(item => item.taskId), ['planner:b:decompose', 'planner:b:repair-2']);
+});
+
+test('sweepAccountingEntries: accounting nested under validationPlan (batch-55 repair-3 shape)', () => {
+  const entries = sweepAccountingEntries({
+    draftVersion: 50,
+    baseVersion: 32,
+    validationPlan: {
+      sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.', 'I-root - FLAGGED: see note'],
+    },
+  });
+  assert.equal(entries.length, 3);
+  const covered = sweepAccountingCoverage(BASE, entries);
+  assert.equal(covered.size, 3);
+  assert.deepEqual(sweepAccountingRaw({ validationPlan: { completeSweepAccounting: ['T-battle'] } }), ['T-battle']);
+  assert.equal(sweepAccountingRaw({ draftVersion: 1 }), null);
+});
+
+test('authorshipResultsForBatch: a gate repair on the validate task counts as the latest authorship result', () => {
+  const roleResult = (role, result) => [{ type: 'ROLE_RESULT', role, result }];
+  const store = {
+    listTasks: () => [
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
+      { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
+      { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
+    ],
+  };
+  const validateTask = {
+    id: 'planner:b:final-validate',
+    projectId: 'p',
+    input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' },
+    history: [
+      { type: 'ROLE_RESULT', role: 'plan_validator', result: { valid: false } },
+      { type: 'ROLE_RESULT', role: 'tech_lead', result: fullAccounting },
+    ],
+  };
+  const out = authorshipResultsForBatch(store, validateTask);
+  assert.deepEqual(out.map(item => item.taskId), ['planner:b:decompose', 'planner:b:repair-3', 'planner:b:final-validate']);
+  const verdict = evaluateSweepAccounting({ baseTaskIds: BASE, authorshipResults: out });
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.sourceTaskId, 'planner:b:final-validate');
+});
+
+test('authorshipResultsForBatch: no self-append for non-validate callers', () => {
+  const store = { listTasks: () => [] };
+  const criticTask = {
+    id: 'planner:b:critic-1',
+    projectId: 'p',
+    input: { planningBatchId: 'b', purpose: 'PLANNER_CRITIC' },
+    history: [{ type: 'ROLE_RESULT', role: 'tech_lead', result: fullAccounting }],
+  };
+  assert.deepEqual(authorshipResultsForBatch(store, criticTask), []);
+});
+
+const sweepBatchStore = (repairResult) => {
+  const roleResult = (result) => [{ type: 'ROLE_RESULT', role: 'tech_lead', outcome: 'PLANNED', summary: 'did the work', result }];
+  return {
+    listPlanningRequests: () => [{ batchId: 'b', request: { purpose: 'PM_PLAN_REVISION' } }],
+    listTasks: () => [
+      { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
+      { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
+    ],
+  };
+};
+
+test('plannerPrompt PLANNER_REPAIR: sweep mandate delivered, previous accounting carried forward', () => {
+  const prompt = plannerPrompt({
+    store: sweepBatchStore(null),
+    project: { id: 'P', spec: null, mode: 'NEW' },
+    artifactRoot: '/tmp',
+    task: { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', dependsOn: [], input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1, requests: [] } },
+  });
+  assert.match(prompt, /SWEEP ACCOUNTING \(MANDATORY FOR THIS BATCH/);
+  assert.match(prompt, /previousSweepAccounting/);
+  assert.match(prompt, /T-battle - REVISED: reworded/);
+});
+
+test('plannerPrompt PLANNER_REPAIR: no sweep mandate for a batch without requirement changes', () => {
+  const prompt = plannerPrompt({
+    store: { listPlanningRequests: () => [], listTasks: () => [] },
+    project: { id: 'P', spec: null, mode: 'NEW' },
+    artifactRoot: '/tmp',
+    task: { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', dependsOn: [], input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1, requests: [] } },
+  });
+  assert.doesNotMatch(prompt, /MANDATORY FOR THIS BATCH/);
+});
+
+test('criticPrompt: payload carries the batch sweep accounting verbatim and lists repair results', () => {
+  const prompt = criticPrompt({
+    store: sweepBatchStore({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }),
+    project: { id: 'P', spec: null },
+    artifactRoot: '/tmp',
+    task: { id: 'planner:b:critic-2', projectId: 'P', flowId: 'f', dependsOn: [], input: { planningBatchId: 'b', purpose: 'PLANNER_CRITIC', round: 2 } },
+  });
+  assert.match(prompt, /"sweepAccounting": \{/);
+  assert.match(prompt, /"sourceTaskId": "planner:b:repair-1"/);
+  assert.match(prompt, /T-battle - REVISED: reworded/);
+  assert.match(prompt, /"stage": "repair-1"/);
+  assert.match(prompt, /"sweepAccountingEntries": 2/);
 });
