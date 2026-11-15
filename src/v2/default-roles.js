@@ -93,6 +93,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
 }
 
 import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
+import { batchRequiresSweepAccounting, evaluateSweepAccounting, authorshipResultsForBatch } from './sweep-accounting.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -1414,6 +1415,30 @@ export function createDefaultV2Roles({
                   outcome: 'NOT_PASS',
                   result: { valid: false, plan: null, error: error?.message ?? String(error), errorCode: error?.code ?? 'INVALID_AUTONOMY_REQUIREMENT' },
                 };
+              }
+              // Sweep accounting gate (2026-11-15): in a batch carrying
+              // new or changed requirements, the batch's final Tech Lead
+              // authorship result must carry a SWEEP ACCOUNTING covering
+              // every task of the draft's base version. The mandate has
+              // stood in the Tech Lead and PM prompts since b9da159; this
+              // is its deterministic half - presence and ID coverage are
+              // mechanical, disposition quality stays with the PM. A miss
+              // fails validation here, feeding the critic/repair loop
+              // (rounds 1-3) or, at final validate, the existing
+              // validation escalation - instead of a full PM rejection
+              // round (SRPG: PM_PLAN_REVISION rounds 48-52 all burned on
+              // this one point).
+              if (typeof store?.listTasks === 'function'
+                && batchRequiresSweepAccounting(planningBatchRequests(store, task))
+                && draft.base_version != null) {
+                const baseTaskIds = draftStore.listSpecTasks(draft.base_version).map(t => t.id).filter(Boolean);
+                const verdict = evaluateSweepAccounting({ baseTaskIds, authorshipResults: authorshipResultsForBatch(store, task) });
+                if (!verdict.ok) {
+                  return {
+                    outcome: 'NOT_PASS',
+                    result: { valid: false, plan: null, error: `SWEEP_ACCOUNTING_INCOMPLETE: ${verdict.error}. Every pre-existing task must appear in result.sweepAccounting of the batch's final Tech Lead result with a disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and a reason; a future task promising the accounting later does not count.`, errorCode: 'SWEEP_ACCOUNTING_INCOMPLETE' },
+                  };
+                }
               }
               // DB-first verdict rests on the draft alone: do not fall
               // through to the on-disk planner bundle below - it is a
