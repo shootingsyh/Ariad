@@ -220,3 +220,38 @@ test('criticPrompt: payload carries the batch sweep accounting verbatim and list
   assert.match(prompt, /"stage": "repair-1"/);
   assert.match(prompt, /"sweepAccountingEntries": 2/);
 });
+
+test('plannerPrompt PLANNER_DECOMPOSE: shared sweep mandate, humanDecisions payload, decision check', () => {
+  const store = {
+    listPlanningRequests: () => [],
+    listTasks: () => [
+      { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ],
+  };
+  const prompt = plannerPrompt({
+    store,
+    project: { id: 'P', spec: null, mode: 'NEW' },
+    artifactRoot: '/tmp',
+    task: { id: 'planner:b:decompose', projectId: 'P', input: { purpose: 'PLANNER_DECOMPOSE', requests: [{ request: { purpose: 'PM_PLAN_REVISION', guidance: 'g', reason: 'r', rejectedDraftVersion: 3 } }] } },
+  });
+  // The shared mandate (identical text in decompose and repair).
+  assert.match(prompt, /at the TOP LEVEL of the result/);
+  // Project-wide human decisions reach the Tech Lead, as they reach the PM.
+  assert.match(prompt, /"humanDecisions": \[/);
+  assert.match(prompt, /Keep the support-pair scope as approved\./);
+  // The revision section orders a decision check, and the system prompt
+  // states the precedence order.
+  assert.match(prompt, /DECISION CHECK/);
+  assert.match(prompt, /AUTHORITY AND PRECEDENCE/);
+});
+
+test('plannerPrompt PLANNER_REPAIR: repair carries the same shared mandate text', () => {
+  const prompt = plannerPrompt({
+    store: sweepBatchStore(null),
+    project: { id: 'P', spec: null, mode: 'NEW' },
+    artifactRoot: '/tmp',
+    task: { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', dependsOn: [], input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1, requests: [] } },
+  });
+  assert.match(prompt, /at the TOP LEVEL of the result/);
+  assert.match(prompt, /SWEEP_ACCOUNTING_INCOMPLETE/);
+});

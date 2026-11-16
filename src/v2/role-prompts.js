@@ -105,8 +105,35 @@ export function plannerPublicPlan(plan) {
   return publicPlan;
 }
 
+// SWEEP ACCOUNTING mandate, shared verbatim by the decompose and
+// repair prompts: the deterministic validator judges the batch by its
+// LAST Tech Lead result, so both passes must state the identical rule.
+// The two copies once drifted (only the repair copy warned that the
+// accounting must sit at the result's top level), and batches 53-55
+// sank on exactly that difference.
+export const SWEEP_ACCOUNTING_MANDATE = 'SWEEP ACCOUNTING: the result must carry the complete accounting in result.sweepAccounting, at the TOP LEVEL of the result - not nested inside validationPlan or any other field. One entry for EVERY pre-existing task of the draft\'s base version - not only the ones changed in this pass - each naming the task ID with its disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and the reason. The deterministic plan validator enforces this mechanically (SWEEP_ACCOUNTING_INCOMPLETE): it reads only the batch\'s LAST Tech Lead result, so an accounting left behind by an earlier pass, or a delta naming only the tasks this pass touched, fails validation with the missing IDs named, and the batch cannot reach PM review. A separate future task that merely promises to produce the accounting later does not count as the accounting.';
+
 export function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
+  // Inherited human decisions (parity with the PM review payload): a
+  // decision recorded on any of this project's tasks binds planning,
+  // and the Tech Lead must be able to check request guidance that
+  // quotes a decision against the decisions actually recorded - a
+  // later decision supersedes the one a request quotes.
+  const inheritedHumanDecisions = [];
+  try {
+    const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(project.id) : [];
+    for (const other of allTasks) {
+      for (const entry of other.history ?? []) {
+        if (entry?.type === 'HUMAN_DECISION') {
+          inheritedHumanDecisions.push({ taskId: other.id, at: entry.at ?? null, decision: entry.decision ?? null });
+        }
+      }
+    }
+    inheritedHumanDecisions.sort((x, y) => String(x.at ?? '').localeCompare(String(y.at ?? '')));
+  } catch {
+    inheritedHumanDecisions.length = 0;
+  }
   const currentPlan = null; // DB-first: the plan lives in the DB draft; the TL reads it via ariad_tree_patch.
   const context = {
     project: {
@@ -119,6 +146,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
       activeVersion: project.activeVersion ?? 1,
     },
     planningRequests: task.input?.requests ?? [],
+    humanDecisions: inheritedHumanDecisions,
     currentDeliveryPlan: currentPlan,
   };
 
@@ -172,9 +200,11 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         'PM PLAN REVISION (CONTINUE THE REJECTED DRAFT AS A NEW VERSION)',
         'The PM rejected the previous plan draft; the requests below carry its full review: reason is the fidelity trace naming exactly which clauses failed, guidance is the repair list. The rejected draft (see rejectedDraftVersion in each request) is still open in the database. FIRST call ariad_tree_patch openRevisionDraft: it closes the rejected draft as superseded (content retained) and opens the NEXT version seeded from it - that new version is your working draft; apply the repairs to it with applyOps. NEVER call discardDraft and NEVER open a fresh draft from prod in this batch - a fresh draft is re-derived from prod and silently drops every fix already landed in the rejected draft, which is exactly what made earlier revision rounds fail to converge. If openRevisionDraft answers NOT_A_REVISION_BASE, the revision draft for this batch is already open: continue that one with applyOps.',
         'Apply only the listed repairs. Every part of the draft the PM did not flag stays exactly as it is. Where the PM quotes required wording, paste it character-for-character - never paraphrase, merge, or reword a quoted clause. After applyOps, re-read the tasks you touched from the draft and confirm every quoted clause is present character-for-character before submitting: a summary claiming a fix is not evidence, the draft text is. If a clause is missing or altered after your writes, fix it in this pass before submitting.',
+        'DECISION CHECK: where the review or its guidance quotes or paraphrases a human decision, verify the quote against humanDecisions in the payload - every human decision recorded on this project, in time order. A decision recorded later than the review governs, even if the review calls its own quote the latest; and a requirement carried by the approved document stays in force until an authoring task changes the document and a human approves the new hash. Revision rounds are capped: after the cap the batch escalates to a human instead of replanning again, so land the complete repair in this pass.',
         JSON.stringify({ revisionRequests }, null, 2),
       ].join('\n\n') : null,
-      'EXISTING TASK SWEEP (MANDATORY WHEN THIS BATCH CARRIES NEW OR CHANGED REQUIREMENTS): owner decisions, a requirements delta, or PM revision guidance that changes what the product must be all trigger this sweep. Read the full existing task list in the open draft - not only the tasks you are adding - and check every pre-existing task against the new requirements. A pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements is in scope for this batch, however unrelated it looks: revise its text to the new requirements in this same draft, retire or merge it, or explicitly re-scope it to the part that remains valid. Never leave a stale task standing beside new work that contradicts it, and never gate new-requirement work behind a stale task whose own acceptance criteria embody the superseded requirement: restructure the dependency so the new work is not blocked on completing and accepting the old construction first. Respect the promotion rules for tasks that have already started: what cannot be revised or removed there, flag explicitly in your result with a proposed disposition instead of leaving it silently stale. Your result must carry the SWEEP ACCOUNTING in result.sweepAccounting: one entry for EVERY pre-existing task of the draft\'s base version - not only the ones you changed - each naming the task ID with its disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and the reason. This applies to the decompose result and to every repair result alike: the batch\'s LAST Tech Lead result must carry the complete accounting for the draft as it then stands, so a repair that changes the tree must re-submit the full updated accounting, not a delta. The deterministic plan validator enforces this mechanically (SWEEP_ACCOUNTING_INCOMPLETE): a Tech Lead result whose sweepAccounting is missing, or that omits any pre-existing task ID, fails validation with the missing IDs named, and the batch cannot reach PM review until it passes. A separate future task that merely promises to produce the accounting later does not count as the accounting.',
+      'EXISTING TASK SWEEP (MANDATORY WHEN THIS BATCH CARRIES NEW OR CHANGED REQUIREMENTS): owner decisions, a requirements delta, or PM revision guidance that changes what the product must be all trigger this sweep. Read the full existing task list in the open draft - not only the tasks you are adding - and check every pre-existing task against the new requirements. A pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements is in scope for this batch, however unrelated it looks: revise its text to the new requirements in this same draft, retire or merge it, or explicitly re-scope it to the part that remains valid. Never leave a stale task standing beside new work that contradicts it, and never gate new-requirement work behind a stale task whose own acceptance criteria embody the superseded requirement: restructure the dependency so the new work is not blocked on completing and accepting the old construction first. Respect the promotion rules for tasks that have already started: what cannot be revised or removed there, flag explicitly in your result with a proposed disposition instead of leaving it silently stale.',
+      SWEEP_ACCOUNTING_MANDATE,
     ].filter(Boolean).join('\n\n');
   }
 
@@ -238,7 +268,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         JSON.stringify({ revisionRequests: repairRevisionRequests }, null, 2),
       ].join('\n\n') : null,
       sweepRequired ? [
-        'SWEEP ACCOUNTING (MANDATORY FOR THIS BATCH - THE GATE JUDGES YOUR RESULT): this batch carries new or changed requirements, so your repair result must carry the complete SWEEP ACCOUNTING in result.sweepAccounting - at the TOP LEVEL of your result, not nested inside validationPlan or any other field. One entry for EVERY pre-existing task of the draft\'s base version, each naming the task ID with its disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and the reason. The deterministic plan validator reads only the batch\'s latest Tech Lead result: an accounting left behind by the decompose, or a delta naming only the tasks you touched, fails validation (SWEEP_ACCOUNTING_INCOMPLETE) and the batch cannot reach PM review. The previous Tech Lead result\'s accounting is in the payload as previousSweepAccounting: carry it forward, updating the entries for the tasks your repair changed, and re-submit the complete list.',
+        'SWEEP ACCOUNTING (MANDATORY FOR THIS BATCH - THE GATE JUDGES YOUR RESULT): ' + SWEEP_ACCOUNTING_MANDATE + ' The previous Tech Lead result\'s accounting is in the payload as previousSweepAccounting: carry it forward, updating the entries for the tasks your repair changed, and re-submit the complete list.',
       ].join('\n\n') : null,
       JSON.stringify({ context, critic: previous, ...(sweepRequired ? { previousSweepAccounting } : {}) }, null, 2),
       buildTechLeadPrompt({ projectContext: context, schema: null }),
