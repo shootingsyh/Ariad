@@ -28,6 +28,9 @@ import { globalPiModelsPath, readPiModelsConfig } from './config-service.js';
 const RESULT_TOOL = 'ariad_role_result';
 const DELIVERY_ROLES = new Set(['developer', 'test_engineer', 'tester', 'artist', 'reviewer', 'ux_reviewer']);
 const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write']);
+// The only sessions allowed to write the human-approved requirements
+// document: the PM, while running a requirements-authoring task.
+const REQUIREMENTS_AUTHOR_PURPOSES = new Set(['REQUIREMENTS_AUTHORING', 'LOCAL_REPLAN_REQUIREMENTS']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
@@ -344,6 +347,20 @@ export function deliveryToolPolicy(role, toolName, context = {}) {
       if (inAriad && isAuditLog && toolName !== 'read') {
         return { block: true, reason: `PROTECTED_ARIAD_AUDIT: ${toolName} on ${rel} is denied - .ariad/${base} is an append-only audit log written only by the Ariad system, never by a role session.` };
       }
+      // Requirements document protection (2026-11-15 incident): the
+      // human-approved REQUIREMENTS.md is hash-pinned (project-docs.js),
+      // but planning sessions kept editing it to match a stale draft -
+      // the Tech Lead rewrote it seconds after a human restore, and the
+      // requirements gate bounced on every run. The document is authored
+      // only by the PM inside a requirements-authoring task and takes
+      // effect only after human approval; every other role session reads
+      // it as the source of truth and never writes it.
+      if (rel === '.ariad/docs/REQUIREMENTS.md' && toolName !== 'read') {
+        const authoring = role === 'pm' && REQUIREMENTS_AUTHOR_PURPOSES.has(context.taskPurpose ?? null);
+        if (!authoring) {
+          return { block: true, reason: `PROTECTED_REQUIREMENTS_DOC: ${toolName} on ${rel} is denied - the requirements document is human-approved and hash-pinned; it is authored only by the PM in a requirements-authoring task and changes take effect only after human approval (ariad project approve-requirements). Plan from the approved text on disk; if the plan cannot follow it, escalate instead of editing the document.` };
+        }
+      }
     }
   }
   if ((role === 'reviewer' || role === 'ux_reviewer') && REVIEWER_MUTATING_TOOLS.has(toolName)) {
@@ -602,8 +619,8 @@ export async function createDefaultPiRunSession(spec) {
           // A malformed server entry must never break session creation.
         }
       }
-      if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead') {
-        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace }) ?? undefined);
+      if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead' || spec.role === 'pm') {
+        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace, taskPurpose: spec.context?.task?.purpose ?? null }) ?? undefined);
       }
       pi.registerTool({
         name: RESULT_TOOL,

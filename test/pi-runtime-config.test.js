@@ -120,8 +120,38 @@ test('file tools can never touch Ariad state databases or audit logs (2026-11-03
   }
   // ordinary project files and non-.ariad databases stay untouched by this guard
   assert.equal(deliveryToolPolicy('developer', 'write', { ...ws, input: { path: 'src/main.gd' } }), null);
-  assert.equal(deliveryToolPolicy('developer', 'edit', { ...ws, input: { path: '.ariad/docs/REQUIREMENTS.md' } }), null);
+  assert.equal(deliveryToolPolicy('developer', 'edit', { ...ws, input: { path: '.ariad/docs/PROJECT.md' } }), null);
   assert.equal(deliveryToolPolicy('developer', 'read', { ...ws, input: { path: 'data/save.db' } }), null);
+});
+
+test('the human-approved requirements document is writable only by the PM in a requirements-authoring task (2026-11-15 incident)', () => {
+  const ws = { workspace: '/tmp/ariad-proj' };
+  const target = '.ariad/docs/REQUIREMENTS.md';
+  // Planning and delivery roles read the document but never write it:
+  // the Tech Lead rewrote the approved text to match a stale draft and
+  // the requirements gate bounced on every subsequent run.
+  for (const role of ['tech_lead', 'developer', 'tester', 'artist']) {
+    for (const tool of ['edit', 'write']) {
+      const res = deliveryToolPolicy(role, tool, { ...ws, input: { path: target } });
+      assert.equal(res?.block, true, `${role} ${tool}`);
+      assert.match(res.reason, /PROTECTED_REQUIREMENTS_DOC/);
+    }
+    assert.equal(deliveryToolPolicy(role, 'read', { ...ws, input: { path: target } }), null, `${role} read`);
+  }
+  // The PM authors the document only inside a requirements-authoring
+  // task; in any other PM task (review, replan) it is just as protected.
+  for (const purpose of ['REQUIREMENTS_AUTHORING', 'LOCAL_REPLAN_REQUIREMENTS']) {
+    assert.equal(deliveryToolPolicy('pm', 'edit', { ...ws, taskPurpose: purpose, input: { path: target } }), null, `pm ${purpose} edit`);
+    assert.equal(deliveryToolPolicy('pm', 'write', { ...ws, taskPurpose: purpose, input: { path: target } }), null, `pm ${purpose} write`);
+  }
+  for (const purpose of ['PM_REVIEW', null, undefined]) {
+    const res = deliveryToolPolicy('pm', 'edit', { ...ws, taskPurpose: purpose, input: { path: target } });
+    assert.equal(res?.block, true, `pm purpose=${purpose}`);
+    assert.match(res.reason, /PROTECTED_REQUIREMENTS_DOC/);
+  }
+  // Other human-facing docs are not affected by this guard.
+  assert.equal(deliveryToolPolicy('pm', 'edit', { ...ws, input: { path: '.ariad/docs/PROJECT.md' } }), null);
+  assert.equal(deliveryToolPolicy('tech_lead', 'write', { ...ws, input: { path: '.ariad/docs/features/f-example.md' } }), null);
 });
 
 test('planning roles get minimal tool tiers and bash stays confined to the workspace', () => {

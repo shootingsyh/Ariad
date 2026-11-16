@@ -784,6 +784,7 @@ export function createDefaultV2Roles({
         v2Prompt: sharedDeliveryContext ? '' : v2Prompt,
         task: {
           id: task.id,
+          purpose: task.input?.purpose ?? null,
           title: task.title ?? null,
           intent: task.intent ?? task.input?.intent ?? null,
           acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
