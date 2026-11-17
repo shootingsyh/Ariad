@@ -104,6 +104,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
 
 import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
 import { batchRequiresSweepAccounting, evaluateSweepAccounting, authorshipResultsForBatch, sweepAccountingRaw } from './sweep-accounting.js';
+import { evaluateIssueAssignment } from './issue-assignment.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
@@ -1449,6 +1450,33 @@ export function createDefaultV2Roles({
                     outcome: 'NOT_PASS',
                     result: { valid: false, plan: null, error: `SWEEP_ACCOUNTING_INCOMPLETE: ${verdict.error}. Every pre-existing task must appear in result.sweepAccounting of the batch's final Tech Lead result with a disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and a reason; a future task promising the accounting later does not count.`, errorCode: 'SWEEP_ACCOUNTING_INCOMPLETE' },
                   };
+                }
+              }
+              // Issue assignment gate (2026-11-16): in a batch that
+              // triages issues, the batch's final Tech Lead result must
+              // disposition every triaged issue, and every task ID it
+              // claims as an assignee must exist - in this draft or
+              // among the project's live tasks (issue-queue fix tasks
+              // live outside the spec). An unverified claim is how
+              // SRPG batch-79 lost T-fix-troops-down-dimension-gate:
+              // decompose claimed it, the PM accepted, it existed
+              // nowhere, and the issue sat TRIAGED_UNASSIGNED.
+              if (typeof store?.listTasks === 'function') {
+                const batchRequests = planningBatchRequests(store, task);
+                if (batchRequests.some(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE')) {
+                  const liveTaskIds = (store.listTasks(task.projectId) ?? []).map(t => t.id).filter(Boolean);
+                  const verdict = evaluateIssueAssignment({
+                    requests: batchRequests,
+                    authorshipResults: authorshipResultsForBatch(store, task),
+                    draftTaskIds: draftTasks.map(t => t.id).filter(Boolean),
+                    liveTaskIds,
+                  });
+                  if (!verdict.ok) {
+                    return {
+                      outcome: 'NOT_PASS',
+                      result: { valid: false, plan: null, error: `${verdict.code}: ${verdict.error}`, errorCode: verdict.code },
+                    };
+                  }
                 }
               }
               // DB-first verdict rests on the draft alone: do not fall

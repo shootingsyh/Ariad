@@ -188,6 +188,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
         'One or more planning requests are issues. Triage each against current repository reality and feature/interface ownership before changing the plan.',
         'Reject duplicates/non-defects by leaving delivery unchanged and documenting the disposition in the issue record.',
         'For a valid issue, route the repair through the issue queue with ariad_insert_fix_task (the fix task runs ahead of milestone work; it does not join the task tree). Only when the fix genuinely changes the planned tree itself, reflect it in the open draft with ariad_tree_patch.',
+        'Your result must carry result.issueDispositions: one entry per triaged issue, naming assignedTaskIds for every issue you assign. The deterministic plan validator verifies each claimed ID against the draft and the project\'s live tasks (ISSUE_ASSIGNMENT_UNVERIFIED): a task you claim but did not actually create fails validation and returns the batch to you.',
         'The reporting task is NOT automatically blocked. Do not request a pause: PM alone decides stopping policy.',
         JSON.stringify({ issueRequests }, null, 2),
       ].join('\n\n') : null,
