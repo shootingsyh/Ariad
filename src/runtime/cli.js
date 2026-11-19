@@ -12,6 +12,7 @@ import { setupPiProviders } from './pi-provider-setup.js';
 import { daemonRequest, ensureAriadDaemon, daemonPaths, daemonLiveness } from './daemon.js';
 import { ariadBuildId } from './build-id.js';
 import { createAriadConfigService, probeLocalEndpoint } from './config-service.js';
+import { isValidLocalModelServiceUnit } from './local-model-service.js';
 import { runConfigWizard } from './config-wizard.js';
 import { installProjectSlot } from './plugin-slots.js';
 import { attemptIgnition } from './bootstrap.js';
@@ -28,6 +29,7 @@ function usage() {
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
     '  ariad dashboard {start|stop|status} [--port 18793]',
     '  ariad config local-endpoint <url> [--projects-root <path>]',
+    '  ariad config local-service <systemd-unit> [--projects-root <path>]',
     '  ariad config guide   (interactive; ariad setup does the same on a TTY)',
     '  ariad config bootstrap   (find a model that answers, or a structured ignition-failure report)',
     '  ariad config assistant   (interactive: the ignited model guides configuration; every change needs your confirmation)',
@@ -64,6 +66,7 @@ function parse(argv) {
   let goal = null;
   let sourcePath = null;
   let endpoint = null;
+  let serviceUnit = null;
   let port = null;
   let issue = null;
   let interfaceId = null;
@@ -87,6 +90,7 @@ function parse(argv) {
     issue = JSON.parse(arguments_.shift());
   }
   if (scope === 'config' && action === 'local-endpoint') endpoint = arguments_.shift() ?? null;
+  if (scope === 'config' && action === 'local-service') serviceUnit = arguments_.shift() ?? null;
   if (scope === 'config' && action === 'probe') endpoint = arguments_.shift() ?? null;
   if (scope === 'config' && action === 'set-roles') {
     if (!arguments_.length) throw new Error('config set-roles requires JSON');
@@ -171,7 +175,7 @@ function parse(argv) {
     }
     throw new Error(`unknown argument: ${rest[i]}`);
   }
-  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning, freshStore };
+  return { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, serviceUnit, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly, expectedSha256, discardPlanning, freshStore };
 }
 
 
@@ -269,7 +273,7 @@ async function runWizardSession(root) {
 }
 
 export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
-  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly } = parse(argv);
+  const { scope, action, name, projectsRoot, roleModels, goal, sourcePath, endpoint, serviceUnit, port, analysisInstruction, replanInstruction, decision, issue, interfaceId, providerSpec, providerId, features, slotId, dbFile, upToSeq, unreadOnly } = parse(argv);
   // Install-level role defaults (ariad config guide / assistant /
   // dashboard) are the create fallback: an operator who configured
   // defaults should not have to repeat them on every create. Explicit
@@ -385,8 +389,17 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
     if (!endpoint || !/^https?:\/\//.test(endpoint)) throw new Error('local-endpoint requires an HTTP(S) URL');
     const paths = daemonPaths(root);
     mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
-    writeFileSync(paths.config, JSON.stringify({ localModelBaseUrl: endpoint }, null, 2) + '\n', { mode: 0o600 });
+    const existing = existsSync(paths.config) ? JSON.parse(readFileSync(paths.config, 'utf8')) : {};
+    writeFileSync(paths.config, JSON.stringify({ ...existing, localModelBaseUrl: endpoint }, null, 2) + '\n', { mode: 0o600 });
     return { config: paths.config, localModelBaseUrl: endpoint, note: 'Takes effect when the daemon next starts' };
+  }
+  if (scope === 'config' && action === 'local-service') {
+    if (!isValidLocalModelServiceUnit(serviceUnit)) throw new Error('local-service requires a systemd unit name');
+    const paths = daemonPaths(root);
+    mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+    const existing = existsSync(paths.config) ? JSON.parse(readFileSync(paths.config, 'utf8')) : {};
+    writeFileSync(paths.config, JSON.stringify({ ...existing, localModelService: serviceUnit }, null, 2) + '\n', { mode: 0o600 });
+    return { config: paths.config, localModelService: serviceUnit, note: 'Takes effect when the daemon next starts' };
   }
   if (scope === 'project' && action === 'analyze') {
     if (!name || !analysisInstruction?.trim()) throw new Error('analyze requires project name and instruction');

@@ -11,6 +11,7 @@ import { AriadService } from './ariad-service.js';
 import { PiAgentSessionProvider } from './pi-agent-session-provider.js';
 import { createAriadControlTools } from './control-tools.js';
 import { AriadDashboardService } from './dashboard-service.js';
+import { ensureLocalModelService } from './local-model-service.js';
 
 export function daemonPaths(root) {
   const dir = join(root, '.runtime');
@@ -168,11 +169,25 @@ export async function serveAriad(root) {
       unlinkSync(paths.socket);
     }
   }
-  if (!process.env.ARIAD_LLAMACPP_BASE_URL && existsSync(paths.config)) {
-    const config = JSON.parse(readFileSync(paths.config, 'utf8'));
-    if (typeof config.localModelBaseUrl === 'string') {
-      process.env.ARIAD_LLAMACPP_BASE_URL = config.localModelBaseUrl;
-    }
+  let daemonConfig = {};
+  if (existsSync(paths.config)) {
+    try { daemonConfig = JSON.parse(readFileSync(paths.config, 'utf8')); } catch { daemonConfig = {}; }
+  }
+  if (!process.env.ARIAD_LLAMACPP_BASE_URL && typeof daemonConfig.localModelBaseUrl === 'string') {
+    process.env.ARIAD_LLAMACPP_BASE_URL = daemonConfig.localModelBaseUrl;
+  }
+  // When a systemd user service is configured for the local model
+  // endpoint (daemon config key localModelService, set via
+  // `ariad config local-service`), bring it up in the background. Not
+  // awaited: model loading takes tens of seconds and the daemon must
+  // start serving immediately; a missing local model must never block
+  // cloud-backed work.
+  if (typeof daemonConfig.localModelService === 'string') {
+    void ensureLocalModelService({
+      baseUrl: process.env.ARIAD_LLAMACPP_BASE_URL || 'http://127.0.0.1:18080/v1',
+      serviceUnit: daemonConfig.localModelService,
+      log: (...args) => console.log(...args),
+    }).catch(error => console.error('[local-model] ensure failed:', error));
   }
   const buildId = ariadBuildId();
   const startedAt = new Date().toISOString();
