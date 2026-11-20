@@ -75,6 +75,32 @@ function consecutiveRoleFailures(task, role) {
   return count;
 }
 
+// Owner rule (2026-11-19): full-journey cases are end-of-line verification.
+// A full journey revalidates the whole product surface, so its verdict is
+// invalidated by every later change still queued behind the task under test.
+// Such cases are reserved for integration/release tasks, where they run once
+// after the small changes have landed. Ordinary tasks verify with
+// scope-limited cases for the surfaces they touch.
+//
+// The classification is declared, never sniffed from project file names:
+// the plan schema reserves the executionScope tag 'full-journey', and the
+// Test Engineer must tag every whole-product journey case with it (the
+// Test Engineer prompt states the rule). The validator enforces the tier
+// mechanically; what counts as a journey in a given project is that
+// project's own business, not platform knowledge.
+export const FULL_JOURNEY_SCOPE_TAG = 'full-journey';
+
+export function isFullJourneyCase(c) {
+  if (!c || typeof c !== 'object') return false;
+  const scope = Array.isArray(c.executionScope) ? c.executionScope : [];
+  return scope.includes(FULL_JOURNEY_SCOPE_TAG);
+}
+
+export function isIntegrationOrReleaseTask(task) {
+  if (task?.taskKind === TASK_KINDS.INTEGRATION_TASK) return true;
+  return /release/i.test(String(task?.id ?? ''));
+}
+
 export function testPlanValidationIssues(task, result) {
   const cases = result.result?.testPlan?.testCases;
   const criteria = acceptanceCriterionIds(task);
@@ -83,6 +109,11 @@ export function testPlanValidationIssues(task, result) {
   for (const [i, c] of cases.entries()) {
     if (!c || typeof c.entry !== 'string' || !c.entry.trim() || typeof c.command !== 'string' || !c.command.trim() || !Array.isArray(c.covers) || !Array.isArray(c.executionScope)) errors.push('testCases[' + i + '] requires entry, command, covers and executionScope');
     else for (const id of c.covers) if (!criteria.includes(id)) errors.push('testCases[' + i + '].covers invalid criterion ' + JSON.stringify(id) + '; allowed: ' + criteria.join(', '));
+  }
+  if (!isIntegrationOrReleaseTask(task)) {
+    for (const [i, c] of cases.entries()) {
+      if (isFullJourneyCase(c)) errors.push('testCases[' + i + '] (' + (c.id ?? c.entry) + ') is a full-journey case; full journeys are reserved for integration/release tasks - replace it with scope-limited cases for the surfaces this task changes');
+    }
   }
   for (const id of criteria) if (!cases.some(c => c?.covers?.includes(id))) errors.push('missing coverage for ' + id);
   return errors;

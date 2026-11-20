@@ -68,3 +68,26 @@ test('ux rejection returns to the artist first when the task flow includes one (
   const history = Array.from({ length: 3 }, () => ({ type: 'ROLE_RESULT', role: 'ux_reviewer', outcome: 'NOT_PASS' }));
   assert.equal(milestoneResultTransition(task('ux_reviewer', { history: [artistResult, ...history] }), { outcome: 'NOT_PASS' }).stage, 'project_debugger');
 });
+
+test('full-journey cases are rejected for ordinary tasks, allowed at integration/release (2026-11-19)', () => {
+  const journey = { outcome: 'PASS', result: { testPlan: { testCases: [{
+    id: 'TC-21', entry: 'e2e/whole_product_run.js', command: 'run the packaged app end to end',
+    covers: [], executionScope: ['full-journey'],
+  }] } } };
+  const feature = milestoneResultTransition(task('test_engineer', { taskKind: 'FEATURE_TASK', id: 'T-checkout' }), journey);
+  assert.equal(feature.stage, 'test_engineer');
+  assert.equal(feature.transitionHistory.type, 'TEST_PLAN_VALIDATION_FAILED');
+  assert.ok(feature.transitionHistory.errors.some(x => x.includes('full-journey')));
+  const milestone = milestoneResultTransition(task('test_engineer', { id: 'M-checkout' }), journey);
+  assert.equal(milestone.stage, 'test_engineer');
+  assert.equal(milestoneResultTransition(task('test_engineer', { taskKind: 'INTEGRATION_TASK', id: 'I-root' }), journey).stage, 'tester');
+  assert.equal(milestoneResultTransition(task('test_engineer', { id: 'M-app-release' }), journey).stage, 'tester');
+});
+
+test('journey classification is declared by tag, never sniffed from entry names (2026-11-19)', () => {
+  const scoped = { outcome: 'PASS', result: { testPlan: { testCases: [
+    { entry: 'tests/whole_run_journey.gd', command: 'run one scoped chapter entry', covers: [], executionScope: ['headless', 'integration'] },
+    { entry: 'src/ui/__tests__/title.test.js', command: 'node --test src/ui/__tests__/title.test.js', covers: [], executionScope: ['leaf', 'headless'] },
+  ] } } };
+  assert.equal(milestoneResultTransition(task('test_engineer', { taskKind: 'FEATURE_TASK', id: 'T-checkout' }), scoped).stage, 'tester');
+});
