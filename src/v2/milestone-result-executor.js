@@ -192,6 +192,10 @@ export function milestoneResultTransition(task, result, { uxReviewEnabled = fals
       }
       const autoCarry = debuggerAutoCarry(task, result);
       if (outcome === 'WRONG_IMPLEMENTATION_APPROACH') signal = 'REPAIRED';
+      // RETRY_WITH_GUIDANCE is the bounded-repair verdict (approach sound,
+      // one guided retry): it rides the REPAIRED route, but only with the
+      // guidance actually attached - a guideless retry falls to ROUTE_PM.
+      else if (outcome === 'RETRY_WITH_GUIDANCE' && typeof result.result?.guidance === 'string' && result.result.guidance.trim()) signal = 'REPAIRED';
       else if (outcome === 'ASSET_ISSUE') signal = 'ROUTE_ARTIST';
       else if (['REQUIREMENT_DECISION_REQUIRED', 'UNKNOWN_PROJECT_CAUSE'].includes(outcome)) signal = 'ROUTE_PM';
       else if (['SYSTEM_RUNTIME_FAILURE', 'MODEL_CAPABILITY_MISMATCH'].includes(outcome)) signal = autoCarry ? 'REPAIRED' : 'NEEDS_HUMAN';

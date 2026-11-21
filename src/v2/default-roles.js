@@ -1129,6 +1129,7 @@ export function createDefaultV2Roles({
           'A runtime symptom does not imply a runtime root cause.',
           splitAssessment,
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
+          'For RETRY_WITH_GUIDANCE, the approach behind the blocked work is sound and one bounded retry by its owner will fix it: state the exact correction in result.guidance.',
           'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
           JSON.stringify(task.input?.systemIncident ?? {}, null, 2),
         ].join('\n\n') : task.input?.previousGateFailure ? [
@@ -1143,6 +1144,7 @@ export function createDefaultV2Roles({
           splitAssessment,
           'Do not repair files, config, services, processes, task state, or model selection yourself. Return one routing diagnosis.',
           'For WRONG_IMPLEMENTATION_APPROACH, state the corrected approach concretely in summary/guidance so a developer can execute it directly.',
+          'For RETRY_WITH_GUIDANCE, the approach behind the blocked work is sound and one bounded retry by its owner will fix it: state the exact correction in result.guidance.',
           'Choose the diagnosis by where the defect lives: defects in the produced visual assets themselves - an asset whose style clashes with the rest of the deliverable, capture or recording artifacts baked into a deliverable (engine splash frames, a visible cursor), duplicated or missing asset states, a placeholder-grade asset - are ASSET_ISSUE and route to the artist for rework (the flow then continues to the developer on its own). Reserve WRONG_IMPLEMENTATION_APPROACH for defects in code or in the implementation approach. When a UX reviewer rejection is what escalated this task, presume its findings are asset-level (ASSET_ISSUE) unless the evidence clearly shows a code defect.',
           'For SYSTEM_RUNTIME_FAILURE or MODEL_CAPABILITY_MISMATCH, your diagnosis is carried automatically into a developer work order and execution continues without a human gate: state the remediation concretely in summary/guidance so a developer can execute it directly. Set result.operatorRequired=true ONLY when the fix is genuinely beyond what project roles can do (the operator must personally repair infrastructure, credentials, or model/provider policy); only then does the task park for the operator.',
         ].join('\n\n'));
@@ -1241,6 +1243,35 @@ export function createDefaultV2Roles({
               at: new Date().toISOString(),
             },
           };
+        }
+        if (result.outcome === 'RETRY_WITH_GUIDANCE') {
+          const guidance = result.result?.guidance;
+          if (typeof guidance === 'string' && guidance.trim()) {
+            if (blocked) {
+              routeBlocked({ stage: 'developer', state: 'READY', execution: null }, {
+                type: 'DEBUGGER_ROUTE',
+                role: 'project_debugger',
+                route: 'developer',
+                diagnosis: result.outcome,
+                guidance: guidance.trim(),
+                source: 'system_block_diagnosis',
+                at: new Date().toISOString(),
+              });
+              return { state: 'DONE' };
+            }
+            return {
+              stage: 'developer',
+              state: 'READY',
+              transitionHistory: {
+                type: 'DEBUGGER_ROUTE',
+                role: 'project_debugger',
+                route: 'developer',
+                diagnosis: result.outcome,
+                guidance: guidance.trim(),
+                at: new Date().toISOString(),
+              },
+            };
+          }
         }
         if (result.outcome === 'SYSTEM_RUNTIME_FAILURE' || result.outcome === 'MODEL_CAPABILITY_MISMATCH') {
           if (debuggerAutoCarry(blocked ?? task, result)) {

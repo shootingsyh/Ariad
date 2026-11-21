@@ -67,6 +67,7 @@ const ROLE_RESULT_OUTCOMES = Object.freeze({
   reviewer: ['PASS', 'NOT_PASS'],
   ux_reviewer: ['PASS', 'NOT_PASS'],
   project_debugger: [
+    'RETRY_WITH_GUIDANCE',
     'WRONG_IMPLEMENTATION_APPROACH',
     'TASK_TOO_LARGE',
     'ASSET_ISSUE',
