@@ -101,6 +101,21 @@ export function isIntegrationOrReleaseTask(task) {
   return /release/i.test(String(task?.id ?? ''));
 }
 
+// The full-journey gate exists to force a review before an ordinary task
+// spends a whole-product run. The project debugger is that review: when a
+// task has escalated and the debugger returns RETRY_WITH_GUIDANCE (approach
+// sound, one guided retry), its DEBUGGER_ROUTE entry in the task history is
+// the authorization for the journey case it approved. Without this, the
+// guided retry routes back to the developer, the Test Engineer resubmits
+// the same necessary journey case, validation rejects it again, and the
+// escalation loops into the same wall until the task parks at a human gate
+// (2026-11-21: a task whose only decisive verification was a supported-entry
+// journey an ordinary task may not declare).
+export function debuggerAuthorizedFullJourney(task) {
+  return (task?.history ?? []).some(entry =>
+    entry?.type === 'DEBUGGER_ROUTE' && entry?.diagnosis === 'RETRY_WITH_GUIDANCE');
+}
+
 export function testPlanValidationIssues(task, result) {
   const cases = result.result?.testPlan?.testCases;
   const criteria = acceptanceCriterionIds(task);
@@ -110,7 +125,7 @@ export function testPlanValidationIssues(task, result) {
     if (!c || typeof c.entry !== 'string' || !c.entry.trim() || typeof c.command !== 'string' || !c.command.trim() || !Array.isArray(c.covers) || !Array.isArray(c.executionScope)) errors.push('testCases[' + i + '] requires entry, command, covers and executionScope');
     else for (const id of c.covers) if (!criteria.includes(id)) errors.push('testCases[' + i + '].covers invalid criterion ' + JSON.stringify(id) + '; allowed: ' + criteria.join(', '));
   }
-  if (!isIntegrationOrReleaseTask(task)) {
+  if (!isIntegrationOrReleaseTask(task) && !debuggerAuthorizedFullJourney(task)) {
     for (const [i, c] of cases.entries()) {
       if (isFullJourneyCase(c)) errors.push('testCases[' + i + '] (' + (c.id ?? c.entry) + ') is a full-journey case; full journeys are reserved for integration/release tasks - replace it with scope-limited cases for the surfaces this task changes');
     }

@@ -84,6 +84,22 @@ test('full-journey cases are rejected for ordinary tasks, allowed at integration
   assert.equal(milestoneResultTransition(task('test_engineer', { id: 'M-app-release' }), journey).stage, 'tester');
 });
 
+test('a debugger RETRY_WITH_GUIDANCE route authorizes the full-journey case it approved (2026-11-21)', () => {
+  const journey = { outcome: 'PASS', result: { testPlan: { testCases: [{
+    id: 'TC-21', entry: 'e2e/whole_product_run.js', command: 'run the packaged app end to end',
+    covers: [], executionScope: ['full-journey'],
+  }] } } };
+  const route = { type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'developer', diagnosis: 'RETRY_WITH_GUIDANCE', guidance: 'Run the supported-entry journey as planned.' };
+  const authorized = milestoneResultTransition(
+    task('test_engineer', { taskKind: 'FEATURE_TASK', id: 'T-checkout', history: [route] }), journey);
+  assert.equal(authorized.stage, 'tester');
+  // Other debugger verdicts do not authorize: the gate still applies.
+  const other = milestoneResultTransition(
+    task('test_engineer', { taskKind: 'FEATURE_TASK', id: 'T-checkout', history: [{ ...route, diagnosis: 'WRONG_IMPLEMENTATION_APPROACH' }] }), journey);
+  assert.equal(other.stage, 'test_engineer');
+  assert.equal(other.transitionHistory.type, 'TEST_PLAN_VALIDATION_FAILED');
+});
+
 test('journey classification is declared by tag, never sniffed from entry names (2026-11-19)', () => {
   const scoped = { outcome: 'PASS', result: { testPlan: { testCases: [
     { entry: 'tests/whole_run_journey.gd', command: 'run one scoped chapter entry', covers: [], executionScope: ['headless', 'integration'] },
