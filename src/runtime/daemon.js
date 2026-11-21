@@ -196,7 +196,10 @@ export async function serveAriad(root) {
   const service = new AriadService({
     manager, provider,
     reconcileWakePath: join(paths.dir, 'reconcile.wake'),
-    safetyIntervalMs: 10000,
+    // 30s background cadence is plenty: explicit wakes (role results,
+    // operator actions, the wake file) still reconcile immediately; this
+    // timer only bounds how stale a silent external change can get.
+    safetyIntervalMs: 30_000,
     // Memory curator intentionally NOT overridden: AriadService's default
     // constructs the real daily curator for the Pi provider (closed loop:
     // it distills session history into the project memory store, and the
