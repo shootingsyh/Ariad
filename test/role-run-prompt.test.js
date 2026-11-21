@@ -138,3 +138,19 @@ test('canonical delivery task artifact is serialized once before the role-specif
   assert.ok(prompt.indexOf('ARIAD TASK ARTIFACT') < prompt.indexOf('ACTIVE ROLE PROTOCOL'));
   assert.ok(prompt.indexOf('ACTIVE ROLE PROTOCOL') < prompt.indexOf('\n\nACTIVE ROLE\n'));
 });
+
+test('role prompt surfaces human decisions and renders routing fields that exist (2026-11-21)', () => {
+  const history = [
+    { type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'developer', diagnosis: 'WRONG_IMPLEMENTATION_APPROACH', guidance: 'Fix the approach.' },
+    { type: 'HUMAN_DECISION', decision: 'Contract repaired; use RETRY_WITH_GUIDANCE.', at: '2026-11-21T17:22:25.513Z' },
+  ];
+  const prompt = buildStandaloneRolePrompt({
+    v2Prompt: 'You are the project debugger.',
+    task: { id: 'T1', title: 'Escalated task', intent: 'Verify the repair.', acceptanceCriteria: [], history },
+  });
+  assert.match(prompt, /humanDecisions/);
+  assert.match(prompt, /Contract repaired; use RETRY_WITH_GUIDANCE\./);
+  assert.match(prompt, /"route": "developer"/);
+  assert.match(prompt, /"diagnosis": "WRONG_IMPLEMENTATION_APPROACH"/);
+  assert.doesNotMatch(prompt, /"targetStage": null/);
+});

@@ -43,7 +43,14 @@ function compactHistory(history = []) {
       type: entry.type,
       summary: entry.summary ?? null,
       guidance: entry.guidance ?? null,
-      targetStage: entry.targetStage ?? null,
+      // Render the fields the entry actually carries. DEBUGGER_ROUTE
+      // entries record their destination in `route` and their verdict in
+      // `diagnosis`; a fabricated `targetStage: null` reads to the next
+      // session as a persisted routing defect and anchored a false
+      // diagnosis loop (2026-11-21).
+      ...(entry.route != null ? { route: entry.route } : {}),
+      ...(entry.diagnosis != null ? { diagnosis: entry.diagnosis } : {}),
+      ...(entry.targetStage != null ? { targetStage: entry.targetStage } : {}),
     }));
 
   const roleSealFailures = history
@@ -59,7 +66,20 @@ function compactHistory(history = []) {
       repairBudget: entry.repairBudget ?? null,
     }));
 
-  return { takeoverNotes, roleResults, interruptions, routing, roleSealFailures };
+  // An operator decision is evidence the next session must see: a role
+  // re-run after a human gate (above all the project debugger) otherwise
+  // re-derives its verdict from the same pre-decision history and repeats
+  // the diagnosis the decision already answered (2026-11-21).
+  const humanDecisions = history
+    .filter(entry => entry?.type === 'HUMAN_DECISION')
+    .slice(-3)
+    .map(entry => ({
+      type: entry.type,
+      decision: entry.decision ?? null,
+      at: entry.at ?? null,
+    }));
+
+  return { takeoverNotes, roleResults, interruptions, routing, roleSealFailures, humanDecisions };
 }
 
 function unique(items, limit) {
