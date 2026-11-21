@@ -367,13 +367,13 @@ export class AriadService {
       );
       let pending = false;
       if (runtime) {
-        pending = pendingAnalysis(runtime.store.listTasks(project.id));
+        pending = pendingAnalysis(runtime.store.listTasks(project.id, { states: ['READY', 'WORKING', 'RESULT_READY'] }));
       } else if (existsSync(project.stateDb)) {
         // Do not initialize the full runtime for ordinary stopped projects.
         // In particular, keep the stopped SRPG project completely untouched.
         const probe = new SQLiteV2Store(project.stateDb);
         try {
-          pending = pendingAnalysis(probe.listTasks(project.id));
+          pending = pendingAnalysis(probe.listTasks(project.id, { states: ['READY', 'WORKING', 'RESULT_READY'] }));
         } finally {
           probe.close();
         }
