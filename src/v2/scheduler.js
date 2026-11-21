@@ -66,7 +66,7 @@ export class V2Scheduler {
 
     // Upgrade pre-split READY tester work to Test Engineer. Never interrupt
     // an in-flight tester; stopped/cancelled work is READY and safe to migrate.
-    for (const task of this.store.listTasks(projectId)) {
+    for (const task of this.store.listTasks(projectId, { states: ['READY'] })) {
       if (task.state !== 'READY' || task.stage !== 'tester') continue;
       const approved = [...(task.history ?? [])].reverse().find(h =>
         h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS'

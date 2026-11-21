@@ -349,10 +349,26 @@ export class SQLiteV2Store {
   }
 
   listTasks(projectId, filter = {}) {
+    // state and flowId live inside data_json, not in columns. When the
+    // caller names them, push the predicate into SQL via json_extract so
+    // non-matching rows are never parsed: the ledger keeps every historical
+    // task, and hot paths (supervisor audit, scheduler) previously paid a
+    // full-table JSON parse of all of it on every reconcile pass.
+    const conditions = ['project_id = ?'];
+    const params = [projectId];
+    if (Array.isArray(filter.states) && filter.states.length > 0) {
+      conditions.push(`json_extract(data_json, '$.state') IN (${filter.states.map(() => '?').join(', ')})`);
+      params.push(...filter.states);
+    }
+    if (filter.flowId) {
+      conditions.push(`json_extract(data_json, '$.flowId') = ?`);
+      params.push(filter.flowId);
+    }
     const tasks = this.db.prepare(
-      'SELECT * FROM v2_tasks WHERE project_id = ? ORDER BY rowid'
-    ).all(projectId).map(rowToTask);
+      `SELECT * FROM v2_tasks WHERE ${conditions.join(' AND ')} ORDER BY rowid`
+    ).all(...params).map(rowToTask);
     return tasks.filter(task => {
+      if (Array.isArray(filter.states) && filter.states.length > 0 && !filter.states.includes(task.state)) return false;
       if (filter.scope && scopeOfTask(task) !== filter.scope) return false;
       if (filter.flowId && task.flowId !== filter.flowId) return false;
       return true;

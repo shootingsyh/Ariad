@@ -65,7 +65,7 @@ export class V2Supervisor {
 
   async audit(projectId, { adhocOnly = false } = {}) {
     const incidents = [];
-    for (const task of this.store.listTasks(projectId)) {
+    for (const task of this.store.listTasks(projectId, { states: ['WORKING'] })) {
       if (task.state !== 'WORKING') continue;
       if (adhocOnly && !isAdhocAnalysis(task)) continue;
       const execution = task.execution;

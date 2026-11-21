@@ -178,3 +178,62 @@ test('signal read recovers when its cached connection dies', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a reconcile that mutates durable state reruns on a delay, not back-to-back', async () => {
+  let generation = 0;
+  const stamps = [];
+  const trigger = new ReconcileTrigger({
+    readGeneration: () => generation,
+    reconcile: async () => { stamps.push(Date.now()); generation += 1; },
+    safetyIntervalMs: 60_000,
+    selfWakeDelayMs: 60,
+  });
+  trigger.start();
+  await new Promise(resolve => setTimeout(resolve, 220));
+  trigger.stop();
+  assert.ok(stamps.length >= 2, `self-wake rerun never happened (${stamps.length} pass)`);
+  assert.ok(stamps.length <= 6, `reruns were not delayed (${stamps.length} passes in 220ms)`);
+  for (let i = 1; i < stamps.length; i += 1) {
+    assert.ok(stamps[i] - stamps[i - 1] >= 45, `pass gap ${stamps[i] - stamps[i - 1]}ms below the self-wake delay`);
+  }
+});
+
+test('an explicit wake supersedes a pending self-wake delay', async () => {
+  let generation = 0;
+  let calls = 0;
+  const trigger = new ReconcileTrigger({
+    readGeneration: () => generation,
+    reconcile: async () => { calls += 1; generation += 1; },
+    safetyIntervalMs: 60_000,
+    selfWakeDelayMs: 60_000,
+  });
+  trigger.start();
+  await flush();
+  assert.equal(calls, 1);
+  trigger.wake('operator');
+  await flush();
+  assert.equal(calls, 2);
+  trigger.stop();
+});
+
+test('listTasks filters by state and flowId', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-listtasks-'));
+  const store = new SQLiteV2Store(path.join(dir, 'state.db'));
+  try {
+    store.createProject({ id: 'p1', spec: 'test', workspace: dir });
+    const base = { projectId: 'p1', taskKind: 'FEATURE_TASK', stage: 'developer', title: 't', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' };
+    store.createTask({ ...base, id: 't-working', state: 'WORKING' });
+    store.createTask({ ...base, id: 't-ready', state: 'READY' });
+    store.createTask({ ...base, id: 't-done', state: 'DONE' });
+    store.createTask({ taskKind: 'PLANNING', id: 'c-b1', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b1', stage: 'tech_lead', state: 'READY' });
+    store.createTask({ taskKind: 'PLANNING', id: 'c-b2', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b2', stage: 'tech_lead', state: 'DONE' });
+    assert.deepEqual(store.listTasks('p1').map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready', 't-working']);
+    assert.deepEqual(store.listTasks('p1', { states: ['WORKING'] }).map(t => t.id), ['t-working']);
+    assert.deepEqual(store.listTasks('p1', { states: ['READY', 'DONE'] }).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready']);
+    assert.deepEqual(store.listTasks('p1', { flowId: 'planner:p1:b2' }).map(t => t.id), ['c-b2']);
+    assert.deepEqual(store.listTasks('p1', { states: ['READY'], flowId: 'planner:p1:b2' }).map(t => t.id), []);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

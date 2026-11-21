@@ -78,11 +78,12 @@ export class VersionedTaskStore {
 
   listTasks(projectId, filter = {}) {
     const merged = new Map();
-    for (const task of this.runtime.listTasks(projectId)) merged.set(task.id, task);
+    for (const task of this.runtime.listTasks(projectId, filter)) merged.set(task.id, task);
     for (const task of this.versioned.effectiveTasks()) {
       if (task.projectId === projectId) merged.set(task.id, task);
     }
     return [...merged.values()].filter(task => {
+      if (Array.isArray(filter.states) && filter.states.length > 0 && !filter.states.includes(task.state)) return false;
       if (filter.scope && scopeOfTask(task) !== filter.scope) return false;
       if (filter.flowId && task.flowId !== filter.flowId) return false;
       return true;
