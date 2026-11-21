@@ -9,6 +9,24 @@ import { applyTaskEvent } from './state-machine.js';
 import { developerTaskPolicyFailure, isApprovalGateTask } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isAdhocAnalysis, queueOfTask, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
 
+// Task-pinned local model (2026-11-20): the capacity-1 'local-llm'
+// resource serves one task's whole pipeline at a time. A task that starts
+// an attempt on it holds it until the task finishes (DONE/SKIPPED/
+// OBSOLETE) or parks (NEEDS_HUMAN/SYSTEM_BLOCKED/BLOCKED); other tasks'
+// local stages are not dispatched in between, so a task runs developer ->
+// test_engineer -> tester -> reviewer without interleaving. Stages on
+// other resources (cloud roles) are unaffected and keep running in
+// parallel. The hold is one task id on the project record, re-validated
+// against the holder's live state on every tick, so a stale hold can
+// never wedge the queue.
+export const LOCAL_LLM_RESOURCE = 'local-llm';
+const LOCAL_HOLD_ACTIVE_STATES = new Set(['READY', 'WORKING', 'RESULT_READY']);
+export function activeLocalLlmHolder(tasks, holderId) {
+  if (!holderId) return null;
+  const holder = tasks.find(task => task.id === holderId);
+  return holder && LOCAL_HOLD_ACTIVE_STATES.has(holder.state) ? holder : null;
+}
+
 function topologicalOrder(tasks) {
   const graph = buildExecutionGraph(tasks);
   return graph.order.map(id => graph.byId.get(id));
@@ -78,6 +96,7 @@ export class V2Scheduler {
       }, { stage: 'test_engineer', execution: null });
     }
     const allTasks = this.store.listTasks(projectId);
+    let localHolder = adhocOnly ? null : activeLocalLlmHolder(allTasks, project.localLlmHolderTaskId);
     // A human-approved PM review remains resumable after its planning request
     // has been marked PLANNED. It must finish the review gate before Delivery
     // may be considered, without reopening unrelated planning work.
@@ -203,6 +222,9 @@ export class V2Scheduler {
       const spec = role.prepare({ project, task });
       if (!spec?.provider) throw new Error(`role ${task.stage} produced no provider`);
       const requirements = spec.resources ?? [];
+      // While a task holds the local model, no other task's local stage
+      // may start; the holder's own stages and all cloud stages proceed.
+      if (!adhocOnly && localHolder && localHolder.id !== task.id && requirements.includes(LOCAL_LLM_RESOURCE)) continue;
       if (!this.resources.claim(requirements, task.id)) continue;
 
       const priorAttempts = (task.history ?? []).filter(entry =>
@@ -235,6 +257,17 @@ export class V2Scheduler {
         this.resources.release(task.id);
         if (String(error?.message).includes('version conflict')) continue;
         throw error;
+      }
+
+      // A task's first local dispatch takes the hold for its pipeline.
+      if (!adhocOnly && !localHolder && requirements.includes(LOCAL_LLM_RESOURCE)) {
+        localHolder = task;
+        try {
+          const fresh = this.store.getProject(projectId);
+          if (fresh && fresh.localLlmHolderTaskId !== task.id) {
+            this.store.updateProject?.(projectId, fresh.version, { localLlmHolderTaskId: task.id });
+          }
+        } catch { /* a lost hold write degrades to per-attempt dispatch */ }
       }
 
       try {
@@ -288,6 +321,7 @@ export class V2Scheduler {
               : null,
           },
         ));
+        if (blocked && localHolder?.id === task.id) localHolder = null;
         this.resources.release(task.id);
       }
     }
