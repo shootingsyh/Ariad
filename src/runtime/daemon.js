@@ -10,6 +10,7 @@ import { AriadProjectManager, defaultProjectsRoot } from './project-manager.js';
 import { AriadService } from './ariad-service.js';
 import { PiAgentSessionProvider } from './pi-agent-session-provider.js';
 import { createAriadControlTools } from './control-tools.js';
+import { acquireInstanceLock } from './instance-lock.js';
 import { AriadDashboardService } from './dashboard-service.js';
 import { ensureLocalModelService } from './local-model-service.js';
 
@@ -159,6 +160,12 @@ export async function ensureAriadDaemon(root, { timeoutMs = 8000, buildId = aria
 export async function serveAriad(root) {
   const paths = daemonPaths(root);
   mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+  // Hard single-instance gate: exactly one daemon may serve a root.
+  // The ping check below is a courtesy; this lock is the guarantee -
+  // it is won atomically in the kernel, so concurrent starters (the
+  // watchdog, a manual start, the manager) cannot both get through.
+  const instanceLock = acquireInstanceLock(paths.dir);
+  if (!instanceLock) throw new Error('ARIAD_DAEMON_ALREADY_RUNNING');
   // If a live daemon already owns the socket, do not hijack it.
   if (existsSync(paths.socket)) {
     try {
@@ -339,6 +346,7 @@ export async function serveAriad(root) {
     await service.stop();
     try { unlinkSync(paths.socket); } catch {}
     try { unlinkSync(paths.pid); } catch {}
+    instanceLock.release();
     process.exit(0);
   };
   process.once('SIGINT', () => { void shutdown(); });
