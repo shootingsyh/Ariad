@@ -1,5 +1,6 @@
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { scopeOfTask } from './control-task-policy.js';
+import { ariadStateDbRefInTask } from './state-db-refs.js';
 import { resolveReplannedTasks } from './replan-resolution.js';
 
 // De-materialized task store for DB-first (versionedTree) projects
@@ -145,6 +146,8 @@ export class VersionedTaskStore {
     if (!issue || issue.projectId !== projectId) throw new Error('unknown project issue');
     if (['RESOLVED', 'CLOSED', 'REJECTED', 'DUPLICATE'].includes(issue.state)) throw new Error('issue is closed');
     if (!task?.id || (task.taskKind != null && !DELIVERY_KINDS.includes(task.taskKind))) throw new Error('delivery fix task id required');
+    const stateDbRef = ariadStateDbRefInTask(task);
+    if (stateDbRef) throw new Error(`fix task targets the Ariad state database (${stateDbRef}) - delivery tasks change project files only; task and plan data are changed by the Tech Lead via ariad_tree_patch`);
     if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
     if (this.getTask(task.id)) throw new Error('fix task id already exists');
     const existing = new Set(this.listTasks(projectId).map(item => item.id));

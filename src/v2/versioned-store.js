@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { openGuardedDatabase } from './db-open-guard.js';
+import { ariadStateDbRefInTask } from './state-db-refs.js';
 import { createHash } from 'node:crypto';
 
 // Versioned spec store (DB-first architecture, 2026-10-31):
@@ -361,6 +362,10 @@ export class VersionedStore {
     const contracts = this.listSpecContracts(version);
     const taskIds = new Set(tasks.map(t => t.id));
     for (const t of tasks) this.#validateTaskSpec(t, errors);
+    for (const t of tasks) {
+      const ref = ariadStateDbRefInTask(t);
+      if (ref) errors.push(`task ${t.id}: targets the Ariad state database (${ref}) - delivery tasks change project files only; task and plan data are changed by the Tech Lead via ariad_tree_patch, never published as a task`);
+    }
     for (const t of tasks) {
       if (t.parentId != null && !taskIds.has(t.parentId)) errors.push(`task ${t.id}: parentId ${t.parentId} not in version ${version}`);
       for (const dep of t.dependsOn ?? []) {

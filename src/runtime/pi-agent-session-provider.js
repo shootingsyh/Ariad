@@ -32,7 +32,7 @@ const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write'])
 // The only sessions allowed to write the human-approved requirements
 // document: the PM, while running a requirements-authoring task.
 const REQUIREMENTS_AUTHOR_PURPOSES = new Set(['REQUIREMENTS_AUTHORING', 'LOCAL_REPLAN_REQUIREMENTS']);
-export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once. Your file writes are confined to this project workspace: never edit Ariad itself or other projects - report such defects instead of fixing them.';
+export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once. Your file writes are confined to this project workspace: never edit Ariad itself or other projects - report such defects instead of fixing them. Never open or modify the Ariad state databases (.ariad/*.db) through any tool or command: task and plan data are changed only by the Tech Lead through the planning tools, so if a task appears to require a state-database change, escalate with ariad_report_issue instead of doing it yourself.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
@@ -369,6 +369,21 @@ export function bashConfinementViolation(command, workspace) {
 }
 
 
+
+// Ariad state databases are never a bash target, in any mode: the
+// file-tool branch protects them for edit/write, and this closes the
+// same door for bash, where a role once edited the live store through
+// a spawned interpreter and wedged the daemon's connection (2026-11-22
+// tc6 incident). The scan is over the command text, so it stops the
+// direct and improvised paths; the delivery prompt states the rule too.
+const ARIAD_STATE_DB_BASH_RE = /\bstate2?\.db(?:-wal|-shm|-journal)?\b|\.ariad\/[^\s'"]*?\.db(?:-wal|-shm|-journal)?\b/i;
+
+export function bashStateDbReference(command) {
+  if (typeof command !== 'string') return null;
+  const match = command.match(ARIAD_STATE_DB_BASH_RE);
+  return match ? match[0] : null;
+}
+
 export function deliveryToolPolicy(role, toolName, context = {}) {
   // Ariad state protection (2026-11-03 incident): a role session used the
   // built-in edit/write tools on .ariad/state2.db as a binary file and
@@ -442,6 +457,10 @@ export function deliveryToolPolicy(role, toolName, context = {}) {
     const violation = bashConfinementViolation(command, context.workspace);
     if (violation) {
       return { block: true, reason: `Ariad bash confinement: ${violation}. Stay inside the project workspace; use relative paths, ariad_code_search, or ariad_anchor_lookup for code lookup.` };
+    }
+    const dbRef = bashStateDbReference(command);
+    if (dbRef) {
+      return { block: true, reason: `PROTECTED_ARIAD_STATE: bash never touches the Ariad state database (${dbRef}). Task and plan data are changed only by the Tech Lead through the planning tools; if this task seems to require a state change, stop and escalate with ariad_report_issue instead.` };
     }
   }
   if (role === 'tech_lead' && (toolName === 'edit' || toolName === 'write')) {

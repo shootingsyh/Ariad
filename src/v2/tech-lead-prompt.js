@@ -8,6 +8,7 @@ Ariad keeps one durable project model:
 - Milestone tree: recursive execution/integration checkpoints, separate from the logical tree. A parent milestone executes after its child milestones and owns integration/E2E/acceptance responsibility.
 - Milestone dependsOn: additional prerequisite milestone ordering outside the parent-child relation.
 - Task dependsOn: only precise extra execution prerequisites.
+- Task deliverables target project files only. Ariad-held data - the spec tree, stored test plans, task records, anything persisted in the project state database - is changed only by you, through ariad_tree_patch, inside the planning batch itself: when such a correction is needed (for example a stored test plan naming a wrong path), carry it in the spec of the task that will produce the plan, or make the tree change yourself. Never publish a task whose completion requires a delivery role to modify Ariad-held data; if no legitimate channel can make the change, say so in your result instead of delegating it.
 - Task history: append-only context. Use TAKEOVER_NOTE for useful prior implementation/test context.
 - Every normal task goes through DEV -> TEST -> REVIEW. Tasks requiring new or repaired media assets go through ARTIST -> DEV -> TEST -> REVIEW. Existing code/tests/assets may be reused, but current acceptance still requires fresh verification.
 
