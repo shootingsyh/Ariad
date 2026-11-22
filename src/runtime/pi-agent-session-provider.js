@@ -32,7 +32,7 @@ const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write'])
 // The only sessions allowed to write the human-approved requirements
 // document: the PM, while running a requirements-authoring task.
 const REQUIREMENTS_AUTHOR_PURPOSES = new Set(['REQUIREMENTS_AUTHORING', 'LOCAL_REPLAN_REQUIREMENTS']);
-export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once.';
+export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once. Your file writes are confined to this project workspace: never edit Ariad itself or other projects - report such defects instead of fixing them.';
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
@@ -304,15 +304,58 @@ export function bashConfinementViolation(command, workspace) {
   if (/(^|[;&|]\s*)cd\s+(?:\.\.(?:\/|\s|$)|\.\.$)/.test(command)) {
     return 'cd .. leaves the workspace root';
   }
-  for (const rawToken of bashTokens(command)) {
-    let token = rawToken;
+  const tokens = bashTokens(command);
+  // Virtual cwd depth below the workspace root, moved only by cd inside
+  // this same command. Relative path tokens resolve against it: a token
+  // whose resolution climbs above the root escapes the workspace exactly
+  // like an absolute path outside it (2026-11-21 incident: a delivery
+  // session edited the Ariad repo through ../../ relative paths, which
+  // the absolute-path check below never saw).
+  let depth = 0;
+  const normalize = (raw) => {
+    let token = raw;
     const eq = token.lastIndexOf('=');
     if (eq > 0) token = token.slice(eq + 1);
-    token = token.replace(/[,;]+$/, '');
-    if (token === '~' || token.startsWith('~/') || token.startsWith('$HOME')) {
-      return `home-relative path escapes the workspace: ${rawToken}`;
+    return token.replace(/[,;]+$/, '');
+  };
+  const walkRelative = (token, fromDepth) => {
+    let d = fromDepth;
+    for (const seg of token.split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') { d -= 1; if (d < 0) return -1; }
+      else d += 1;
     }
-    if (!token.startsWith('/')) continue;
+    return d;
+  };
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = normalize(tokens[i]);
+    if (token === '~' || token.startsWith('~/') || token.startsWith('$HOME') || token.startsWith('${HOME}')) {
+      return `home-relative path escapes the workspace: ${tokens[i]}`;
+    }
+    if (token === 'cd') {
+      const target = i + 1 < tokens.length ? normalize(tokens[i + 1]) : null;
+      if (target === null) return 'bare cd leaves the workspace (goes home)';
+      if (target === '-') continue;
+      i += 1; // the cd target is checked here, not again as a plain token
+      if (target === '~' || target.startsWith('~/') || target.startsWith('$HOME') || target.startsWith('${HOME}')) {
+        return `home-relative path escapes the workspace: ${target}`;
+      }
+      if (target.startsWith('/')) {
+        if (target === root) { depth = 0; continue; }
+        if (target.startsWith(`${root}/`)) { depth = target.slice(root.length + 1).split('/').filter(Boolean).length; continue; }
+        return `absolute path outside the workspace: ${target}`;
+      }
+      const next = walkRelative(target, depth);
+      if (next < 0) return `relative path escapes the workspace: ${target}`;
+      depth = next;
+      continue;
+    }
+    if (!token.startsWith('/')) {
+      if (token.includes('/') && walkRelative(token, depth) < 0) {
+        return `relative path escapes the workspace: ${tokens[i]}`;
+      }
+      continue;
+    }
     if (token === '/') return 'filesystem root used as a path argument';
     if (token === root || token.startsWith(`${root}/`)) continue;
     if (BASH_DEVICE_ALLOWLIST.has(token) || token.startsWith('/dev/fd/')) continue;
@@ -324,6 +367,7 @@ export function bashConfinementViolation(command, workspace) {
   }
   return null;
 }
+
 
 export function deliveryToolPolicy(role, toolName, context = {}) {
   // Ariad state protection (2026-11-03 incident): a role session used the
@@ -339,6 +383,17 @@ export function deliveryToolPolicy(role, toolName, context = {}) {
     if (typeof target === 'string' && target && context.workspace) {
       const abs = resolve(context.workspace, target);
       const rel = relative(context.workspace, abs).split('\\').join('/');
+      // Workspace write boundary (2026-11-21 incident): a delivery
+      // session repaired a defect in Ariad's own task-context serializer
+      // by editing the Ariad repo directly. The defect was real, but
+      // platform code is not the project's to change: role sessions may
+      // only modify files inside their own project workspace. Reads stay
+      // unrestricted (beyond the protections below) so a role can still
+      // inspect referenced code before escalating; a defect that lives
+      // outside the workspace is reported, not edited.
+      if (toolName !== 'read' && (rel === '..' || rel.startsWith('../'))) {
+        return { block: true, reason: `WORKSPACE_BOUNDARY: ${toolName} on ${target} is denied - role sessions may only modify files inside their project workspace (${context.workspace}). If the defect is in Ariad itself or in another project, report it (ariad_report_issue) or escalate instead of editing it.` };
+      }
       const base = rel.split('/').pop() ?? '';
       const inAriad = rel === '.ariad' || rel.startsWith('.ariad/');
       const isDbFile = /\.db(?:-wal|-shm|-journal)?$/i.test(base);
@@ -621,9 +676,11 @@ export async function createDefaultPiRunSession(spec) {
           // A malformed server entry must never break session creation.
         }
       }
-      if (DELIVERY_ROLES.has(spec.role) || spec.role === 'tech_lead' || spec.role === 'pm') {
-        pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace, taskPurpose: spec.context?.task?.purpose ?? null }) ?? undefined);
-      }
+      // The tool policy (state/requirements protection, workspace write
+      // boundary, bash confinement, reviewer limits) applies to every
+      // role session, not only delivery/planning roles: a session's tool
+      // surface is decided by its allowlist, but the policy floor is not.
+      pi.on('tool_call', event => deliveryToolPolicy(spec.role, event.toolName, { input: event?.input ?? event?.args ?? {}, workspace, taskPurpose: spec.context?.task?.purpose ?? null }) ?? undefined);
       pi.registerTool({
         name: RESULT_TOOL,
         label: 'Ariad role result',
