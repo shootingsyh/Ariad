@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import { SQLiteV2Store, isDiskIoError } from '../v2/sqlite-store.js';
+import { SQLiteV2Store, isStaleStoreViewError } from '../v2/sqlite-store.js';
 import { VersionedTaskStore } from '../v2/versioned-task-store.js';
 import { RoleRegistry } from '../v2/role-registry.js';
 import { ProviderRegistry } from '../v2/provider-registry.js';
@@ -47,6 +47,8 @@ export class StandaloneProjectRuntime {
     executionProvenance = {},
     incidentSink = null,
     codeIntelligence = null,
+    onStoreFatal = null,
+    storeFatalThreshold = 3,
   }) {
     if (!project?.id || !project?.workspace || !project?.stateDb) {
       throw new Error('StandaloneProjectRuntime requires project id, workspace, and stateDb');
@@ -61,6 +63,9 @@ export class StandaloneProjectRuntime {
     this.provider = provider;
     this.resolveRoleModel = resolveRoleModel;
     this.codeIntelligence = codeIntelligence;
+    this.onStoreFatal = onStoreFatal;
+    this.storeFatalThreshold = storeFatalThreshold;
+    this.consecutiveStoreFailures = 0;
     this.store = new SQLiteV2Store(project.stateDb);
     this.resources = new ScopedResourcePool(sharedResources, project.id);
     this.artifactRoot = join(project.workspace, '.ariad', 'artifacts');
@@ -186,17 +191,36 @@ export class StandaloneProjectRuntime {
 
   async tick({ schedule = true, adhocOnly = false } = {}) {
     try {
-      return await this.#tickOnce({ schedule, adhocOnly });
+      const result = await this.#tickOnce({ schedule, adhocOnly });
+      this.consecutiveStoreFailures = 0;
+      return result;
     } catch (error) {
-      if (!isDiskIoError(error)) throw error;
+      if (!isStaleStoreViewError(error)) throw error;
       // A store handle can go stale underneath a healthy WAL file (other
-      // connections cycling the WAL): every operation then fails with
-      // SQLITE_IOERR while a fresh connection works (2026-11-01 signal
-      // incident; 2026-11-02 supervisor.audit -> listTasks). Reopen the
-      // project stores once and retry the tick before the failure is
-      // allowed to park the project.
+      // connections cycling the WAL): every operation then fails with a
+      // stale-view error (SQLITE_IOERR, or SQLITE_MALFORMED since
+      // 2026-11-22) while a fresh connection works (2026-11-01 signal
+      // incident; 2026-11-02 supervisor.audit -> listTasks; 2026-11-22
+      // versioned listExecTasks). Reopen the project stores once and
+      // retry the tick before the failure is allowed to park the project.
       this.store.reopen?.();
-      return await this.#tickOnce({ schedule, adhocOnly });
+      try {
+        const result = await this.#tickOnce({ schedule, adhocOnly });
+        this.consecutiveStoreFailures = 0;
+        return result;
+      } catch (retryError) {
+        if (isStaleStoreViewError(retryError)) {
+          // The reopen did not heal it - this is not a stale view.
+          // Count consecutive unhealed ticks; at the threshold the host
+          // is told the store is fatal (the daemon exits and a fresh
+          // process takes over) instead of retrying forever.
+          this.consecutiveStoreFailures += 1;
+          if (this.consecutiveStoreFailures >= this.storeFatalThreshold) {
+            this.onStoreFatal?.(this.projectId, retryError);
+          }
+        }
+        throw retryError;
+      }
     }
   }
 

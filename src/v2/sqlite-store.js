@@ -115,6 +115,25 @@ export function isDiskIoError(error) {
   return /disk I\/O error/i.test(message);
 }
 
+// SQLITE_CORRUPT ("database disk image is malformed") raised through a
+// long-lived handle is the same stale-view signature as SQLITE_IOERR:
+// an external writer cycling the WAL leaves this handle reading
+// recycled pages, so it reports corruption while a fresh connection
+// reads the same file fine (2026-11-22: a role session edited the live
+// store and the daemon's versioned handle then failed MALFORMED for
+// ~80 minutes; the file was healthy throughout). A fresh connection is
+// the authority - if a NEW handle also reports corruption, the file
+// really is corrupt and the open guard refuses it; this classifier
+// only decides which failures earn a reopen-and-retry.
+export function isStaleStoreViewError(error) {
+  if (!error) return false;
+  if (isDiskIoError(error)) return true;
+  if (error.errcode === 11) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/database disk image is malformed/i.test(message)) return true;
+  return error.cause && error.cause !== error ? isStaleStoreViewError(error.cause) : false;
+}
+
 export class SQLiteV2Store {
   constructor(file) {
     if (!file) throw new Error('SQLiteV2Store requires a database file path');

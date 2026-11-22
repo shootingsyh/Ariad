@@ -29,6 +29,7 @@ export class AriadService {
     reconcileWakePath = null,
     safetyIntervalMs = 10 * 60 * 1000,
     onProjectEvent = null,
+    onStoreFatal = null,
     memoryCurator = null,
   }) {
     if (!manager) throw new Error('AriadService requires manager');
@@ -38,6 +39,7 @@ export class AriadService {
     this.logger = logger;
     this.sharedResources = sharedResources;
     this.onProjectEvent = onProjectEvent;
+    this.onStoreFatal = onStoreFatal;
     this.memoryCurator = memoryCurator ?? (provider?.id === 'pi-agent-session' ? new MemoryCurator({ provider, logger }) : null);
     this.runtimes = new Map();
     this.signals = new Map();
@@ -126,6 +128,7 @@ export class AriadService {
         sharedResources: this.sharedResources,
         codeIntelligence,
         resolveRoleModel: role => this.manager.status(project.id).roleModels?.[role] ?? null,
+        onStoreFatal: this.onStoreFatal,
       });
       this.runtimes.set(project.id, runtime);
     }

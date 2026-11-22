@@ -205,6 +205,14 @@ export async function serveAriad(root) {
     // it distills session history into the project memory store, and the
     // task-context artifact injects bound memories back into role runs).
     logger: { warn: (...args) => console.error(...args), error: (...args) => console.error(...args) },
+    // A store failure that survives the runtime's reopen-and-retry is
+    // fatal for this process: exit loudly and let a fresh daemon take
+    // over, instead of reconciling against a dead store view forever
+    // (2026-11-22: ~80 minutes of MALFORMED retries, owner-directed).
+    onStoreFatal: (projectId, error) => {
+      console.error(`ARIAD_DAEMON_FATAL_STORE_ERROR project=${projectId}: ${error instanceof Error ? error.stack ?? error.message : String(error)} - exiting for a fresh daemon`);
+      process.exit(1);
+    },
   });
   const control = createAriadControlTools({ manager, service });
   let dashboard = null;
