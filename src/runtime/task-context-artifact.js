@@ -9,6 +9,15 @@ function clone(value) {
   return value == null ? value : structuredClone(value);
 }
 
+// Stable criterion IDs for a task's acceptance criteria: AC1..ACn in spec
+// order. Task records (spec + exec join) never carry an explicit id list,
+// so the artifact must derive them here - serializing task.acceptanceCriterionIds
+// directly always produced [] and left test-plan coverage validation with
+// no allowed IDs (SRPG T-fix-battlefield-location-routing, 2026-11-22).
+export function acceptanceCriterionIdsFor(criteria) {
+  return (Array.isArray(criteria) ? criteria : []).map((_, index) => `AC${index + 1}`);
+}
+
 function compactBoundAnchor(entry) {
   const anchor = entry?.anchor ?? {};
   const locator = { file: anchor.file ?? null };
@@ -277,6 +286,7 @@ export function slimTaskArtifactForPrompt(artifact) {
 
 export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot = null }) {
   const history = task?.history ?? [];
+  const acceptanceCriteria = clone(task?.acceptanceCriteria ?? task?.input?.acceptanceCriteria ?? []);
   const developerResult = latestRoleResult(history, 'developer');
   const testerResult = latestRoleResult(history, 'tester');
   const reviewerResult = latestRoleResult(history, 'reviewer');
@@ -290,8 +300,8 @@ export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot =
       id: task.id,
       title: task.title ?? null,
       intent: task.intent ?? task.input?.intent ?? null,
-      acceptanceCriteria: clone(task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? []),
-      acceptanceCriterionIds: clone(task.acceptanceCriterionIds ?? []),
+      acceptanceCriteria,
+      acceptanceCriterionIds: acceptanceCriterionIdsFor(acceptanceCriteria),
       verification: clone(task.verification ?? task.input?.verification ?? []),
       testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,
       art: clone(task.art ?? task.input?.art ?? null),

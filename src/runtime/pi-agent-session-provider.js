@@ -13,6 +13,7 @@ import {
 import { Type } from 'typebox';
 import { Check, Errors } from 'typebox/value';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
+import { validateTestPlanCoverage } from './test-plan-coverage.js';
 import { migrateLegacyPiAuth } from './pi-auth-migration.js';
 import { registerAriadProjectTools } from './pi-project-tools.js';
 import { managedBashCheckIntervalMs, registerManagedBashTools, sweepManagedBashOrphans } from './managed-bash.js';
@@ -641,14 +642,11 @@ export async function createDefaultPiRunSession(spec) {
             throw new Error(`ARIAD_ROLE_RESULT_SCHEMA_INVALID: role=${spec.role}; ${verdict.detail}`);
           }
           if (spec.role === 'test_engineer' && params.outcome === 'PASS') {
-            const required = spec.context?.task?.acceptanceCriterionIds ?? [];
-            const cases = params.result?.testPlan?.testCases ?? [];
-            const invalid = cases.flatMap(c => (c.covers ?? []).filter(id => !required.includes(id)));
-            const missing = required.filter(id => !cases.some(c => c.covers?.includes(id)));
-            if (!cases.length || invalid.length || missing.length) throw new Error(
-              'ARIAD_TEST_PLAN_COVERAGE_INVALID: covers must reference exact acceptanceCriterionIds. ' +
-              'Allowed: ' + JSON.stringify(required) + '; invalid: ' + JSON.stringify(invalid) + '; missing: ' + JSON.stringify(missing)
-            );
+            // The required ID set comes from the task spec's acceptance
+            // criteria (stable AC1..ACn); resolveRequiredCriterionIds falls
+            // back to deriving them from acceptanceCriteria when the caller
+            // did not pre-derive the explicit list.
+            validateTestPlanCoverage(spec.context?.task ?? {}, params.result?.testPlan?.testCases);
           }
           if (spec.role === 'pm' && params.outcome === 'NEEDS_HUMAN') {
             // Escalation whitelist: a human may only be summoned over the

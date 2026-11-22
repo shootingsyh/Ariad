@@ -1,4 +1,4 @@
-import { slimTaskArtifactForPrompt } from './task-context-artifact.js';
+import { acceptanceCriterionIdsFor, slimTaskArtifactForPrompt } from './task-context-artifact.js';
 
 function compactHistory(history = []) {
   const takeoverNotes = history
@@ -145,6 +145,9 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
   const task = context.task ?? {};
   const history = task.history ?? [];
   const historySummary = compactHistory(history);
+  const taskCriterionIds = Array.isArray(task.acceptanceCriterionIds) && task.acceptanceCriterionIds.length > 0
+    ? task.acceptanceCriterionIds
+    : acceptanceCriterionIdsFor(task.acceptanceCriteria);
   const executionHandoff = context.executionHandoff ?? deriveExecutionHandoff(history);
   const currentRole = context.role ?? null;
   const latestRoleSealFailure = [...historySummary.roleSealFailures]
@@ -157,7 +160,7 @@ export function buildStandaloneRolePrompt(context = {}, fallbackPrompt = '') {
     title: task.title ?? null,
     intent: task.intent ?? null,
     acceptanceCriteria: task.acceptanceCriteria ?? [],
-    acceptanceCriterionIds: task.acceptanceCriterionIds ?? [],
+    acceptanceCriterionIds: taskCriterionIds,
     verification: task.verification ?? [],
     testStrategy: task.testStrategy ?? null,
     art: task.art ?? null,
