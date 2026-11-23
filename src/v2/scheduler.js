@@ -326,7 +326,10 @@ export class V2Scheduler {
       }
     }
 
-    return { started };
+    // The task snapshot rides along so the caller (project state
+    // derivation in the same reconcile pass) does not list every task
+    // a second time in the same pass.
+    return { started, tasks: allTasks };
   }
 }
 

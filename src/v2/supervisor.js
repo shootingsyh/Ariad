@@ -227,17 +227,24 @@ export class V2Supervisor {
   // ---- system-block diagnosis (supervisor-managed sessions) ----
 
   async #diagnosisSweep(projectId, incidents) {
-    const running = this.store.listTasks(projectId)
-      .find(task => task.diagnosisRun?.externalId);
+    // Everything the sweep acts on lives on a SYSTEM_BLOCKED task: the
+    // live diagnosis run, an open operator gate and every eligibility
+    // predicate. Fetch that state only - the unfiltered list this
+    // replaced re-parsed the whole ledger three times per audit.
+    let blocked = this.store.listTasks(projectId, { states: ['SYSTEM_BLOCKED'] });
+    const running = blocked.find(task => task.diagnosisRun?.externalId);
     if (running) {
       const slotFreed = await this.#pollDiagnosisRun(running, incidents);
       if (!slotFreed) return;
+      // The verdict may have moved the polled task; re-read before
+      // choosing the next blocked task, as the old per-step fetches did.
+      blocked = this.store.listTasks(projectId, { states: ['SYSTEM_BLOCKED'] });
     }
     if (!this.startDiagnosisSession) return;
     // An open operator gate occupies the diagnosis slot: the operator
     // is already being asked about one block.
-    if (this.store.listTasks(projectId).some(task => openDiagnosisGate(task))) return;
-    for (const task of this.store.listTasks(projectId)) {
+    if (blocked.some(task => openDiagnosisGate(task))) return;
+    for (const task of blocked) {
       if (!isDiagnosisEligible(task)) continue;
       if (diagnosisDecidedAwaitingResume(task)) continue;
       if (autoCarryExhausted(task)) continue;

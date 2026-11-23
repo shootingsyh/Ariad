@@ -305,8 +305,8 @@ export class AriadService {
     return { ...this.status(name), cancelledTasks };
   }
 
-  deriveExecutionState(runtime) {
-    const tasks = runtime.store.listTasks(runtime.projectId);
+  deriveExecutionState(runtime, tasks = null) {
+    tasks ??= runtime.store.listTasks(runtime.projectId);
     const hasPlanning = runtime.store.hasUnplannedPlanningRequests(runtime.projectId);
     return deriveProjectExecutionState({ tasks, hasPlanning });
   }
@@ -401,8 +401,8 @@ export class AriadService {
 
     const beforeState = project.executionState;
     try {
-      await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
-      const nextState = this.deriveExecutionState(runtime);
+      const tickResult = await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
+      const nextState = this.deriveExecutionState(runtime, tickResult?.scheduled?.tasks);
       if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);
       if (nextState !== beforeState && ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(nextState)) {
         await this.onProjectEvent?.(this.status(project.id), nextState);

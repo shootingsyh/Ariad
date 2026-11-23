@@ -110,7 +110,7 @@ export class RoleResultDispatcher {
       return;
     }
     const table = this.#dispatchTable();
-    for (const task of this.store.listTasks(projectId)) {
+    for (const task of this.store.listTasks(projectId, { states: ['RESULT_READY'] })) {
       if (task.state !== 'RESULT_READY') continue;
       if (adhocOnly && !isAdhocAnalysis(task)) continue;
       const result = latestResult(task);
