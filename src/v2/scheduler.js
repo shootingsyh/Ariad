@@ -95,7 +95,7 @@ export class V2Scheduler {
         fromStage: 'tester', toStage: 'test_engineer', at: new Date().toISOString(),
       }, { stage: 'test_engineer', execution: null });
     }
-    const allTasks = this.store.listTasks(projectId);
+    const allTasks = this.store.listTasks(projectId, { all: true });
     let localHolder = adhocOnly ? null : activeLocalLlmHolder(allTasks, project.localLlmHolderTaskId);
     // A human-approved PM review remains resumable after its planning request
     // has been marked PLANNED. It must finish the review gate before Delivery
@@ -199,7 +199,10 @@ export class V2Scheduler {
       if (isInTransientCooldown(task)) continue;
 
       // Rebuild the task's graph from fresh durable state before claiming it.
-      const sameGraphTasks = this.store.listTasks(projectId)
+      const graphFilter = task.flowId
+        ? { flowId: task.flowId }
+        : scopeOfTask(task) === 'delivery' ? { scope: 'delivery' } : { all: true };
+      const sameGraphTasks = this.store.listTasks(projectId, graphFilter)
         .filter(item => graphKey(item) === graphKey(task));
       const graph = buildExecutionGraph(sameGraphTasks);
       const fresh = graph.byId.get(task.id);

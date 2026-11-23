@@ -511,7 +511,7 @@ test('supervisor recovers an orphaned WORKING task that already has a sealed rol
     const providers = new ProviderRegistry();
     providers.register(provider);
     const resources = new ResourcePool({ gpu: 1 });
-    resources.recover(store.listTasks('P-role-tool'));
+    resources.recover(store.listTasks('P-role-tool', { all: true }));
     const supervisor = new V2Supervisor({ store, providers, resources });
 
     await supervisor.audit('P-role-tool');
@@ -677,7 +677,7 @@ test('control tasks form independent ad-hoc graphs while delivery stays one grap
       tasks: [{ id: 'REPLAN-TL', stage: 'tech_lead' }],
     });
 
-    const groups = partitionGraphs(store.listTasks('P6'));
+    const groups = partitionGraphs(store.listTasks('P6', { all: true }));
     assert.deepEqual(groups.map(x => x.key), ['delivery', 'control:plan-1', 'control:replan-2']);
     assert.deepEqual(store.listTasks('P6', { scope: 'delivery' }).map(x => x.id), ['D1', 'D2']);
     assert.deepEqual(store.listControlFlows('P6').map(x => x.flowId), ['plan-1', 'replan-2']);
@@ -733,7 +733,7 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
     const resources = new ResourcePool({ gpu: 1 });
     const scheduler = new V2Scheduler({ store, roles: roles(), providers, resources });
 
-    const graph = buildExecutionGraph(store.listTasks('P10'));
+    const graph = buildExecutionGraph(store.listTasks('P10', { all: true }));
     assert.ok(graph.downstreamImpact('INTERFACE') > graph.downstreamImpact('DRAWING'));
 
     const result = await scheduler.tick('P10');
@@ -1389,7 +1389,7 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
       async cancel() {},
     });
     const resources = new ResourcePool({ gpu: 1 });
-    resources.recover(store.listTasks('P-restart-orphan'));
+    resources.recover(store.listTasks('P-restart-orphan', { all: true }));
     const supervisor = new V2Supervisor({ store, providers, resources });
 
     await supervisor.audit('P-restart-orphan');

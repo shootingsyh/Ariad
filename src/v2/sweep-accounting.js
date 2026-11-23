@@ -140,7 +140,7 @@ export function authorshipResultsForBatch(store, task) {
     const round = Number(t.input?.round);
     return Number.isFinite(round) && round > 0 ? round : 99;
   };
-  const authored = (store.listTasks(task.projectId) ?? [])
+  const authored = (store.listTasks(task.projectId, { all: true }) ?? [])
     .filter(t => t?.input?.planningBatchId === batchId && SWEEP_AUTHORSHIP_PURPOSES.includes(t?.input?.purpose))
     .map(t => {
       const entry = [...(t.history ?? [])].reverse().find(h => h?.type === 'ROLE_RESULT');

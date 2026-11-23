@@ -28,7 +28,7 @@ test('delivery compiler rejects V2 approval gate rather than silently assigning 
     assert.throws(()=>legacyApplyDeliveryPlan(store,'P-gate',{version:3,
       tasks:[{id:'v2-plan-review-gate',milestoneId:'V2.GATE',intent:'approve human review'}],
     }),/DELIVERY_PLAN_CONTROL_TASK/);
-    assert.equal(store.listTasks('P-gate').length,0);
+    assert.equal(store.listTasks('P-gate', { all: true }).length,0);
     assert.throws(()=>legacyApplyDeliveryPlan(store,'P-gate',{version:3,
       tasks:[{id:'adhoc-cleanup',intent:'adhoc action'}],
     }),/DEVELOPER_REQUIRES_MILESTONE/);

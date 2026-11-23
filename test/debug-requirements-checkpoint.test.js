@@ -44,7 +44,7 @@ function archiveApproval(workspace, sha = SHA) {
 
 function counts(workspace) {
   const store = new SQLiteV2Store(join(workspace, '.ariad', 'state.db'));
-  const result = { tasks: store.listTasks('demo').length, requests: store.listPlanningRequests('demo').length };
+  const result = { tasks: store.listTasks('demo', { all: true }).length, requests: store.listPlanningRequests('demo').length };
   store.close();
   return result;
 }

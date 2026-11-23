@@ -298,10 +298,9 @@ export class SQLiteV2Store {
       // beforeTaskIds remains a triage record only; ordering comes from
       // the scheduler, which drains the issue queue before milestone
       // work. The fix's own dependsOn is honored as authored.
-      const existing = new Set(this.listTasks(projectId).map(item => item.id));
       for (const dep of task.dependsOn ?? []) {
         if (dep === task.id) throw new Error('fix task cannot depend on itself');
-        if (!existing.has(dep)) throw new Error(`unknown dependency: ${dep}`);
+        if (!this.getTask(dep)) throw new Error(`unknown dependency: ${dep}`);
       }
       const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
       const fix = normalizeTask({ ...task, projectId, taskKind: task.taskKind ?? TASK_KINDS.FEATURE_TASK, issueRefs: refs,
@@ -385,6 +384,9 @@ export class SQLiteV2Store {
   }
 
   listTasks(projectId, filter = {}) {
+    if (filter?.all !== true && !(Array.isArray(filter?.states) && filter.states.length > 0) && !filter?.flowId && !filter?.scope) {
+      throw new Error('listTasks requires an explicit filter: pass { states }, { flowId }, { scope }, or { all: true } for a deliberate full list');
+    }
     // Results are cached per (project, filter) and validated against
     // the content stamp above: session activity can wake reconcile
     // passes several times a second, and re-reading + re-parsing the
@@ -714,12 +716,11 @@ export class SQLiteV2Store {
   }
 
   reconcileAssignedIssues(projectId) {
-    const tasks = new Map(this.listTasks(projectId).map(task => [task.id, task]));
     const resolved = [];
     for (const issue of this.listIssues(projectId, { states: ['ASSIGNED'] })) {
       const ids = issue.assignedTaskIds ?? [];
       if (ids.length === 0) continue;
-      if (!ids.every(id => tasks.get(id)?.state === 'DONE')) continue;
+      if (!ids.every(id => this.getTask(id)?.state === 'DONE')) continue;
       this.updateIssue(issue.id, {
         state: 'RESOLVED',
         resolution: {

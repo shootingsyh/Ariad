@@ -123,7 +123,7 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   // later decision supersedes the one a request quotes.
   const inheritedHumanDecisions = [];
   try {
-    const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(project.id) : [];
+    const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(project.id, { all: true }) : [];
     for (const other of allTasks) {
       for (const entry of other.history ?? []) {
         if (entry?.type === 'HUMAN_DECISION') {

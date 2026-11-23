@@ -60,7 +60,7 @@ test('operator replan enqueues a PENDING LOCAL_REPLAN request with the boundary 
       assert.match(entry.request.guidance, /Never modify, remove, or re-run DONE work/);
       assert.equal(entry.context.sourceKind, 'project-owner-decision');
       // The entrance itself starts no work and creates no tasks.
-      assert.equal(store.listTasks(project.id).length, 0);
+      assert.equal(store.listTasks(project.id, { all: true }).length, 0);
     } finally { store.close(); }
 
     assert.throws(

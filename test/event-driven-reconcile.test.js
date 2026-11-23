@@ -227,7 +227,7 @@ test('listTasks filters by state and flowId', () => {
     store.createTask({ ...base, id: 't-done', state: 'DONE' });
     store.createTask({ taskKind: 'PLANNING', id: 'c-b1', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b1', stage: 'tech_lead', state: 'READY' });
     store.createTask({ taskKind: 'PLANNING', id: 'c-b2', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b2', stage: 'tech_lead', state: 'DONE' });
-    assert.deepEqual(store.listTasks('p1').map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready', 't-working']);
+    assert.deepEqual(store.listTasks('p1', { all: true }).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready', 't-working']);
     assert.deepEqual(store.listTasks('p1', { states: ['WORKING'] }).map(t => t.id), ['t-working']);
     assert.deepEqual(store.listTasks('p1', { states: ['READY', 'DONE'] }).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready']);
     assert.deepEqual(store.listTasks('p1', { flowId: 'planner:p1:b2' }).map(t => t.id), ['c-b2']);

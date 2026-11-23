@@ -26,7 +26,7 @@ test('adhoc task factory validates issuer, restricts role and preserves separate
     store.createProject({id:'P',deliveryEnabled:false});
     assert.throws(()=>store.createAdhocAnalysis({projectId:'P',id:'x',requestedBy:'developer',instruction:'Inspect architecture'}),/UNAUTHORIZED_ISSUER/);
     assert.throws(()=>store.createAdhocAnalysis({projectId:'P',id:'x',requestedBy:'pm',instruction:''}),/REQUIRES_INSTRUCTION/);
-    assert.equal(store.listTasks('P').length,0);
+    assert.equal(store.listTasks('P', { all: true }).length,0);
     const task=store.createAdhocAnalysis({projectId:'P',id:'investigate',requestedBy:'pm',instruction:'Inspect architecture'});
     assert.equal(scopeOfTask(task),'control');
     assert.equal(task.stage,'tech_lead');
@@ -263,7 +263,7 @@ test('negative task kind, role, scope and issuer combinations fail closed', () =
       assert.throws(() => store.createTask({ id: 'bad-' + i,
         projectId: 'POLICY', ...task }), failure);
     }
-    assert.equal(store.listTasks('POLICY').length, 0, 'failed admissions must leave no tasks');
+    assert.equal(store.listTasks('POLICY', { all: true }).length, 0, 'failed admissions must leave no tasks');
     const valid = store.createAdhocAnalysis({
       projectId: 'POLICY', id: 'valid', requestedBy: 'operator', instruction: 'Inspect',
     });

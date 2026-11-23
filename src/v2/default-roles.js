@@ -77,7 +77,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
     .filter(item => item.request?.purpose === 'PM_PLAN_REVISION');
   if (typeof store?.listTasks !== 'function') return revisions.length;
   let lastResetMs = null;
-  for (const t of store.listTasks(projectId) ?? []) {
+  for (const t of store.listTasks(projectId, { scope: 'control' }) ?? []) {
     for (const h of t?.history ?? []) {
       if (h?.type === 'ROLE_RESULT' && h?.role === 'pm' && h?.outcome === 'PLAN_ACCEPTED') {
         const ms = Date.parse(h.completedAt ?? h.at ?? '');
@@ -1495,7 +1495,7 @@ export function createDefaultV2Roles({
               if (typeof store?.listTasks === 'function') {
                 const batchRequests = planningBatchRequests(store, task);
                 if (batchRequests.some(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE')) {
-                  const liveTaskIds = (store.listTasks(task.projectId) ?? []).map(t => t.id).filter(Boolean);
+                  const liveTaskIds = (store.listTasks(task.projectId, { all: true }) ?? []).map(t => t.id).filter(Boolean);
                   const verdict = evaluateIssueAssignment({
                     requests: batchRequests,
                     authorshipResults: authorshipResultsForBatch(store, task),
@@ -1618,7 +1618,7 @@ export function createDefaultV2Roles({
         let priorReview = null;
         const inheritedHumanDecisions = [];
         try {
-          const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(task.projectId) : [];
+          const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(task.projectId, { all: true }) : [];
           for (const other of allTasks) {
             for (const entry of other.history ?? []) {
               if (entry?.type === 'HUMAN_DECISION') {

@@ -78,6 +78,9 @@ export class VersionedTaskStore {
   }
 
   listTasks(projectId, filter = {}) {
+    if (filter?.all !== true && !(Array.isArray(filter?.states) && filter.states.length > 0) && !filter?.flowId && !filter?.scope) {
+      throw new Error('listTasks requires an explicit filter: pass { states }, { flowId }, { scope }, or { all: true } for a deliberate full list');
+    }
     const merged = new Map();
     for (const task of this.runtime.listTasks(projectId, filter)) merged.set(task.id, task);
     for (const task of this.versioned.effectiveTasks()) {
@@ -150,10 +153,9 @@ export class VersionedTaskStore {
     if (stateDbRef) throw new Error(`fix task targets the Ariad state database (${stateDbRef}) - delivery tasks change project files only; task and plan data are changed by the Tech Lead via ariad_tree_patch`);
     if (!Array.isArray(beforeTaskIds) || new Set(beforeTaskIds).size !== beforeTaskIds.length) throw new Error('invalid insertion targets');
     if (this.getTask(task.id)) throw new Error('fix task id already exists');
-    const existing = new Set(this.listTasks(projectId).map(item => item.id));
     for (const dep of task.dependsOn ?? []) {
       if (dep === task.id) throw new Error('fix task cannot depend on itself');
-      if (!existing.has(dep)) throw new Error(`unknown dependency: ${dep}`);
+      if (!this.getTask(dep)) throw new Error(`unknown dependency: ${dep}`);
     }
     const refs = [...new Set([...(task.issueRefs ?? []), issueId])];
     const fix = {

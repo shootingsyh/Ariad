@@ -156,7 +156,7 @@ export class AriadService {
       // not runtime rows - read them through the de-materialized facade.
       const store = durableProject?.versionedTree === true ? new VersionedTaskStore(rawStore) : rawStore;
       try {
-        const tasks = store.listTasks(project.id);
+        const tasks = store.listTasks(project.id, { all: true });
         return {
           ...project,
           runtime: 'standalone',
@@ -201,7 +201,7 @@ export class AriadService {
     if (project.mode === 'NEW') {
       const store = this.runtimeFor(project).store;
       if (store.getProject(project.id)?.versionedTree !== true
-        && store.listTasks(project.id).length === 0 && store.listPlanningRequests(project.id).length === 0) {
+        && store.listTasks(project.id, { all: true }).length === 0 && store.listPlanningRequests(project.id).length === 0) {
         store.enqueuePlanningRequest({
           id: `initial-plan:${project.id}`,
           projectId: project.id,
@@ -218,7 +218,7 @@ export class AriadService {
       const store = this.runtimeFor(project).store;
       const record = store.getProject(project.id);
       if (record?.versionedTree === true
-        && store.listTasks(project.id).length === 0
+        && store.listTasks(project.id, { all: true }).length === 0
         && store.listPlanningRequests(project.id).length === 0) {
         const versioned = new VersionedStore(store.filePath);
         let prod = null;
@@ -306,7 +306,7 @@ export class AriadService {
   }
 
   deriveExecutionState(runtime, tasks = null) {
-    tasks ??= runtime.store.listTasks(runtime.projectId);
+    tasks ??= runtime.store.listTasks(runtime.projectId, { all: true });
     const hasPlanning = runtime.store.hasUnplannedPlanningRequests(runtime.projectId);
     return deriveProjectExecutionState({ tasks, hasPlanning });
   }

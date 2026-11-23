@@ -39,7 +39,7 @@ export class V2Supervisor {
   }
 
   recover(projectId) {
-    this.resources.recover(this.store.listTasks(projectId));
+    this.resources.recover(this.store.listTasks(projectId, { states: ['WORKING'] }));
   }
 
   async #incident(task, failure) {
