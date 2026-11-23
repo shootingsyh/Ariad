@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { acceptanceCriterionIds } from './acceptance.js';
 
 // Planning persistence (owner ruling 2026-11-03): important documents
 // and the planning state must live in the project's git repository.
@@ -24,6 +25,15 @@ const DOC_PATHS = [
   '.ariad/docs/features',
   '.ariad/docs/approvals.json',
 ];
+
+// Spec records never carry an explicit acceptanceCriterionIds list; the
+// canonical positional derivation (AC1..ACn over acceptanceCriteria) is
+// applied at export time so the committed prod.json keeps its AC anchors
+// (the same derivation task contexts use - see acceptance.js).
+function exportSpecTask(task) {
+  const ids = acceptanceCriterionIds(task);
+  return ids.length ? { ...task, acceptanceCriterionIds: ids } : task;
+}
 
 function stampOf(now) {
   return now.toISOString().replace(/[:T]/g, '-').slice(0, 19);
@@ -82,7 +92,7 @@ export function persistPlanningState({ workspace, db = null, versionedStore = nu
         node,
         prodVersion,
         version: prod ?? null,
-        tasks: prodVersion != null ? versionedStore.listSpecTasks(prodVersion) : [],
+        tasks: prodVersion != null ? versionedStore.listSpecTasks(prodVersion).map(exportSpecTask) : [],
         contracts: prodVersion != null ? versionedStore.listSpecContracts(prodVersion) : [],
       };
       const dir = join(workspace, '.ariad', 'spec-export');

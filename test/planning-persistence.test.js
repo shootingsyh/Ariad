@@ -16,7 +16,7 @@ function makeStore(workspace) {
   vs.createDraft({ createdBy: 'tech_lead' });
   vs.applyTreeOps([
     { op: 'upsertContract', contract: { id: 'feature.ab', nodeType: 'feature', exportedInterfaces: [], behavior: ['AB behaves.'] } },
-    { op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', featureId: 'feature.ab', title: 'Leaf' } },
+    { op: 'upsertTask', task: { id: 'a.b', taskKind: 'FEATURE_TASK', featureId: 'feature.ab', title: 'Leaf', acceptanceCriteria: ['One.', 'Two.'] } },
   ]);
   return vs;
 }
@@ -37,6 +37,7 @@ test('persistPlanningState writes a valid snapshot and a prod spec export', () =
   assert.equal(exported.prodVersion, 1);
   assert.equal(exported.tasks.length, 1);
   assert.equal(exported.tasks[0].id, 'a.b');
+  assert.deepEqual(exported.tasks[0].acceptanceCriterionIds, ['AC1', 'AC2']);
   assert.equal(exported.contracts.length, 1);
   assert.equal(res.git.repo, false);
   vs.close();
@@ -73,5 +74,24 @@ test('in a git repo the persistence commit lands (push failure is non-blocking)'
   const tracked = git(['ls-files']).toString();
   assert.match(tracked, /\.ariad\/snapshots\/state-promotion-.*\.db/);
   assert.match(tracked, /\.ariad\/spec-export\/prod\.json/);
+  vs.close();
+});
+
+test('spec export leaves tasks without criteria untouched (no AC-ID key)', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ariad-persist-nocrit-'));
+  mkdirSync(join(workspace, '.ariad'), { recursive: true });
+  const vs = new VersionedStore(join(workspace, '.ariad', 'state.db'));
+  vs.initProject('P');
+  vs.createDraft({ createdBy: 'tech_lead' });
+  vs.applyTreeOps([
+    { op: 'createContract', contract: { id: 'feature.cd', nodeType: 'feature', exportedInterfaces: [], behavior: ['CD behaves.'] } },
+    { op: 'createTask', task: { id: 'c.d', taskKind: 'FEATURE_TASK', featureId: 'feature.cd', title: 'No criteria' } },
+  ]);
+  vs.promoteDraft({ approvedBy: 'pm' });
+  const res = persistPlanningState({ workspace, db: vs.db, versionedStore: vs, node: 'promotion', now: new Date('2026-11-03T12:00:00.000Z') });
+  assert.deepEqual(res.errors, []);
+  const exported = JSON.parse(readFileSync(join(workspace, '.ariad', 'spec-export', 'prod.json'), 'utf8'));
+  assert.equal(exported.tasks.length, 1);
+  assert.equal('acceptanceCriterionIds' in exported.tasks[0], false);
   vs.close();
 });
