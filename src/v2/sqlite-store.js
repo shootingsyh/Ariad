@@ -371,7 +371,32 @@ export class SQLiteV2Store {
     return rowToTask(this.db.prepare('SELECT * FROM v2_tasks WHERE id = ?').get(id));
   }
 
+  // Content stamp for the task-list cache below: task versions only
+  // ever grow (updateTask writes expectedVersion + 1) and creates add
+  // rows, so (row count, version sum) changes on any write to the
+  // project's tasks - including writes from another connection, which
+  // is why this is read from the database itself instead of trusting
+  // in-process invalidation hooks.
+  #taskListStamp(projectId) {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS n, COALESCE(SUM(version), 0) AS s FROM v2_tasks WHERE project_id = ?',
+    ).get(projectId);
+    return `${row.n}:${row.s}`;
+  }
+
   listTasks(projectId, filter = {}) {
+    // Results are cached per (project, filter) and validated against
+    // the content stamp above: session activity can wake reconcile
+    // passes several times a second, and re-reading + re-parsing the
+    // whole ledger on every pass pegged a core even after the filters
+    // below landed (2026-11-22). Callers treat results as snapshots
+    // and write through updateTask, so sharing the parsed objects
+    // between passes is safe.
+    const stamp = this.#taskListStamp(projectId);
+    const cacheKey = `${projectId}|${JSON.stringify(filter)}`;
+    const cache = this._listTasksCache ??= new Map();
+    const hit = cache.get(cacheKey);
+    if (hit && hit.stamp === stamp) return [...hit.tasks];
     // state and flowId live inside data_json, not in columns. When the
     // caller names them, push the predicate into SQL via json_extract so
     // non-matching rows are never parsed: the ledger keeps every historical
@@ -390,12 +415,14 @@ export class SQLiteV2Store {
     const tasks = this.db.prepare(
       `SELECT * FROM v2_tasks WHERE ${conditions.join(' AND ')} ORDER BY rowid`
     ).all(...params).map(rowToTask);
-    return tasks.filter(task => {
+    const filtered = tasks.filter(task => {
       if (Array.isArray(filter.states) && filter.states.length > 0 && !filter.states.includes(task.state)) return false;
       if (filter.scope && scopeOfTask(task) !== filter.scope) return false;
       if (filter.flowId && task.flowId !== filter.flowId) return false;
       return true;
     });
+    cache.set(cacheKey, { stamp, tasks: filtered });
+    return filtered;
   }
 
   listControlFlows(projectId) {
