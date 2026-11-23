@@ -2120,3 +2120,148 @@ test('SQLiteV2Store.reopen recovers from a dead cached handle', (t) => {
   store.reopen();
   assert.equal(store.getProject('reopen-proj')?.id, 'reopen-proj');
 });
+
+test('PM acceptance of an empty-diff draft closes DONE without promoting (owner design 2026-11-23)', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-empty-diff',
+      pmBinding: 'pm:P-empty-diff',
+      mode: 'TAKEOVER',
+      sourcePath: '/tmp/existing-repo',
+      workspace: dir,
+      versionedTree: true,
+      takeoverReviewRequired: false,
+      deliveryEnabled: true,
+    });
+    const vs = new VersionedStore(file);
+    vs.initProject('P-empty-diff');
+    vs.createDraft({ createdBy: 'tl' });
+    vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Root', intent: 'Ship it.', acceptanceCriteria: ['It ships.'], testStrategy: 'Run project E2E.' } }]);
+    const promoted = vs.promoteDraft({ approvedBy: 'pm' });
+    assert.equal(promoted.version, 1);
+    vs.createDraft({ createdBy: 'tl' });
+    const emptyDraft = vs.getOpenDraft();
+    const emptyHash = vs.diffDraft().diffHash;
+    vs.close();
+    store.enqueuePlanningRequest({
+      id: 'empty-1',
+      projectId: 'P-empty-diff',
+      request: { purpose: 'TRIAGE' },
+    });
+    store.createPlanningBatch({
+      projectId: 'P-empty-diff',
+      batchId: 'batch-empty',
+      requestIds: ['empty-1'],
+      tasks: [
+        {
+          id: 'TL-empty',
+          stage: 'tech_lead',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            result: { plan: { source: 'db-draft', version: emptyDraft.version } },
+          }],
+        },
+        {
+          id: 'PM-empty',
+          stage: 'pm',
+          dependsOn: ['TL-empty'],
+          input: { planningBatchId: 'batch-empty', purpose: 'PLANNER_PM_REVIEW' },
+        },
+      ],
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const landed = definitions.pm.transition({
+      task: store.getTask('PM-empty'),
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Nothing to change.', approvedDiffHash: emptyHash } },
+    });
+    assert.equal(landed.state, 'DONE');
+    assert.equal(landed.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED_EMPTY');
+    const check = new VersionedStore(file);
+    assert.equal(check.getProdVersion(), 1, 'empty acceptance must not promote');
+    assert.equal(check.getOpenDraft(), null, 'the empty draft is discarded on close');
+    check.close();
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PM acceptance with no open draft also closes DONE without promoting', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({
+      id: 'P-no-draft',
+      pmBinding: 'pm:P-no-draft',
+      mode: 'TAKEOVER',
+      sourcePath: '/tmp/existing-repo',
+      workspace: dir,
+      versionedTree: true,
+      takeoverReviewRequired: false,
+      deliveryEnabled: true,
+    });
+    const vs = new VersionedStore(file);
+    vs.initProject('P-no-draft');
+    vs.createDraft({ createdBy: 'tl' });
+    vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Root', intent: 'Ship it.', acceptanceCriteria: ['It ships.'], testStrategy: 'Run project E2E.' } }]);
+    vs.promoteDraft({ approvedBy: 'pm' });
+    vs.close();
+    store.enqueuePlanningRequest({
+      id: 'nodraft-1',
+      projectId: 'P-no-draft',
+      request: { purpose: 'TRIAGE' },
+    });
+    store.createPlanningBatch({
+      projectId: 'P-no-draft',
+      batchId: 'batch-nodraft',
+      requestIds: ['nodraft-1'],
+      tasks: [
+        {
+          id: 'TL-nodraft',
+          stage: 'tech_lead',
+          state: 'DONE',
+          history: [{
+            type: 'ROLE_RESULT',
+            role: 'tech_lead',
+            outcome: 'PLANNED',
+            result: { plan: { source: 'db-draft', version: 1 } },
+          }],
+        },
+        {
+          id: 'PM-nodraft',
+          stage: 'pm',
+          dependsOn: ['TL-nodraft'],
+          input: { planningBatchId: 'batch-nodraft', purpose: 'PLANNER_PM_REVIEW' },
+        },
+      ],
+    });
+    const definitions = createDefaultV2Roles({
+      store,
+      workspace: dir,
+      providerId: 'fake',
+      codeProviderId: 'ariad-code',
+    });
+    const landed = definitions.pm.transition({
+      task: store.getTask('PM-nodraft'),
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Draft already gone.', approvedDiffHash: 'irrelevant-hash' } },
+    });
+    assert.equal(landed.state, 'DONE');
+    assert.equal(landed.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED_EMPTY');
+    const check = new VersionedStore(file);
+    assert.equal(check.getProdVersion(), 1);
+    check.close();
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

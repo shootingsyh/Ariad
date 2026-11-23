@@ -551,6 +551,29 @@ export function createDefaultV2Roles({
             vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace, expectedDiffHash: approvedDiffHash });
           } catch (error) {
             if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
+            // Nothing-to-promote is a terminal outcome, not a block
+            // (owner design, 2026-11-23): the accepted draft changes
+            // nothing against prod (EMPTY_DIFF) or there is no open
+            // draft at all (NO_OPEN_DRAFT). The review closes as DONE
+            // with the empty acceptance recorded and prod untouched;
+            // parking it at NEEDS_HUMAN dead-ends the batch, because
+            // no human decision can substitute for the acceptance the
+            // guard refuses (SRPG batch-241). An open empty draft is
+            // discarded so the next batch starts from prod; a draft
+            // that is a live revision base is left in place
+            // (discardDraft refuses it) for its own lineage.
+            if (error?.code === 'EMPTY_DIFF' || error?.code === 'NO_OPEN_DRAFT') {
+              let discardedVersion = null;
+              try { discardedVersion = versionedStore.discardDraft(); } catch { /* no open draft, or a protected revision base: leave it */ }
+              return {
+                state: 'DONE',
+                transitionHistory: {
+                  type: 'VERSIONED_TREE_PLAN_ACCEPTED_EMPTY', role: 'pm',
+                  summary: 'PM accepted the plan, and the draft changes nothing against prod (' + error.code + '): closed with an empty acceptance, no promotion attempted, prod remains authoritative.' + (discardedVersion != null ? ' The empty draft v' + discardedVersion + ' was discarded.' : ''),
+                  reconcileIssues: null, at: new Date().toISOString(),
+                },
+              };
+            }
             return {
               state: 'NEEDS_HUMAN',
               transitionHistory: {
