@@ -252,3 +252,60 @@ test('ensure holds off after a human decision until the operator resume lands', 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('ensure caps active diagnoses at one project-wide and reports the rest as excess', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag-cap' });
+    blockedDeliveryTask(store, 'P-diag-cap', 'T-blocked-a');
+    blockedDeliveryTask(store, 'P-diag-cap', 'T-blocked-b');
+    const first = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
+    assert.equal(first.failures.length, 0);
+    assert.equal(first.created.length, 1);
+    assert.equal(first.excess.length, 1);
+    const served = first.created[0].input.blockedTaskId;
+    const denied = first.excess[0];
+    assert.notEqual(denied.taskId, served);
+    assert.equal(denied.activeDiagnosisId, first.created[0].id);
+    assert.match(denied.failure, /CONCURRENT_DIAGNOSIS_LIMIT/);
+    // Still capped on the next sweep while the diagnosis is active.
+    const second = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
+    assert.equal(second.created.length, 0);
+    assert.equal(second.excess.length, 1);
+    assert.equal(second.excess[0].taskId, denied.taskId);
+    // The active diagnosis completes and routes its task out of the
+    // block; the denied task then gets a diagnosis of its own.
+    const active = store.getTask(first.created[0].id);
+    store.updateTask(active.id, active.version, { state: 'DONE' });
+    const servedTask = store.getTask(served);
+    store.updateTask(servedTask.id, servedTask.version, { state: 'READY' });
+    const third = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
+    assert.equal(third.created.length, 1);
+    assert.equal(third.created[0].input.blockedTaskId, denied.taskId);
+    assert.equal(third.excess.length, 0);
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensure counts a diagnosis parked at the human gate against the one-at-a-time limit', () => {
+  const { dir, file } = tempDb();
+  try {
+    const store = new SQLiteV2Store(file);
+    store.createProject({ id: 'P-diag-cap-nh' });
+    blockedDeliveryTask(store, 'P-diag-cap-nh', 'T-blocked-a');
+    const first = ensureSystemBlockDiagnosis(store, 'P-diag-cap-nh');
+    const gate = store.getTask(first.created[0].id);
+    store.updateTask(gate.id, gate.version, { state: 'NEEDS_HUMAN' });
+    blockedDeliveryTask(store, 'P-diag-cap-nh', 'T-blocked-b');
+    const second = ensureSystemBlockDiagnosis(store, 'P-diag-cap-nh');
+    assert.equal(second.created.length, 0);
+    assert.equal(second.excess.length, 1);
+    assert.equal(second.excess[0].taskId, 'T-blocked-b');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

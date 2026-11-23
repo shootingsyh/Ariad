@@ -52,6 +52,22 @@ export function scopeOfTask(task) {
   return isDeliveryKind(task?.taskKind) ? 'delivery' : 'control';
 }
 
+// Which SYSTEM_BLOCKED tasks the system-block diagnosis sweep serves: a
+// delivery or planning task frozen by a system failure. A delivery task
+// already sitting in the debugger stage is inside the debugger's own
+// flow and is excluded; a planning task in that stage is the opposite -
+// its in-flow debugger already delivered the terminal diagnosis that
+// parked it, so the separate diagnosis is its only way back. The
+// project-state derivation uses this same predicate to decide whether a
+// blocked task is covered by an active diagnosis.
+export function isDiagnosisEligible(task) {
+  if (task?.state !== 'SYSTEM_BLOCKED') return false;
+  const planning = task.taskKind === TASK_KINDS.PLANNING;
+  if (!isDeliveryKind(task.taskKind) && !planning) return false;
+  if (!planning && task.stage === 'project_debugger') return false;
+  return true;
+}
+
 // Delivery work lives in one of two parallel queues: the milestone task
 // tree (default) or the standalone issue queue (triaged fixes). The
 // scheduler drains the issue queue first.

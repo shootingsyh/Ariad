@@ -76,3 +76,51 @@ test('project control lifecycle is declared rather than hard-coded in service me
     /invalid transition/,
   );
 });
+
+test('project halts when a blocked task has no diagnosis of its own', () => {
+  const delivery = (state, id) => ({ taskKind: 'MILESTONE_TASK', state, id });
+  const diagnosis = (blockedTaskId, state = 'WORKING') => ({
+    taskKind: 'DIAGNOSTIC',
+    stage: 'project_debugger',
+    state,
+    input: { blockedTaskId },
+  });
+  // One covered block: still running.
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [delivery('SYSTEM_BLOCKED', 'a'), diagnosis('a')],
+    }),
+    'RUNNING',
+  );
+  // A second blocked task without its own diagnosis halts the project,
+  // even though another task's diagnosis is active.
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [delivery('SYSTEM_BLOCKED', 'a'), delivery('SYSTEM_BLOCKED', 'b'), diagnosis('a')],
+    }),
+    'FAILED',
+  );
+  // A blocked task that is not diagnosis-eligible (a diagnostic task
+  // itself) neither needs coverage nor provides it.
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [
+        delivery('SYSTEM_BLOCKED', 'a'),
+        { taskKind: 'DIAGNOSTIC', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', id: 'debug:a:1', input: { blockedTaskId: 'a' } },
+        diagnosis('a'),
+      ],
+    }),
+    'RUNNING',
+  );
+  // A planning task parked in the debugger stage is diagnosis-eligible:
+  // covered it runs, uncovered it halts.
+  const planning = { taskKind: 'PLANNING', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', id: 'p1' };
+  assert.equal(
+    deriveProjectExecutionState({ tasks: [planning, diagnosis('p1')] }),
+    'RUNNING',
+  );
+  assert.equal(
+    deriveProjectExecutionState({ tasks: [planning] }),
+    'FAILED',
+  );
+});

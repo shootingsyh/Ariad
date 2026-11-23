@@ -1,4 +1,4 @@
-import { scopeOfTask } from './control-task-policy.js';
+import { isDiagnosisEligible, scopeOfTask } from './control-task-policy.js';
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -114,14 +114,24 @@ export const PROJECT_STATE_RULES = Object.freeze([
     when: ({ tasks }) => tasks.some(task => task.state === 'NEEDS_HUMAN'),
   },
   {
+    // RUNNING while blocked tasks are being diagnosed only when EVERY
+    // diagnosis-eligible blocked task has its own active diagnosis. A
+    // blocked task without one - the one-at-a-time diagnosis limit
+    // leaves it unserved on purpose, and an auto-carry-exhausted block
+    // waits on the operator - falls through to FAILED: concurrent
+    // system failures halt the project instead of fanning out parallel
+    // diagnoses that mask the halt.
     state: 'RUNNING',
-    when: ({ tasks }) =>
-      tasks.some(task => task.state === 'SYSTEM_BLOCKED')
-      && tasks.some(task =>
-        task.stage === 'project_debugger'
-        && task.input?.blockedTaskId
-        && ['READY', 'WORKING', 'RESULT_READY'].includes(task.state)
-      ),
+    when: ({ tasks }) => {
+      const blocked = tasks.filter(isDiagnosisEligible);
+      return blocked.length > 0 && blocked.every(task =>
+        tasks.some(diagnosis =>
+          diagnosis.stage === 'project_debugger'
+          && diagnosis.input?.blockedTaskId === task.id
+          && ['READY', 'WORKING', 'RESULT_READY'].includes(diagnosis.state)
+        )
+      );
+    },
   },
   {
     state: 'FAILED',

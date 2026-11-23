@@ -213,10 +213,14 @@ export class V2Supervisor {
     // the blocked task onward (or parks it for the operator) through the
     // existing diagnosis transitions.
     try {
-      const { failures } = ensureSystemBlockDiagnosis(this.store, projectId);
+      const { failures, excess } = ensureSystemBlockDiagnosis(this.store, projectId);
       for (const failure of failures) {
         const blockedTask = this.store.getTask(failure.taskId);
         if (blockedTask) incidents.push(await this.#incident(blockedTask, failure.failure));
+      }
+      for (const entry of excess ?? []) {
+        const blockedTask = this.store.getTask(entry.taskId);
+        if (blockedTask) incidents.push(await this.#incident(blockedTask, entry.failure));
       }
     } catch { /* the diagnosis sweep must never break supervision; the next audit retries */ }
     return { incidents };

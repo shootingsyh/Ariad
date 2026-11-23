@@ -1,4 +1,4 @@
-import { TASK_KINDS, isDeliveryKind } from './control-task-policy.js';
+import { TASK_KINDS, isDiagnosisEligible } from './control-task-policy.js';
 import { debuggerAutoCarries, DEBUGGER_AUTO_CARRY_LIMIT } from './milestone-result-executor.js';
 
 // A delivery task that reaches SYSTEM_BLOCKED through the system path
@@ -22,6 +22,16 @@ import { debuggerAutoCarries, DEBUGGER_AUTO_CARRY_LIMIT } from './milestone-resu
 // A diagnosis parked at NEEDS_HUMAN is still open: it is waiting on the
 // operator, and a duplicate would only race the gate.
 const ACTIVE_DIAGNOSIS_STATES = new Set(['READY', 'WORKING', 'RESULT_READY', 'NEEDS_HUMAN']);
+
+// At most one diagnosis may be active in a project at a time (owner
+// directive, 2026-11-22): parallel diagnoses were the visible symptom of
+// a systemic failure, and an army of debugger sessions racing the same
+// broken runtime only multiplied provider errors. A blocked task that
+// would need a second concurrent diagnosis gets none; it is reported in
+// the sweep's excess list, and because it stays blocked without an
+// active diagnosis the project-state derivation halts the project
+// (FAILED) for the operator instead of fanning out.
+const ACTIVE_DIAGNOSIS_LIMIT = 1;
 
 export function systemIncidentFromHistory(task) {
   const history = task?.history ?? [];
@@ -88,24 +98,26 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
   );
   const created = [];
   const failures = [];
+  const excess = [];
+  const activeDiagnoses = diagnoses.filter(d => ACTIVE_DIAGNOSIS_STATES.has(d.state));
   for (const task of tasks) {
-    if (task.state !== 'SYSTEM_BLOCKED') continue;
-    const planning = task.taskKind === TASK_KINDS.PLANNING;
-    if (!isDeliveryKind(task.taskKind) && !planning) continue;
-    // A delivery task already sitting in the debugger stage is inside
-    // the debugger's own flow; a planning task in that stage is the
-    // opposite - its in-flow debugger already delivered the terminal
-    // diagnosis that parked it, so the separate diagnosis is its only
-    // way back.
-    if (!planning && task.stage === 'project_debugger') continue;
+    if (!isDiagnosisEligible(task)) continue;
     if (autoCarryExhausted(task)) continue;
     const mine = diagnoses.filter(d => d.input.blockedTaskId === task.id);
     if (mine.some(d => ACTIVE_DIAGNOSIS_STATES.has(d.state))) continue;
     if (diagnosisDecidedAwaitingResume(task, mine)) continue;
+    if (activeDiagnoses.length >= ACTIVE_DIAGNOSIS_LIMIT) {
+      excess.push({
+        taskId: task.id,
+        activeDiagnosisId: activeDiagnoses[0].id,
+        failure: `CONCURRENT_DIAGNOSIS_LIMIT: task ${task.id} needs a system-block diagnosis while ${activeDiagnoses[0].id} is still active; at most ${ACTIVE_DIAGNOSIS_LIMIT} diagnosis may be active at a time, so none is created and the project halts until the active diagnosis resolves`,
+      });
+      continue;
+    }
     const id = `debug:${task.id}:${mine.length + 1}`;
     if (store.getTask(id)) continue;
     try {
-      created.push(store.createTask({
+      const diagnosis = store.createTask({
         id,
         projectId,
         scope: 'control',
@@ -121,7 +133,9 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
           systemIncident: systemIncidentFromHistory(task),
         },
         version: 1,
-      }));
+      });
+      created.push(diagnosis);
+      activeDiagnoses.push(diagnosis);
     } catch (error) {
       failures.push({
         taskId: task.id,
@@ -129,5 +143,5 @@ export function ensureSystemBlockDiagnosis(store, projectId) {
       });
     }
   }
-  return { created, failures };
+  return { created, failures, excess };
 }
