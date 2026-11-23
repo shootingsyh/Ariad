@@ -403,6 +403,21 @@ export class SQLiteV2Store {
     return this.#queryTasks(projectId, { all: true });
   }
 
+  // Projection: only the HUMAN_DECISION history entries across the
+  // project, extracted in SQL. Planning prompts scan for owner
+  // decisions; they must not parse every task blob to find them
+  // (SRPG: 19 entries among 2,726 tasks).
+  listHumanDecisions(projectId) {
+    const rows = this.db.prepare(`
+      SELECT t.id AS taskId,
+             json_extract(je.value, '$.at') AS at,
+             json_extract(je.value, '$.decision') AS decision
+      FROM v2_tasks t, json_each(json_extract(t.data_json, '$.history')) je
+      WHERE t.project_id = ? AND json_extract(je.value, '$.type') = 'HUMAN_DECISION'
+    `).all(projectId);
+    return rows.map(row => ({ taskId: row.taskId, at: row.at ?? null, decision: row.decision ?? null }));
+  }
+
   #queryTasks(projectId, filter) {
     // Results are cached per (project, filter) and validated against
     // the content stamp above: session activity can wake reconcile

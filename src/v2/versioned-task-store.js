@@ -94,6 +94,10 @@ export class VersionedTaskStore {
     return this.#list(projectId, { all: true });
   }
 
+  listHumanDecisions(projectId) {
+    return this.runtime.listHumanDecisions(projectId);
+  }
+
   #list(projectId, filter) {
     const merged = new Map();
     const runtimeTasks = filter.all === true

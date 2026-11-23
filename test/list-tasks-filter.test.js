@@ -13,4 +13,5 @@ test('stores offer named task queries only - no generic listTasks', () => {
   assert.deepEqual(store.listTasksByStates('P', ['READY']), []);
   assert.deepEqual(store.listTasksByFlow('P', 'planner:P:b1'), []);
   assert.deepEqual(store.listTasksByScope('P', 'delivery'), []);
+  assert.deepEqual(store.listHumanDecisions('P'), []);
 });

@@ -123,13 +123,8 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   // later decision supersedes the one a request quotes.
   const inheritedHumanDecisions = [];
   try {
-    const allTasks = typeof store?.listAllTasks === 'function' ? store.listAllTasks(project.id) : [];
-    for (const other of allTasks) {
-      for (const entry of other.history ?? []) {
-        if (entry?.type === 'HUMAN_DECISION') {
-          inheritedHumanDecisions.push({ taskId: other.id, at: entry.at ?? null, decision: entry.decision ?? null });
-        }
-      }
+    if (typeof store?.listHumanDecisions === 'function') {
+      inheritedHumanDecisions.push(...store.listHumanDecisions(project.id));
     }
     inheritedHumanDecisions.sort((x, y) => String(x.at ?? '').localeCompare(String(y.at ?? '')));
   } catch {

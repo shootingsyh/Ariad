@@ -286,6 +286,8 @@ test('plannerPrompt PLANNER_DECOMPOSE: shared sweep mandate, humanDecisions payl
       { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
     ], listTasksByScope: () => [
       { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ], listHumanDecisions: () => [
+      { taskId: 'planner:b:pm-review', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' },
     ],
   };
   const prompt = plannerPrompt({
