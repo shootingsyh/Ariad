@@ -3,6 +3,7 @@
 import { acceptanceCriterionIds } from './acceptance.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { flowTasks, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
 import { VersionedStore } from './versioned-store.js';
 import { derivedSweepAccounting } from './sweep-accounting.js';
@@ -135,14 +136,28 @@ export function planPayloadFromStore(store, project, validation) {
         : [];
       sweepAccounting = { derived: true, entries: derivedSweepAccounting(diff, baseTaskIds) };
     }
+    // Owner design, 2026-11-22 (later the same day): reviewers judge
+    // the diff, not the tree - the payload carries the diff and the
+    // derived sweep accounting, never another copy of the full draft.
+    // The complete draft text is written to a file in the project
+    // workspace and named as planFile; a reviewer that needs an
+    // unchanged task's full text, or a changed task's context beyond
+    // the diff's capped values, reads it there.
+    let planFile = null;
+    try {
+      planFile = `.ariad/artifacts/planning/draft-v${stub.version}.json`;
+      mkdirSync(join(project.workspace, '.ariad', 'artifacts', 'planning'), { recursive: true });
+      writeFileSync(join(project.workspace, planFile), JSON.stringify({ version: stub.version, tasks, contracts }, null, 2));
+    } catch {
+      planFile = null;
+    }
     return {
       ...stub,
       taskCount: tasks.length,
       contractCount: contracts.length,
-      tasks,
-      contracts,
       diff,
       sweepAccounting,
+      planFile,
     };
   } catch {
     return stub;
@@ -310,13 +325,13 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     ];
     const lines = phase === 'functional' ? [
       'You are the delivery-plan critic for Ariad, reviewing feature pass 1 of 3 (functional features) - this pass only, not the whole plan.',
-      'The Tech Lead authored or revised the functional feature contracts and their documents in the open DB draft; the deterministic phase validation result, with the full contract list, is in the payload. There is deliberately no task tree and no interface refinement yet - those are later passes - so their absence is not an issue.',
+      'The Tech Lead authored or revised the functional feature contracts and their documents in the open DB draft; the deterministic phase validation result and the contracts diff against the production version are in the payload. The full current contract list is not embedded: it is in the file named by plan.planFile in the payload - read it when you need the whole tree. There is deliberately no task tree and no interface refinement yet - those are later passes - so their absence is not an issue.',
       'Judge this pass on five things. (1) ALIGNMENT: the top-level features track the structure of the approved requirements document (.ariad/docs/REQUIREMENTS.md - read it), and every lower feature refines exactly one parent feature. (2) SUPPORTS: every feature document states what the feature supports - a root feature names the requirements section or direction, a child feature names its parent. Read the documents under .ariad/docs/features/; a feature without a Supports declaration, or one naming nothing real, is an ISSUE. (3) NO AMBIGUITY: leaf behavior clauses sit at tester-decidable granularity - states, action order, preconditions, exception and silent-failure behavior; a leaf defined by a vague verb alone is an ISSUE. (4) PURITY: no non-functional features (infrastructure, environment, build, packaging, test scaffolding) and no task-tree work in this pass. (5) DOCUMENTS: every added or changed feature has its document and a FEATURES.md index entry.',
       'Fidelity granularity applies at this pass too: an enumerated requirement clause buried in the middle of a paragraph still needs a carrying feature; headline-level coverage of a clause-list section is an ISSUE.',
       ...shared,
     ] : [
       'You are the delivery-plan critic for Ariad, reviewing feature pass 2 of 3 (non-functional features) - this pass only, not the whole plan.',
-      'The functional feature tree (pass 1) is already in the draft and was reviewed; the phase validation result with the full contract list is in the payload. Judge only what this pass added or changed.',
+      'The functional feature tree (pass 1) is already in the draft and was reviewed; the phase validation result and the contracts diff are in the payload, and the full current contract list is in the file named by plan.planFile - read it when you need the whole tree. Judge only what this pass added or changed.',
       'Judge this pass on four things. (1) SUPPORTS: every non-functional feature document names the functional feature it serves; one that serves nothing named, or names a feature that does not exist in the draft, is an ISSUE. (2) NECESSITY AND PURITY: each non-functional feature is a real product need - infrastructure, environment, build or packaging, compilation, test infrastructure, tooling, platform - not ceremony; and this pass did not re-author functional behavior, task-tree entries, or interfaces. (3) DOCUMENTS: a feature document and a FEATURES.md index entry for every added or changed feature. (4) INTEGRITY: the pass-1 functional tree is intact - no functional contract was silently rewritten or dropped.',
       ...shared,
     ];
@@ -371,6 +386,8 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
   // validator result names the draft version and the diffHash; the
   // payload content is loaded from the draft itself, never archived
   // in the validator task, so it cannot be lost between passes.
+  // The payload carries the diff only; the full draft text is in
+  // the workspace file named by planFile, for on-demand reading.
   const planPayload = planPayloadFromStore(store, project, validation);
   const sweepAccounting = planPayload?.sweepAccounting ?? null;
   const planDiff = planPayload?.diff ?? null;
@@ -383,7 +400,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
     'A plan is incomplete if it only describes the next milestone while known project goals/features clearly continue beyond it. Near-term work may be detailed and later milestones coarse, but the plan must still reach the known project root.',
     'For takeover, explicitly compare authoritative roadmap/milestone/docs against BOTH the logical tree and milestone list. If known major later scope appears in the sources or logical tree but disappears from milestones, return ISSUES. Reject placeholder/unused/TBD milestones that do not represent a real checkpoint.',
-    'FIDELITY TO THE APPROVED REQUIREMENTS: read .ariad/docs/REQUIREMENTS.md - above all its delta - and compare it against the full draft in the validation plan payload. Return ISSUES when a delta addition or change is carried only by verification or regression tasks with no production task and no concrete existing evidence; when an enumerated requirement is diluted into generic acceptance language or covered only in part (a list covered only in part is not covered); or when a visual or media gap has no concrete art task with named deliverables, or visual tasks lack ux.required. The gap-analysis disposition in the Tech Lead result is part of what you review: a missing disposition, or one that rests on asset names and counts alone for enumerated qualities, is an ISSUE. Granularity is part of fidelity: a disposition or acceptance that accounts at section-headline level while the document enumerates individual clauses inside a paragraph (action sets, expression or scar variants, effects lists) is an ISSUE.',
+    'FIDELITY TO THE APPROVED REQUIREMENTS: read .ariad/docs/REQUIREMENTS.md - above all its delta - and compare it against the plan diff in the payload (planDiff / plan.diff): every addition or change this batch makes is there with field-level from/to. The full draft text is in the file named by plan.planFile - read it when a requirement is carried by an unchanged task or you need the full context of a changed task beyond the diff. Return ISSUES when a delta addition or change is carried only by verification or regression tasks with no production task and no concrete existing evidence; when an enumerated requirement is diluted into generic acceptance language or covered only in part (a list covered only in part is not covered); or when a visual or media gap has no concrete art task with named deliverables, or visual tasks lack ux.required. The gap-analysis disposition in the Tech Lead result is part of what you review: a missing disposition, or one that rests on asset names and counts alone for enumerated qualities, is an ISSUE. Granularity is part of fidelity: a disposition or acceptance that accounts at section-headline level while the document enumerates individual clauses inside a paragraph (action sets, expression or scar variants, effects lists) is an ISSUE.',
     'VERBATIM FIDELITY: when this batch continues a PM-rejected draft, the PM revision review in batchRequests quotes required wording and lists character-for-character. Those quoted strings are protected: a draft that paraphrases, merges, or drops them fails fidelity even if its structure is clean, and a finding that asks for them to be reworded is out of scope. A critic CLEAN on a draft missing a quoted clause is a missed defect.',
     'SUPPORTS DECLARATIONS: every feature in the draft must declare what it supports, in its feature document - a root functional feature names the requirements section or direction it supports, a child feature names its parent feature, and a non-functional feature names the functional feature it serves. A feature whose document declares no support target, or a non-functional feature serving no named functional feature, is an ISSUE.',
     'TASK TARGETS: a delivery task changes project files only. Return ISSUES for any task in this batch whose deliverable requires a delivery role to modify Ariad-held data - the spec tree, a stored test plan, task records, anything persisted in the project state database. Corrections to such data belong to the Tech Lead, made through ariad_tree_patch in this same batch and carried in the spec of the task that will produce the plan, never delegated to a delivery task.',

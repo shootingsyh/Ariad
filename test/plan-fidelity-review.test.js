@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
@@ -18,7 +18,10 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 //    time by embedding the plan in the result; superseded 2026-11-22 -
 //    the reviewers' payloads are now assembled from the store by
 //    version at dispatch time and the result is a stub again by
-//    design: the plan lives in the store, not inside the task);
+//    design: the plan lives in the store, not inside the task.
+//    Later the same day the payload itself went diff-only: it
+//    carries the diff and names a workspace file holding the full
+//    draft text, which reviewers read on demand);
 //  - the PM review prompt judged coverage from summaries and carried
 //    no fidelity standard (production vs verification, enumeration
 //    completeness, art/ux markings);
@@ -26,7 +29,7 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 //    an auditable per-requirement disposition in the plan result.
 // These tests pin all three fixes.
 
-test('plan validator PASS result is a stub; the reviewer payload is assembled from the store', async () => {
+test('plan validator PASS result is a stub; the reviewer payload carries the diff and names the draft file', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-planpayload-'));
   const dbPath = join(dir, 'state.db');
   const vs = new VersionedStore(dbPath);
@@ -50,14 +53,19 @@ test('plan validator PASS result is a stub; the reviewer payload is assembled fr
   // The result archived in the task carries no copy of the tree.
   assert.equal(out.result.plan.tasks, undefined);
   assert.equal(out.result.plan.contracts, undefined);
-  // Reviewers still judge the full draft: their payload is assembled
-  // from the store by the version the stub names.
+  // Reviewers judge the diff, not the tree: the payload assembled
+  // from the store carries no task/contract arrays. The full draft
+  // text is in the workspace file the payload names (planFile).
   const payload = planPayloadFromStore(store, { workspace: dir }, out.result);
-  assert.equal(payload.tasks.length, 1);
-  assert.equal(payload.tasks[0].id, 'a-task');
-  assert.match(payload.tasks[0].acceptanceCriteria[0], /all three variants/);
-  assert.equal(payload.contracts.length, 1);
-  assert.equal(payload.contracts[0].id, 'feature.alpha');
+  assert.equal(payload.tasks, undefined);
+  assert.equal(payload.contracts, undefined);
+  assert.ok(payload.planFile);
+  const draftFile = JSON.parse(readFileSync(join(dir, payload.planFile), 'utf8'));
+  assert.equal(draftFile.tasks.length, 1);
+  assert.equal(draftFile.tasks[0].id, 'a-task');
+  assert.match(draftFile.tasks[0].acceptanceCriteria[0], /all three variants/);
+  assert.equal(draftFile.contracts.length, 1);
+  assert.equal(draftFile.contracts[0].id, 'feature.alpha');
   assert.equal(payload.diff.diffHash, out.result.plan.diffHash);
   assert.equal(payload.sweepAccounting.derived, true);
 });

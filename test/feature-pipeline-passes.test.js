@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { plannerFlowTasks, usesThreePassFlow } from '../src/v2/planner-flow.js';
@@ -105,7 +105,7 @@ function phaseValidatorSetup({ withDraft = true } = {}) {
   return { dir, prepared };
 }
 
-test('phase validator passes a contracts-only draft; the payload assembled from the store carries the contracts', async () => {
+test('phase validator passes a contracts-only draft; the reviewer payload names the draft file carrying the contracts', async () => {
   const { dir, prepared } = phaseValidatorSetup();
   const out = await prepared.execute();
   assert.equal(out.outcome, 'PASS');
@@ -115,7 +115,9 @@ test('phase validator passes a contracts-only draft; the payload assembled from 
   // The result archived in the task carries no copy of the contracts.
   assert.equal(out.result.plan.contracts, undefined);
   const payload = planPayloadFromStore({ filePath: join(dir, 'state.db') }, { workspace: dir }, out.result);
-  assert.equal(payload.contracts[0].id, 'feature.alpha');
+  assert.equal(payload.contracts, undefined);
+  const draftFile = JSON.parse(readFileSync(join(dir, payload.planFile), 'utf8'));
+  assert.equal(draftFile.contracts[0].id, 'feature.alpha');
 });
 
 test('phase validator fails when no draft is open', async () => {
