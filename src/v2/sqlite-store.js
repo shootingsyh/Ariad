@@ -166,6 +166,10 @@ export class SQLiteV2Store {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_v2_tasks_project ON v2_tasks(project_id);
+      CREATE INDEX IF NOT EXISTS idx_v2_tasks_project_state
+        ON v2_tasks(project_id, json_extract(data_json, '$.state'));
+      CREATE INDEX IF NOT EXISTS idx_v2_tasks_project_flow
+        ON v2_tasks(project_id, json_extract(data_json, '$.flowId'));
       CREATE TABLE IF NOT EXISTS v2_planning_requests (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT NOT NULL UNIQUE,
