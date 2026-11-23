@@ -267,7 +267,7 @@ export class StandaloneProjectRuntime {
     const audit = await this.supervisor.audit(this.projectId, { adhocOnly });
     const scheduled = schedule ? await this.scheduler.tick(this.projectId, { adhocOnly }) : { started: [] };
     this.store.checkpoint();
-    return { audit, scheduled, status: this.status() };
+    return { audit, scheduled, status: this.status(scheduled?.tasks) };
   }
 
   resumeSystemBlocked(reason = 'MANUAL_RESUME') {
@@ -382,8 +382,11 @@ export class StandaloneProjectRuntime {
     };
   }
 
-  status() {
-    const tasks = this.store.listTasks(this.projectId);
+  status(tasks = null) {
+    // The tick passes the scheduler's task snapshot from this same pass;
+    // listing again here re-parsed the whole ledger a second time per
+    // pass. Standalone callers (CLI status) omit it and list fresh.
+    tasks ??= this.store.listTasks(this.projectId);
     const project = this.store.getProject(this.projectId);
     // Dispatch fairness (SRPG 2026-11-14): READY conflates three states —
     // runnable and queued, blocked on unfinished dependencies, and
