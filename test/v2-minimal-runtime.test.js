@@ -511,7 +511,7 @@ test('supervisor recovers an orphaned WORKING task that already has a sealed rol
     const providers = new ProviderRegistry();
     providers.register(provider);
     const resources = new ResourcePool({ gpu: 1 });
-    resources.recover(store.listTasks('P-role-tool', { all: true }));
+    resources.recover(store.listAllTasks('P-role-tool'));
     const supervisor = new V2Supervisor({ store, providers, resources });
 
     await supervisor.audit('P-role-tool');
@@ -677,9 +677,9 @@ test('control tasks form independent ad-hoc graphs while delivery stays one grap
       tasks: [{ id: 'REPLAN-TL', stage: 'tech_lead' }],
     });
 
-    const groups = partitionGraphs(store.listTasks('P6', { all: true }));
+    const groups = partitionGraphs(store.listAllTasks('P6'));
     assert.deepEqual(groups.map(x => x.key), ['delivery', 'control:plan-1', 'control:replan-2']);
-    assert.deepEqual(store.listTasks('P6', { scope: 'delivery' }).map(x => x.id), ['D1', 'D2']);
+    assert.deepEqual(store.listTasksByScope('P6', 'delivery').map(x => x.id), ['D1', 'D2']);
     assert.deepEqual(store.listControlFlows('P6').map(x => x.flowId), ['plan-1', 'replan-2']);
 
     assert.throws(() => store.createControlFlow({
@@ -733,7 +733,7 @@ test('scheduler prefers runnable task with largest downstream unblock impact', a
     const resources = new ResourcePool({ gpu: 1 });
     const scheduler = new V2Scheduler({ store, roles: roles(), providers, resources });
 
-    const graph = buildExecutionGraph(store.listTasks('P10', { all: true }));
+    const graph = buildExecutionGraph(store.listAllTasks('P10'));
     assert.ok(graph.downstreamImpact('INTERFACE') > graph.downstreamImpact('DRAWING'));
 
     const result = await scheduler.tick('P10');
@@ -788,7 +788,7 @@ test('scheduler drains planning batches before dispatching delivery work', async
     // Simulate completion of the first fixed planner DAG.
     const firstBatchId = store.getPlanningRequest('REQ-1').batchId;
     const firstFlowId = `planner:P11:${firstBatchId}`;
-    for (const task of store.listTasks('P11', { flowId: firstFlowId })) {
+    for (const task of store.listTasksByFlow('P11', firstFlowId)) {
       const current = store.getTask(task.id);
       store.updateTask(task.id, current.version, { state: 'DONE', execution: null });
     }
@@ -804,7 +804,7 @@ test('scheduler drains planning batches before dispatching delivery work', async
     // Once the queue is fully drained, delivery becomes eligible again.
     const secondBatchId = store.getPlanningRequest('REQ-2').batchId;
     const secondFlowId = `planner:P11:${secondBatchId}`;
-    for (const task of store.listTasks('P11', { flowId: secondFlowId })) {
+    for (const task of store.listTasksByFlow('P11', secondFlowId)) {
       const current = store.getTask(task.id);
       store.updateTask(task.id, current.version, { state: 'DONE', execution: null });
     }
@@ -1389,7 +1389,7 @@ test('restart-orphan provider loss requeues without consuming or escalating atte
       async cancel() {},
     });
     const resources = new ResourcePool({ gpu: 1 });
-    resources.recover(store.listTasks('P-restart-orphan', { all: true }));
+    resources.recover(store.listAllTasks('P-restart-orphan'));
     const supervisor = new V2Supervisor({ store, providers, resources });
 
     await supervisor.audit('P-restart-orphan');

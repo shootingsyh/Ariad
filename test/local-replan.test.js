@@ -60,7 +60,7 @@ test('operator replan enqueues a PENDING LOCAL_REPLAN request with the boundary 
       assert.match(entry.request.guidance, /Never modify, remove, or re-run DONE work/);
       assert.equal(entry.context.sourceKind, 'project-owner-decision');
       // The entrance itself starts no work and creates no tasks.
-      assert.equal(store.listTasks(project.id, { all: true }).length, 0);
+      assert.equal(store.listAllTasks(project.id).length, 0);
     } finally { store.close(); }
 
     assert.throws(
@@ -104,7 +104,7 @@ test('a LOCAL_REPLAN batch uses the single-pass planner flow and is claimed like
     });
     const batch = createNextPlanningBatch({ store, projectId: 'P' });
     assert.ok(batch);
-    const batchTasks = store.listTasks('P', { flowId: batch.flowId });
+    const batchTasks = store.listTasksByFlow('P', batch.flowId);
     assert.ok(batchTasks.length > 0);
     assert.equal(batchTasks.find(t => t.input?.purpose === 'PLANNER_DECOMPOSE')?.input?.requests?.[0]?.request?.purpose, 'LOCAL_REPLAN');
     const gate = batchTasks.find(t => t.input?.purpose === 'LOCAL_REPLAN_REQUIREMENTS');

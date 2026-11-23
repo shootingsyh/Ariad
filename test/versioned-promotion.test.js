@@ -41,7 +41,7 @@ test('promotion flips the prod pointer without materializing tasks into the runt
   assert.equal(res.version, 1);
   assert.equal(vs.getProdVersion(), 1);
   // No copies: the runtime task table stays empty of delivery tasks.
-  assert.equal(runtime.listTasks('proj', { scope: 'delivery' }).length, 0);
+  assert.equal(runtime.listTasksByScope('proj', 'delivery').length, 0);
   assert.equal(runtime.getTask('a-task'), null);
   // The scheduler-facing view is the prod spec joined with exec records.
   const eff = vs.effectiveTasks().filter(x => !x.specMissing);
@@ -113,7 +113,7 @@ test('promotion is gated on finalized, human-approved requirements when the docs
   // Docs regime adopted but no REQUIREMENTS.md: promotion refused, draft untouched.
   assert.throws(attempt, /REQUIREMENTS_NOT_FINALIZED/);
   assert.ok(vs.getOpenDraft());
-  assert.equal(runtime.listTasks('proj', { scope: 'delivery' }).length, 0);
+  assert.equal(runtime.listTasksByScope('proj', 'delivery').length, 0);
   // Document exists but was never approved: still refused.
   writeFileSync(join(docsDir, 'REQUIREMENTS.md'), '# Requirements\n\nDo alpha.\n');
   assert.throws(attempt, /REQUIREMENTS_NOT_APPROVED/);

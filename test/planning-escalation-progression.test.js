@@ -286,7 +286,7 @@ test('PM plan-review prompt carries the human decision and the correction rule',
   const decision = 'Send it back: add ux.required to the presentation task before delivery.';
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: 18 } } }] };
   const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [{ type: 'DEBUG_HOLD' }, { type: 'HUMAN_DECISION', decision }], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
-  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listPlanningRequests: () => [] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listAllTasks: () => [fv, pmTask], listTasksByStates: () => [fv, pmTask], listTasksByFlow: () => [fv, pmTask], listTasksByScope: () => [fv, pmTask], listPlanningRequests: () => [] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;

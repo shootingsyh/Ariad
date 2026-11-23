@@ -97,15 +97,15 @@ test('task tracker direct task tree runs dependency-first through milestone exec
   const supervisor=new V2Supervisor({store,providers,resources});
   for(let i=0;i<60;i++){
    await scheduler.tick('tracker');
-   for(const task of store.listTasks('tracker', { all: true }).filter(t=>t.state==='WORKING')){
+   for(const task of store.listAllTasks('tracker').filter(t=>t.state==='WORKING')){
     statuses.set(task.execution.externalId,{state:'COMPLETED',outcome:'PASS',result:task.stage==='test_engineer'?{
      testPlan:{testCases:[{entry:'test/task-tracker.test.js',command:'node --test test/task-tracker.test.js',covers:[],executionScope:['test/task-tracker.test.js']}]}
     }:{}});
    }
    await supervisor.audit('tracker');
-   if(store.listTasks('tracker', { all: true }).every(t=>t.state==='DONE'))break;
+   if(store.listAllTasks('tracker').every(t=>t.state==='DONE'))break;
   }
-  assert.ok(store.listTasks('tracker', { all: true }).every(t=>t.state==='DONE'));
+  assert.ok(store.listAllTasks('tracker').every(t=>t.state==='DONE'));
   for(const id of ['core','view','integration','tracker-root']){
    assert.deepEqual(started.filter(x=>x.startsWith(id+':')).map(x=>x.split(':')[1]),['developer','test_engineer','tester','reviewer']);
   }

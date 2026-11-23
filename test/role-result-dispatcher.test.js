@@ -12,7 +12,7 @@ test('dispatcher preserves RESULT_READY -> READY stage advancement', async () =>
   };
   const updates = [];
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) {
       assert.equal(id, 'T');
       assert.equal(version, 1);
@@ -39,7 +39,7 @@ test('dispatcher preserves RESULT_READY -> DONE and history behavior', async () 
   };
   let final;
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) {
       assert.equal(version, 4);
       final = { ...task, ...patch, version: 5 };
@@ -53,7 +53,7 @@ test('dispatcher preserves RESULT_READY -> DONE and history behavior', async () 
 
 test('dispatcher preserves the adhocOnly filter', async () => {
   const task = { id: 'T', state: 'RESULT_READY', stage: 'developer', scope: 'delivery' };
-  const store = { listTasks: () => [task], updateTask: () => { throw Error('must not update'); } };
+  const store = { listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task], updateTask: () => { throw Error('must not update'); } };
   const roles = { get: () => { throw Error('must not get role'); } };
   const executor = new RoleResultDispatcher({ store, roles });
   await executor.advanceResults('P', { adhocOnly: true });
@@ -66,7 +66,7 @@ test('dispatcher defers a transition waiting on in-flight delivery', async () =>
     history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED' }],
   };
   let updates = 0;
-  const store = { listTasks: () => [task], updateTask: () => { updates += 1; } };
+  const store = { listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task], updateTask: () => { updates += 1; } };
   const roles = { get: () => ({ transition: () => {
     const error = new Error('UNIFIED_TASK_DELIVERY_IN_FLIGHT: T1');
     error.code = 'UNIFIED_TASK_DELIVERY_IN_FLIGHT';
@@ -83,7 +83,7 @@ test('dispatcher still propagates other transition errors', async () => {
     taskKind: 'PLANNING', stage: 'pm', state: 'RESULT_READY',
     history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED' }],
   };
-  const store = { listTasks: () => [task], updateTask: () => {} };
+  const store = { listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task], updateTask: () => {} };
   const roles = { get: () => ({ transition: () => { throw new Error('BOOM'); } }) };
   await assert.rejects(new RoleResultDispatcher({ store, roles }).advanceResults('P'), /BOOM/);
 });
@@ -101,7 +101,7 @@ test('dispatcher refuses DONE while the latest UX verdict is NOT_PASS (2026-11-1
   };
   const updates = [];
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) { updates.push(patch); return { ...task, ...patch, version: 3 }; },
     appendTaskHistory(id, version) { return { ...task, version: version + 1 }; },
   };
@@ -124,7 +124,7 @@ test('dispatcher allows DONE once the latest UX verdict is PASS (2026-11-14)', a
   };
   let final;
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) { final = { ...task, ...patch, version: 3 }; return final; },
   };
   const roles = { get: () => ({ transition: () => ({ state: 'DONE' }) }) };

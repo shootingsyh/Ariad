@@ -5,10 +5,10 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
     if (!store.getProject(projectId)) throw new Error(`unknown project: ${projectId}`);
     // A legacy plan must never silently obsolete promoted aggregate tasks or
     // restore legacy integration IDs after a unified-tree migration.
-    if (store.listTasks(projectId, { scope: 'delivery' }).some(task => task.taskTreeSchemaVersion === 1)) {
+    if (store.listTasksByScope(projectId, 'delivery').some(task => task.taskTreeSchemaVersion === 1)) {
       throw new Error('APPROVED_TASK_TREE_REQUIRES_TREE_AWARE_RECONCILIATION');
     }
-    if (store.listTasks(projectId, { scope: 'delivery' }).some(task => task.unifiedTaskSchemaVersion === 1)) {
+    if (store.listTasksByScope(projectId, 'delivery').some(task => task.unifiedTaskSchemaVersion === 1)) {
       throw new Error('UNIFIED_TASK_TREE_REQUIRES_COMPATIBLE_COMPILER');
     }
     const deliverySpecs = plan?.tasks;
@@ -43,7 +43,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
 
     store.db.exec('BEGIN IMMEDIATE');
     try {
-      const current = store.listTasks(projectId, { scope: 'delivery' });
+      const current = store.listTasksByScope(projectId, 'delivery');
       for (const task of current) {
         if (incoming.has(task.id)) continue;
         if (task.state === 'DONE') {
@@ -154,7 +154,7 @@ export function legacyApplyDeliveryPlan(store, projectId, plan) {
       });
 
       store.db.exec('COMMIT');
-      return store.listTasks(projectId, { scope: 'delivery' });
+      return store.listTasksByScope(projectId, 'delivery');
     } catch (error) {
       store.db.exec('ROLLBACK');
       throw error;

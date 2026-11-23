@@ -59,7 +59,7 @@ export class V2Scheduler {
   #settlePlanningBatches(projectId) {
     for (const batchId of this.store.listClaimedPlanningBatches(projectId)) {
       const flowId = `planner:${projectId}:${batchId}`;
-      const tasks = this.store.listTasks(projectId, { flowId });
+      const tasks = this.store.listTasksByFlow(projectId, flowId);
       if (tasks.length > 0 && tasks.every(task => ['DONE', 'SKIPPED'].includes(task.state))) {
         this.store.completePlanningBatch(projectId, batchId);
       }
@@ -84,7 +84,7 @@ export class V2Scheduler {
 
     // Upgrade pre-split READY tester work to Test Engineer. Never interrupt
     // an in-flight tester; stopped/cancelled work is READY and safe to migrate.
-    for (const task of this.store.listTasks(projectId, { states: ['READY'] })) {
+    for (const task of this.store.listTasksByStates(projectId, ['READY'])) {
       if (task.state !== 'READY' || task.stage !== 'tester') continue;
       const approved = [...(task.history ?? [])].reverse().find(h =>
         h.type === 'ROLE_RESULT' && h.role === 'test_engineer' && h.outcome === 'PASS'
@@ -95,7 +95,7 @@ export class V2Scheduler {
         fromStage: 'tester', toStage: 'test_engineer', at: new Date().toISOString(),
       }, { stage: 'test_engineer', execution: null });
     }
-    const allTasks = this.store.listTasks(projectId, { all: true });
+    const allTasks = this.store.listAllTasks(projectId);
     let localHolder = adhocOnly ? null : activeLocalLlmHolder(allTasks, project.localLlmHolderTaskId);
     // A human-approved PM review remains resumable after its planning request
     // has been marked PLANNED. It must finish the review gate before Delivery
@@ -199,10 +199,12 @@ export class V2Scheduler {
       if (isInTransientCooldown(task)) continue;
 
       // Rebuild the task's graph from fresh durable state before claiming it.
-      const graphFilter = task.flowId
-        ? { flowId: task.flowId }
-        : scopeOfTask(task) === 'delivery' ? { scope: 'delivery' } : { all: true };
-      const sameGraphTasks = this.store.listTasks(projectId, graphFilter)
+      const graphTasks = task.flowId
+        ? this.store.listTasksByFlow(projectId, task.flowId)
+        : scopeOfTask(task) === 'delivery'
+          ? this.store.listTasksByScope(projectId, 'delivery')
+          : this.store.listAllTasks(projectId);
+      const sameGraphTasks = graphTasks
         .filter(item => graphKey(item) === graphKey(task));
       const graph = buildExecutionGraph(sameGraphTasks);
       const fresh = graph.byId.get(task.id);

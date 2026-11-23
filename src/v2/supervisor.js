@@ -39,7 +39,7 @@ export class V2Supervisor {
   }
 
   recover(projectId) {
-    this.resources.recover(this.store.listTasks(projectId, { states: ['WORKING'] }));
+    this.resources.recover(this.store.listTasksByStates(projectId, ['WORKING']));
   }
 
   async #incident(task, failure) {
@@ -70,7 +70,7 @@ export class V2Supervisor {
 
   async audit(projectId, { adhocOnly = false } = {}) {
     const incidents = [];
-    for (const task of this.store.listTasks(projectId, { states: ['WORKING'] })) {
+    for (const task of this.store.listTasksByStates(projectId, ['WORKING'])) {
       if (task.state !== 'WORKING') continue;
       if (adhocOnly && !isAdhocAnalysis(task)) continue;
       const execution = task.execution;
@@ -231,14 +231,14 @@ export class V2Supervisor {
     // live diagnosis run, an open operator gate and every eligibility
     // predicate. Fetch that state only - the unfiltered list this
     // replaced re-parsed the whole ledger three times per audit.
-    let blocked = this.store.listTasks(projectId, { states: ['SYSTEM_BLOCKED'] });
+    let blocked = this.store.listTasksByStates(projectId, ['SYSTEM_BLOCKED']);
     const running = blocked.find(task => task.diagnosisRun?.externalId);
     if (running) {
       const slotFreed = await this.#pollDiagnosisRun(running, incidents);
       if (!slotFreed) return;
       // The verdict may have moved the polled task; re-read before
       // choosing the next blocked task, as the old per-step fetches did.
-      blocked = this.store.listTasks(projectId, { states: ['SYSTEM_BLOCKED'] });
+      blocked = this.store.listTasksByStates(projectId, ['SYSTEM_BLOCKED']);
     }
     if (!this.startDiagnosisSession) return;
     // An open operator gate occupies the diagnosis slot: the operator

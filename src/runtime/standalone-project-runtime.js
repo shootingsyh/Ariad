@@ -272,7 +272,7 @@ export class StandaloneProjectRuntime {
 
   resumeSystemBlocked(reason = 'MANUAL_RESUME') {
     const recovered = [];
-    for (const task of this.store.listTasks(this.projectId, { states: ['SYSTEM_BLOCKED'] })) {
+    for (const task of this.store.listTasksByStates(this.projectId, ['SYSTEM_BLOCKED'])) {
       if (task.state !== 'SYSTEM_BLOCKED') continue;
       const lastFailure = [...(task.history ?? [])]
         .reverse()
@@ -312,7 +312,7 @@ export class StandaloneProjectRuntime {
 
   async cancelActive(reason = 'PROJECT_STOPPED') {
     const cancelled = [];
-    for (const task of this.store.listTasks(this.projectId, { states: ['WORKING'] })) {
+    for (const task of this.store.listTasksByStates(this.projectId, ['WORKING'])) {
       if (task.state !== 'WORKING') continue;
       const execution = task.execution;
       if (execution?.provider && execution?.externalId) {
@@ -340,7 +340,7 @@ export class StandaloneProjectRuntime {
   }
 
   submitDecision(decision) {
-    const tasks = this.store.listTasks(this.projectId, { states: ['NEEDS_HUMAN', 'SYSTEM_BLOCKED'] });
+    const tasks = this.store.listTasksByStates(this.projectId, ['NEEDS_HUMAN', 'SYSTEM_BLOCKED']);
     const gateTask = tasks.find(item => item.state === 'NEEDS_HUMAN');
     const task = gateTask ?? tasks.find(item =>
       item.state === 'SYSTEM_BLOCKED' && openDiagnosisGate(item));
@@ -386,7 +386,7 @@ export class StandaloneProjectRuntime {
     // The tick passes the scheduler's task snapshot from this same pass;
     // listing again here re-parsed the whole ledger a second time per
     // pass. Standalone callers (CLI status) omit it and list fresh.
-    tasks ??= this.store.listTasks(this.projectId, { all: true });
+    tasks ??= this.store.listAllTasks(this.projectId);
     const project = this.store.getProject(this.projectId);
     // Dispatch fairness (SRPG 2026-11-14): READY conflates three states —
     // runnable and queued, blocked on unfinished dependencies, and

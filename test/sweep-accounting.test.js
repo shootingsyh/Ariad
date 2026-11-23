@@ -117,6 +117,30 @@ test('authorshipResultsForBatch: flow order, authorship purposes only, latest re
       { id: 'planner:b:dependencies', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DEPENDENCIES' }, history: roleResult({}) },
       { id: 'planner:b:repair-1', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: [] },
       { id: 'planner:other:decompose', projectId: 'p', input: { planningBatchId: 'other', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({}) },
+    ], listAllTasks: () => [
+      { id: 'planner:b:repair-2', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 2 }, history: roleResult({ sweepAccounting: [] }) },
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ draftVersion: 1 }) },
+      { id: 'planner:b:dependencies', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DEPENDENCIES' }, history: roleResult({}) },
+      { id: 'planner:b:repair-1', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: [] },
+      { id: 'planner:other:decompose', projectId: 'p', input: { planningBatchId: 'other', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({}) },
+    ], listTasksByStates: () => [
+      { id: 'planner:b:repair-2', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 2 }, history: roleResult({ sweepAccounting: [] }) },
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ draftVersion: 1 }) },
+      { id: 'planner:b:dependencies', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DEPENDENCIES' }, history: roleResult({}) },
+      { id: 'planner:b:repair-1', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: [] },
+      { id: 'planner:other:decompose', projectId: 'p', input: { planningBatchId: 'other', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({}) },
+    ], listTasksByFlow: () => [
+      { id: 'planner:b:repair-2', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 2 }, history: roleResult({ sweepAccounting: [] }) },
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ draftVersion: 1 }) },
+      { id: 'planner:b:dependencies', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DEPENDENCIES' }, history: roleResult({}) },
+      { id: 'planner:b:repair-1', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: [] },
+      { id: 'planner:other:decompose', projectId: 'p', input: { planningBatchId: 'other', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({}) },
+    ], listTasksByScope: () => [
+      { id: 'planner:b:repair-2', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 2 }, history: roleResult({ sweepAccounting: [] }) },
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ draftVersion: 1 }) },
+      { id: 'planner:b:dependencies', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DEPENDENCIES' }, history: roleResult({}) },
+      { id: 'planner:b:repair-1', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: [] },
+      { id: 'planner:other:decompose', projectId: 'p', input: { planningBatchId: 'other', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({}) },
     ],
   };
   const out = authorshipResultsForBatch(store, { projectId: 'p', input: { planningBatchId: 'b' } });
@@ -145,6 +169,22 @@ test('authorshipResultsForBatch: a gate repair on the validate task counts as th
       { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
       { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
       { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
+    ], listAllTasks: () => [
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
+      { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
+      { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
+    ], listTasksByStates: () => [
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
+      { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
+      { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
+    ], listTasksByFlow: () => [
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
+      { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
+      { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
+    ], listTasksByScope: () => [
+      { id: 'planner:b:decompose', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult('tech_lead', fullAccounting) },
+      { id: 'planner:b:repair-3', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 3 }, history: roleResult('tech_lead', { draftVersion: 50 }) },
+      { id: 'planner:b:final-validate', projectId: 'p', input: { planningBatchId: 'b', purpose: 'PLANNER_FINAL_VALIDATE' }, history: [] },
     ],
   };
   const validateTask = {
@@ -164,7 +204,7 @@ test('authorshipResultsForBatch: a gate repair on the validate task counts as th
 });
 
 test('authorshipResultsForBatch: no self-append for non-validate callers', () => {
-  const store = { listTasks: () => [] };
+  const store = { listTasks: () => [], listAllTasks: () => [], listTasksByStates: () => [], listTasksByFlow: () => [], listTasksByScope: () => []};
   const criticTask = {
     id: 'planner:b:critic-1',
     projectId: 'p',
@@ -179,6 +219,18 @@ const sweepBatchStore = (repairResult) => {
   return {
     listPlanningRequests: () => [{ batchId: 'b', request: { purpose: 'PM_PLAN_REVISION' } }],
     listTasks: () => [
+      { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
+      { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
+    ], listAllTasks: () => [
+      { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
+      { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
+    ], listTasksByStates: () => [
+      { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
+      { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
+    ], listTasksByFlow: () => [
+      { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
+      { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
+    ], listTasksByScope: () => [
       { id: 'planner:b:decompose', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_DECOMPOSE' }, history: roleResult({ sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] }) },
       { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1 }, history: repairResult ? roleResult(repairResult) : [] },
     ],
@@ -199,7 +251,7 @@ test('plannerPrompt PLANNER_REPAIR: sweep mandate delivered, previous accounting
 
 test('plannerPrompt PLANNER_REPAIR: no sweep mandate for a batch without requirement changes', () => {
   const prompt = plannerPrompt({
-    store: { listPlanningRequests: () => [], listTasks: () => [] },
+    store: { listPlanningRequests: () => [], listTasks: () => [], listAllTasks: () => [], listTasksByStates: () => [], listTasksByFlow: () => [], listTasksByScope: () => []},
     project: { id: 'P', spec: null, mode: 'NEW' },
     artifactRoot: '/tmp',
     task: { id: 'planner:b:repair-1', projectId: 'P', flowId: 'f', dependsOn: [], input: { planningBatchId: 'b', purpose: 'PLANNER_REPAIR', round: 1, requests: [] } },
@@ -225,6 +277,14 @@ test('plannerPrompt PLANNER_DECOMPOSE: shared sweep mandate, humanDecisions payl
   const store = {
     listPlanningRequests: () => [],
     listTasks: () => [
+      { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ], listAllTasks: () => [
+      { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ], listTasksByStates: () => [
+      { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ], listTasksByFlow: () => [
+      { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
+    ], listTasksByScope: () => [
       { id: 'planner:b:pm-review', projectId: 'P', history: [{ type: 'HUMAN_DECISION', at: '2026-01-01T00:00:00Z', decision: 'Keep the support-pair scope as approved.' }] },
     ],
   };

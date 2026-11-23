@@ -32,7 +32,7 @@ test('fresh NEW project start enqueues INITIAL_PLAN once without creating delive
     assert.equal(requests[0].request.purpose, 'INITIAL_PLAN');
     assert.equal(requests[0].request.instruction, project.goal);
     assert.equal(store.getProject(project.id).deliveryEnabled, false);
-    assert.deepEqual(store.listTasks(project.id, { scope: 'delivery' }), []);
+    assert.deepEqual(store.listTasksByScope(project.id, 'delivery'), []);
   } finally {
     await service.stop();
     fs.rmSync(root, { recursive: true, force: true });

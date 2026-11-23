@@ -69,9 +69,9 @@ test('tick reopens the store and retries once on a disk I/O error', async (t) =>
     resolveRoleModel: () => null,
   });
   const live = runtime.store;
-  const originalList = live.listTasks.bind(live);
+  const originalList = live.listTasksByStates.bind(live);
   let listCalls = 0;
-  live.listTasks = (...args) => {
+  live.listTasksByStates = (...args) => {
     listCalls += 1;
     if (listCalls === 1) {
       const error = new Error('disk I/O error');
@@ -98,7 +98,7 @@ test('tick does not reopen or retry on a non-I/O error', async (t) => {
     resolveRoleModel: () => null,
   });
   const live = runtime.store;
-  live.listTasks = () => { throw new Error('boom'); };
+  live.listTasksByStates = () => { throw new Error('boom'); };
   let reopenCalls = 0;
   live.reopen = () => { reopenCalls += 1; };
   await assert.rejects(runtime.tick({ schedule: false }), /boom/);

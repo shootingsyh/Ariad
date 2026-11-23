@@ -41,8 +41,8 @@ function seedAndPromote(seed) {
 test('facade serves the prod task tree without runtime copies', (t) => {
   const { runtime, seed, facade } = makeFacade(t);
   seedAndPromote(seed);
-  assert.equal(runtime.listTasks('proj', { scope: 'delivery' }).length, 0);
-  const delivery = facade.listTasks('proj', { scope: 'delivery' });
+  assert.equal(runtime.listTasksByScope('proj', 'delivery').length, 0);
+  const delivery = facade.listTasksByScope('proj', 'delivery');
   assert.deepEqual(delivery.map(x => x.id).sort(), ['f-1', 'm-1']);
   const leaf = facade.getTask('f-1');
   assert.equal(leaf.title, 'Feature leaf');
@@ -77,8 +77,8 @@ test('control tasks stay runtime-side; runtime-born delivery tasks become embedd
   facade.createTask({ id: 'fix-1', projectId: 'proj', taskKind: 'FEATURE_TASK', featureId: 'feature.alpha', stage: 'developer', state: 'READY', title: 'Runtime fix', parentId: null, dependsOn: [], interfaceIds: [], executionMode: 'direct' });
   assert.equal(runtime.getTask('fix-1'), null);
   assert.equal(facade.getTask('fix-1').title, 'Runtime fix');
-  assert.ok(facade.listTasks('proj', { scope: 'delivery' }).some(x => x.id === 'fix-1'));
-  assert.ok(facade.listTasks('proj', { scope: 'control' }).some(x => x.id === 'plan-1'));
+  assert.ok(facade.listTasksByScope('proj', 'delivery').some(x => x.id === 'fix-1'));
+  assert.ok(facade.listTasksByScope('proj', 'control').some(x => x.id === 'plan-1'));
 });
 
 test('a second promotion keeps exec state; nothing is ever copied into the runtime table', (t) => {
@@ -92,7 +92,7 @@ test('a second promotion keeps exec state; nothing is ever copied into the runti
   const after = facade.getTask('f-1');
   assert.equal(after.state, 'DONE');
   assert.equal(after.title, 'Feature leaf renamed');
-  assert.equal(runtime.listTasks('proj', { scope: 'delivery' }).length, 0);
+  assert.equal(runtime.listTasksByScope('proj', 'delivery').length, 0);
 });
 
 test('standalone runtime wraps versioned projects in the facade and sees the prod task tree', async (t) => {
@@ -120,7 +120,7 @@ test('standalone runtime wraps versioned projects in the facade and sees the pro
     resolveRoleModel: () => null,
   });
   assert.ok(runtime.store instanceof VersionedTaskStore);
-  const delivery = runtime.store.listTasks('proj', { scope: 'delivery' });
+  const delivery = runtime.store.listTasksByScope('proj', 'delivery');
   assert.deepEqual(delivery.map(x => x.id).sort(), ['f-1', 'm-1']);
   assert.equal(runtime.store.getTask('f-1').milestoneId, 'm-1');
 });

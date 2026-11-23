@@ -10,7 +10,7 @@ async function advance({ outcome = 'PASS', ux = false, configuredUx = false, rol
     history: [{ type: 'ROLE_RESULT', role, outcome }],
   };
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) {
       assert.equal(version, task.version);
       task = { ...task, ...patch, version: version + 1 };

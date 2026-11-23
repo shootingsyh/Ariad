@@ -216,7 +216,7 @@ test('an explicit wake supersedes a pending self-wake delay', async () => {
   trigger.stop();
 });
 
-test('listTasks filters by state and flowId', () => {
+test('task queries filter by state and by flow', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-listtasks-'));
   const store = new SQLiteV2Store(path.join(dir, 'state.db'));
   try {
@@ -227,11 +227,11 @@ test('listTasks filters by state and flowId', () => {
     store.createTask({ ...base, id: 't-done', state: 'DONE' });
     store.createTask({ taskKind: 'PLANNING', id: 'c-b1', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b1', stage: 'tech_lead', state: 'READY' });
     store.createTask({ taskKind: 'PLANNING', id: 'c-b2', projectId: 'p1', scope: 'control', flowId: 'planner:p1:b2', stage: 'tech_lead', state: 'DONE' });
-    assert.deepEqual(store.listTasks('p1', { all: true }).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready', 't-working']);
-    assert.deepEqual(store.listTasks('p1', { states: ['WORKING'] }).map(t => t.id), ['t-working']);
-    assert.deepEqual(store.listTasks('p1', { states: ['READY', 'DONE'] }).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready']);
-    assert.deepEqual(store.listTasks('p1', { flowId: 'planner:p1:b2' }).map(t => t.id), ['c-b2']);
-    assert.deepEqual(store.listTasks('p1', { states: ['READY'], flowId: 'planner:p1:b2' }).map(t => t.id), []);
+    assert.deepEqual(store.listAllTasks('p1').map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready', 't-working']);
+    assert.deepEqual(store.listTasksByStates('p1', ['WORKING']).map(t => t.id), ['t-working']);
+    assert.deepEqual(store.listTasksByStates('p1', ['READY', 'DONE']).map(t => t.id).sort(), ['c-b1', 'c-b2', 't-done', 't-ready']);
+    assert.deepEqual(store.listTasksByFlow('p1', 'planner:p1:b2').map(t => t.id), ['c-b2']);
+    assert.deepEqual(store.listTasksByFlow('p1', 'planner:p1:b2').filter(t => t.state === 'READY').map(t => t.id), []);
   } finally {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });

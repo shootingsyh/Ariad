@@ -53,7 +53,7 @@ test('PM plan-review prompt carries the fidelity standard', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-pmfidelity-'));
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };
   const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
-  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listPlanningRequests: () => [] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask], listAllTasks: () => [fv, pmTask], listTasksByStates: () => [fv, pmTask], listTasksByFlow: () => [fv, pmTask], listTasksByScope: () => [fv, pmTask], listPlanningRequests: () => [] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;
@@ -81,7 +81,7 @@ test('batch critic prompt carries the fidelity review', () => {
     id: 'planner:batch-9-9:validate-1', projectId: 'P', flowId: flow,
     history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { source: 'db-draft', version: 1, taskCount: 0, tasks: [], contracts: [] } } }],
   };
-  const store = { listPlanningRequests: () => [], listTasks: () => [validate, criticTask] };
+  const store = { listPlanningRequests: () => [], listTasks: () => [validate, criticTask], listAllTasks: () => [validate, criticTask], listTasksByStates: () => [validate, criticTask], listTasksByFlow: () => [validate, criticTask], listTasksByScope: () => [validate, criticTask]};
   const prompt = criticPrompt({ store, project: { id: 'P', spec: 'spec' }, task: criticTask, artifactRoot });
   assert.match(prompt, /FIDELITY TO THE APPROVED REQUIREMENTS/);
   assert.match(prompt, /covered only in part is not covered/);
@@ -109,7 +109,7 @@ test('tech lead prompt requires an auditable gap disposition and acceptance fide
 test('PM plan review uses a fresh session per review task', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-pmnewsession-'));
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };
-  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv], listPlanningRequests: () => [] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv], listAllTasks: () => [fv], listTasksByStates: () => [fv], listTasksByFlow: () => [fv], listTasksByScope: () => [fv], listPlanningRequests: () => [] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const mkTask = id => ({ id, projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b' } });
   const first = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: mkTask('planner:batch-1-1:pm-review') });
@@ -159,7 +159,7 @@ test('PM revision rounds reset after an acceptance: old rounds do not park a fre
   const enqueued = [];
   const fiveOld = Array.from({ length: 5 }, (_, i) => ({ request: { purpose: 'PM_PLAN_REVISION' }, createdAt: '2026-11-01T0' + i + ':00:00.000Z' }));
   const accepted = { id: 'planner:batch-5-5:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T09:00:00.000Z' }] };
-  const store = { listPlanningRequests: () => fiveOld, listTasks: () => [accepted] };
+  const store = { listPlanningRequests: () => fiveOld, listTasks: () => [accepted], listAllTasks: () => [accepted], listTasksByStates: () => [accepted], listTasksByFlow: () => [accepted], listTasksByScope: () => [accepted]};
   const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
   const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
   const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'fix the carriers', reason: 'gaps remain' } } });
@@ -171,7 +171,7 @@ test('PM revision rounds since the last acceptance still park at the cap', () =>
   const enqueued = [];
   const accepted = { id: 'planner:batch-5-5:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T09:00:00.000Z' }] };
   const fiveNew = Array.from({ length: 5 }, (_, i) => ({ request: { purpose: 'PM_PLAN_REVISION' }, createdAt: '2026-11-01T1' + i + ':00:00.000Z' }));
-  const store = { listPlanningRequests: () => fiveNew, listTasks: () => [accepted] };
+  const store = { listPlanningRequests: () => fiveNew, listTasks: () => [accepted], listAllTasks: () => [accepted], listTasksByStates: () => [accepted], listTasksByFlow: () => [accepted], listTasksByScope: () => [accepted]};
   const roles = createDefaultV2Roles({ store, workspace: '/tmp', enqueuePlanning: req => enqueued.push(req) });
   const task = { id: 'planner:batch-6-6:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', history: [], input: { purpose: 'PLANNER_PM_REVIEW' } };
   const out = roles.pm.transition({ task, result: { outcome: 'PLAN_REVISION_REQUIRED', result: { guidance: 'still gaps', reason: 'not converged' } } });
@@ -186,7 +186,7 @@ test('PM plan review inherits prior objections and all human decisions as payloa
   const prior = { id: 'planner:batch-1-1:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-0', input: { purpose: 'PLANNER_PM_REVIEW' }, history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_REVISION_REQUIRED', summary: 'prior summary', completedAt: '2026-11-01T00:00:00.000Z', result: { guidance: 'PRIOR GUIDANCE: enumerate the effects list verbatim' } }] };
   const decided = { id: 'planner:batch-0-0:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-x', history: [{ type: 'HUMAN_DECISION', at: '2026-10-31T00:00:00.000Z', decision: 'Keep the scope to the approved delta only.' }] };
   const pmTask = { id: 'planner:batch-2-2:pm-review', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b2' } };
-  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, prior, decided, pmTask], listPlanningRequests: () => [] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, prior, decided, pmTask], listAllTasks: () => [fv, prior, decided, pmTask], listTasksByStates: () => [fv, prior, decided, pmTask], listTasksByFlow: () => [fv, prior, decided, pmTask], listTasksByScope: () => [fv, prior, decided, pmTask], listPlanningRequests: () => [] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;
@@ -201,7 +201,7 @@ test('PM plan-review payload carries the batch sweep accounting verbatim (2026-1
   const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };
   const decompose = { id: 'planner:b9:decompose', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', flowId: 'flow-1', input: { planningBatchId: 'b9', purpose: 'PLANNER_DECOMPOSE' }, history: [{ type: 'ROLE_RESULT', role: 'tech_lead', outcome: 'PLANNED', summary: 'drafted', result: { sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] } }] };
   const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
-  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask, decompose], listPlanningRequests: () => [{ batchId: 'b9', request: { purpose: 'PM_PLAN_REVISION' } }] };
+  const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask, decompose], listAllTasks: () => [fv, pmTask, decompose], listTasksByStates: () => [fv, pmTask, decompose], listTasksByFlow: () => [fv, pmTask, decompose], listTasksByScope: () => [fv, pmTask, decompose], listPlanningRequests: () => [{ batchId: 'b9', request: { purpose: 'PM_PLAN_REVISION' } }] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;

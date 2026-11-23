@@ -9,7 +9,7 @@ function run(stage, outcome, extra = {}) {
     history: [{ type: 'ROLE_RESULT', role: stage, outcome, ...extra }],
   };
   const store = {
-    listTasks: () => [task],
+    listTasks: () => [task], listAllTasks: () => [task], listTasksByStates: () => [task], listTasksByFlow: () => [task], listTasksByScope: () => [task],
     updateTask(id, version, patch) {
       assert.equal(id, task.id);
       assert.equal(version, task.version);

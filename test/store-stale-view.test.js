@@ -41,9 +41,9 @@ function makeRuntime(t, runtimeOptions = {}) {
 test('tick reopens the store and retries once on a malformed-view error', async (t) => {
   const runtime = makeRuntime(t);
   const live = runtime.store;
-  const originalList = live.listTasks.bind(live);
+  const originalList = live.listTasksByStates.bind(live);
   let listCalls = 0;
-  live.listTasks = (...args) => {
+  live.listTasksByStates = (...args) => {
     listCalls += 1;
     if (listCalls === 1) throw malformed();
     return originalList(...args);
@@ -65,7 +65,7 @@ test('tick reports a fatal store after the threshold of unhealed ticks', async (
     onStoreFatal: (projectId, error) => fatal.push({ projectId, message: error.message }),
   });
   const live = runtime.store;
-  live.listTasks = () => { throw malformed(); };
+  live.listTasksByStates = () => { throw malformed(); };
   let reopenCalls = 0;
   live.reopen = () => { reopenCalls += 1; };
   await assert.rejects(runtime.tick({ schedule: false }), /malformed/);
@@ -85,9 +85,9 @@ test('a healed tick resets the consecutive-failure count', async (t) => {
     onStoreFatal: (projectId, error) => fatal.push({ projectId, message: error.message }),
   });
   const live = runtime.store;
-  const originalList = live.listTasks.bind(live);
+  const originalList = live.listTasksByStates.bind(live);
   let failing = true;
-  live.listTasks = (...args) => {
+  live.listTasksByStates = (...args) => {
     if (failing) throw malformed();
     return originalList(...args);
   };

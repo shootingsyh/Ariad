@@ -25,7 +25,7 @@ export function latestRoleResult(task) {
 }
 
 export function flowTasks(store, task) {
-  return store.listTasks(task.projectId, { flowId: task.flowId });
+  return store.listTasksByFlow(task.projectId, task.flowId);
 }
 
 export function predecessorResults(store, task) {

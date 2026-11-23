@@ -140,7 +140,7 @@ test('phase validator blocks a changed feature without its document, then passes
 });
 
 test('feature pass prompts carry the split, the Supports rule and the accounting', () => {
-  const store = { listPlanningRequests: () => [], listTasks: () => [] };
+  const store = { listPlanningRequests: () => [], listTasks: () => [], listAllTasks: () => [], listTasksByStates: () => [], listTasksByFlow: () => [], listTasksByScope: () => []};
   const project = { id: 'P', spec: 'spec', mode: 'NEW' };
   const functional = plannerPrompt({ store, project, artifactRoot: '/tmp', task: { id: 't1', projectId: 'P', input: { purpose: 'PLANNER_FEATURES_FUNCTIONAL', phase: 'functional', requests: [] } } });
   assert.match(functional, /feature pass 1 of 3/);
@@ -169,7 +169,7 @@ test('phase critic prompts judge alignment, supports and ambiguity for their pas
       flowId: flow, input: { planningBatchId: 'batch-9-9', purpose: 'PLANNER_CRITIC_FEATURES', phase },
       dependsOn: [validate.id], history: [],
     };
-    const store = { listPlanningRequests: () => [], listTasks: () => [validate, criticTask] };
+    const store = { listPlanningRequests: () => [], listTasks: () => [validate, criticTask], listAllTasks: () => [validate, criticTask], listTasksByStates: () => [validate, criticTask], listTasksByFlow: () => [validate, criticTask], listTasksByScope: () => [validate, criticTask]};
     return criticPrompt({ store, project: { id: 'P', spec: 'spec' }, task: criticTask, artifactRoot: '/tmp' });
   };
   const functional = mk('functional');

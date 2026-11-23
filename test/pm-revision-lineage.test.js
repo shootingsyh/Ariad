@@ -179,6 +179,22 @@ test('the revision round counter resets at an owner decision on a PM task', () =
       { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
       { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
       { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
+    ], listAllTasks: () => [
+      { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
+      { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
+      { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
+    ], listTasksByStates: () => [
+      { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
+      { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
+      { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
+    ], listTasksByFlow: () => [
+      { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
+      { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
+      { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
+    ], listTasksByScope: () => [
+      { stage: 'pm', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T03:00:00.000Z' }] },
+      { stage: 'pm', history: [{ type: 'ROLE_RESULT', role: 'pm', outcome: 'PLAN_ACCEPTED', completedAt: '2026-11-01T00:00:00.000Z' }] },
+      { stage: 'developer', history: [{ type: 'HUMAN_DECISION', at: '2026-11-02T09:00:00.000Z' }] },
     ],
   };
   // Only requests after the owner decision count; the developer-stage
@@ -218,7 +234,7 @@ test('the decompose prompt orders verify-after-write for quoted clauses', () => 
 });
 
 test('the repair prompt protects quoted clauses in a PM revision batch', () => {
-  const store = { listTasks: () => [] };
+  const store = { listTasks: () => [], listAllTasks: () => [], listTasksByStates: () => [], listTasksByFlow: () => [], listTasksByScope: () => []};
   const prompt = plannerPrompt({
     store,
     project: { id: 'P', mode: 'NEW' },
@@ -247,7 +263,7 @@ test('the critic prompt carries the PM revision review and the protected rule', 
       batchId: 'batch-9-9',
       request: { purpose: 'PM_PLAN_REVISION', reason: 'FAIL trace: clause missing', guidance: 'paste it verbatim', rejectedDraftVersion: 70 },
     }],
-    listTasks: () => [],
+    listTasks: () => [], listAllTasks: () => [], listTasksByStates: () => [], listTasksByFlow: () => [], listTasksByScope: () => [],
   };
   const prompt = criticPrompt({
     store,

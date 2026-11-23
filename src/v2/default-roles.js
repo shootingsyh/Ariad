@@ -75,9 +75,9 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
   if (typeof store?.listPlanningRequests !== 'function') return 0;
   const revisions = store.listPlanningRequests(projectId)
     .filter(item => item.request?.purpose === 'PM_PLAN_REVISION');
-  if (typeof store?.listTasks !== 'function') return revisions.length;
+  if (typeof store?.listTasksByScope !== 'function') return revisions.length;
   let lastResetMs = null;
-  for (const t of store.listTasks(projectId, { scope: 'control' }) ?? []) {
+  for (const t of store.listTasksByScope(projectId, 'control') ?? []) {
     for (const h of t?.history ?? []) {
       if (h?.type === 'ROLE_RESULT' && h?.role === 'pm' && h?.outcome === 'PLAN_ACCEPTED') {
         const ms = Date.parse(h.completedAt ?? h.at ?? '');
@@ -1471,7 +1471,7 @@ export function createDefaultV2Roles({
               // validation escalation - instead of a full PM rejection
               // round (SRPG: PM_PLAN_REVISION rounds 48-52 all burned on
               // this one point).
-              if (typeof store?.listTasks === 'function'
+              if (typeof store?.listAllTasks === 'function'
                 && batchRequiresSweepAccounting(planningBatchRequests(store, task))
                 && draft.base_version != null) {
                 const baseTaskIds = draftStore.listSpecTasks(draft.base_version).map(t => t.id).filter(Boolean);
@@ -1492,10 +1492,10 @@ export function createDefaultV2Roles({
               // SRPG batch-79 lost T-fix-troops-down-dimension-gate:
               // decompose claimed it, the PM accepted, it existed
               // nowhere, and the issue sat TRIAGED_UNASSIGNED.
-              if (typeof store?.listTasks === 'function') {
+              if (typeof store?.listAllTasks === 'function') {
                 const batchRequests = planningBatchRequests(store, task);
                 if (batchRequests.some(item => item?.request?.purpose === 'TRIAGE_AND_ASSIGN_ISSUE')) {
-                  const liveTaskIds = (store.listTasks(task.projectId, { all: true }) ?? []).map(t => t.id).filter(Boolean);
+                  const liveTaskIds = (store.listAllTasks(task.projectId) ?? []).map(t => t.id).filter(Boolean);
                   const verdict = evaluateIssueAssignment({
                     requests: batchRequests,
                     authorshipResults: authorshipResultsForBatch(store, task),
@@ -1618,7 +1618,7 @@ export function createDefaultV2Roles({
         let priorReview = null;
         const inheritedHumanDecisions = [];
         try {
-          const allTasks = typeof store?.listTasks === 'function' ? store.listTasks(task.projectId, { all: true }) : [];
+          const allTasks = typeof store?.listAllTasks === 'function' ? store.listAllTasks(task.projectId) : [];
           for (const other of allTasks) {
             for (const entry of other.history ?? []) {
               if (entry?.type === 'HUMAN_DECISION') {

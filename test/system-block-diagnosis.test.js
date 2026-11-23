@@ -30,9 +30,17 @@ function makeStore(tasks) {
   const byId = new Map(tasks.map(t => [t.id, structuredClone(t)]));
   return {
     byId, incidents: [], planningRequests: [],
-    listTasks(projectId, { states } = {}) {
-      const all = [...byId.values()].filter(t => t.projectId === projectId);
-      return states ? all.filter(t => states.includes(t.state)) : all;
+    listTasksByStates(projectId, states) {
+      return [...byId.values()].filter(t => t.projectId === projectId && states.includes(t.state));
+    },
+    listTasksByFlow(projectId, flowId) {
+      return [...byId.values()].filter(t => t.projectId === projectId && t.flowId === flowId);
+    },
+    listTasksByScope(projectId) {
+      return [...byId.values()].filter(t => t.projectId === projectId);
+    },
+    listAllTasks(projectId) {
+      return [...byId.values()].filter(t => t.projectId === projectId);
     },
     getTask(id) { return byId.get(id) ?? null; },
     updateTask(id, version, patch) {
@@ -125,8 +133,8 @@ test('supervisor starts a debugger session on the blocked task itself and create
   assert.ok(task.history.some(e => e.type === 'SYSTEM_DIAGNOSIS_STARTED'));
   // No diagnostic task was minted: the store still holds exactly the
   // blocked task, and nothing in it is a DIAGNOSTIC task.
-  assert.equal(store.listTasks('p', { all: true }).length, 1);
-  assert.equal(store.listTasks('p', { all: true }).filter(t => t.taskKind === 'DIAGNOSTIC').length, 0);
+  assert.equal(store.listAllTasks('p').length, 1);
+  assert.equal(store.listAllTasks('p').filter(t => t.taskKind === 'DIAGNOSTIC').length, 0);
 });
 
 test('at most one diagnosis session is active in a project', async () => {
@@ -228,7 +236,7 @@ test('an operator-required verdict parks the gate on the blocked task itself', a
   assert.ok(Array.isArray(gate.questions) && gate.questions.length > 0);
   // The project waits at the human gate, and no new session starts
   // while the gate is open.
-  assert.equal(deriveProjectExecutionState({ tasks: store.listTasks('p', { all: true }) }), 'NEEDS_HUMAN');
+  assert.equal(deriveProjectExecutionState({ tasks: store.listAllTasks('p') }), 'NEEDS_HUMAN');
   await supervisor.audit('p');
   assert.equal(calls.length, 1);
 });
@@ -261,7 +269,7 @@ test('sessions that die without a verdict are retried, then the supervisor stops
   assert.equal(task.diagnosisRun, null);
   assert.equal(task.history.filter(e => e.type === 'SYSTEM_DIAGNOSIS_ATTEMPT').length, 3);
   // With no live session and the attempt budget spent, the project halts.
-  assert.equal(deriveProjectExecutionState({ tasks: store.listTasks('p', { all: true }) }), 'FAILED');
+  assert.equal(deriveProjectExecutionState({ tasks: store.listAllTasks('p') }), 'FAILED');
 });
 
 test('a provider-terminal verdict rides on the poll status itself', async () => {

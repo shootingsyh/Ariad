@@ -195,7 +195,7 @@ test('mock project system block is diagnosed and the debugger requeues it', asyn
     const diagStore = new SQLiteV2Store(project.stateDb);
     assert.equal(diagStore.getTask('debug:T-mock:1') ?? null, null);
     assert.equal(
-      diagStore.listTasks(project.id, { all: true }).filter(task => task.taskKind === 'DIAGNOSTIC').length,
+      diagStore.listAllTasks(project.id).filter(task => task.taskKind === 'DIAGNOSTIC').length,
       0,
     );
     diagStore.close();

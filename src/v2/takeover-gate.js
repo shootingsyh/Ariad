@@ -1,7 +1,7 @@
 import { scopeOfTask } from './control-task-policy.js';
 function latestDurableDeliveryGate(store, projectId) {
   let latest = null;
-  for (const task of store.listTasks(projectId, { all: true })) {
+  for (const task of store.listAllTasks(projectId)) {
     for (const entry of task.history ?? []) {
       if (entry?.type !== 'DELIVERY_GATE' || typeof entry?.enabled !== 'boolean') continue;
       latest = entry;
@@ -30,7 +30,7 @@ function hasExecutedDelivery(tasks) {
 export function inferTakeoverReviewRequired(store, projectId) {
   const project = store.getProject(projectId);
   if (!project || project.mode !== 'TAKEOVER') return false;
-  const tasks = store.listTasks(projectId, { all: true });
+  const tasks = store.listAllTasks(projectId);
   if (tasks.some(task => plannerPmTask(task) && hasHumanDecision(task))) return false;
   if (hasExecutedDelivery(tasks)) return false;
   return true;
@@ -66,7 +66,7 @@ export function recoverObsoleteTakeoverHumanGates(store, projectId) {
   if (project.takeoverReviewRequired !== false) return [];
 
   const recovered = [];
-  for (const task of store.listTasks(projectId, { all: true })) {
+  for (const task of store.listAllTasks(projectId)) {
     if (task.state !== 'NEEDS_HUMAN' || !plannerPmTask(task) || hasHumanDecision(task)) continue;
     const accepted = [...(task.history ?? [])].reverse().find(
       entry => entry?.type === 'ROLE_RESULT'

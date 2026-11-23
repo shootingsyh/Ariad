@@ -383,10 +383,27 @@ export class SQLiteV2Store {
     return `${row.n}:${row.s}`;
   }
 
-  listTasks(projectId, filter = {}) {
-    if (filter?.all !== true && !(Array.isArray(filter?.states) && filter.states.length > 0) && !filter?.flowId && !filter?.scope) {
-      throw new Error('listTasks requires an explicit filter: pass { states }, { flowId }, { scope }, or { all: true } for a deliberate full list');
-    }
+  // There is deliberately no generic listTasks: every query names its
+  // selector, and a full list is a separate, explicit method. A bare
+  // full-ledger read is how the reconcile loop ended up re-parsing
+  // 60MB of task JSON per pass (2026-11-22).
+  listTasksByStates(projectId, states) {
+    return this.#queryTasks(projectId, { states });
+  }
+
+  listTasksByFlow(projectId, flowId) {
+    return this.#queryTasks(projectId, { flowId });
+  }
+
+  listTasksByScope(projectId, scope) {
+    return this.#queryTasks(projectId, { scope });
+  }
+
+  listAllTasks(projectId) {
+    return this.#queryTasks(projectId, { all: true });
+  }
+
+  #queryTasks(projectId, filter) {
     // Results are cached per (project, filter) and validated against
     // the content stamp above: session activity can wake reconcile
     // passes several times a second, and re-reading + re-parsing the
@@ -429,7 +446,7 @@ export class SQLiteV2Store {
 
   listControlFlows(projectId) {
     const grouped = new Map();
-    for (const task of this.listTasks(projectId, { scope: 'control' })) {
+    for (const task of this.listTasksByScope(projectId, 'control')) {
       const items = grouped.get(task.flowId) ?? [];
       items.push(task);
       grouped.set(task.flowId, items);
@@ -576,7 +593,7 @@ export class SQLiteV2Store {
   }
 
   hasActiveNodePlanningJobs(projectId) {
-    return this.listTasks(projectId, { scope: 'control' }).some(task =>
+    return this.listTasksByScope(projectId, 'control').some(task =>
       task.taskKind === 'WORKFLOW' && !['DONE', 'SKIPPED'].includes(task.state));
   }
 
@@ -694,7 +711,7 @@ export class SQLiteV2Store {
        SET state = 'PLANNED', updated_at = ?
        WHERE project_id = ? AND batch_id = ? AND state = 'CLAIMED'`
     ).run(now, projectId, batchId);
-    const delivery = this.listTasks(projectId, { scope: 'delivery' });
+    const delivery = this.listTasksByScope(projectId, 'delivery');
     for (const item of batch) {
       if (item.request?.purpose !== 'TRIAGE_AND_ASSIGN_ISSUE' || !item.request?.issueId) continue;
       const issueId = item.request.issueId;

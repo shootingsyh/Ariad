@@ -77,12 +77,31 @@ export class VersionedTaskStore {
     return this.runtime.getTask(id);
   }
 
-  listTasks(projectId, filter = {}) {
-    if (filter?.all !== true && !(Array.isArray(filter?.states) && filter.states.length > 0) && !filter?.flowId && !filter?.scope) {
-      throw new Error('listTasks requires an explicit filter: pass { states }, { flowId }, { scope }, or { all: true } for a deliberate full list');
-    }
+  // Same query surface as the runtime store: no generic listTasks.
+  listTasksByStates(projectId, states) {
+    return this.#list(projectId, { states });
+  }
+
+  listTasksByFlow(projectId, flowId) {
+    return this.#list(projectId, { flowId });
+  }
+
+  listTasksByScope(projectId, scope) {
+    return this.#list(projectId, { scope });
+  }
+
+  listAllTasks(projectId) {
+    return this.#list(projectId, { all: true });
+  }
+
+  #list(projectId, filter) {
     const merged = new Map();
-    for (const task of this.runtime.listTasks(projectId, filter)) merged.set(task.id, task);
+    const runtimeTasks = filter.all === true
+      ? this.runtime.listAllTasks(projectId)
+      : filter.states ? this.runtime.listTasksByStates(projectId, filter.states)
+        : filter.flowId ? this.runtime.listTasksByFlow(projectId, filter.flowId)
+          : this.runtime.listTasksByScope(projectId, filter.scope);
+    for (const task of runtimeTasks) merged.set(task.id, task);
     for (const task of this.versioned.effectiveTasks()) {
       if (task.projectId === projectId) merged.set(task.id, task);
     }

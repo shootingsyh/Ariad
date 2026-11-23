@@ -89,7 +89,7 @@ test('batch critic prompt is scoped to the batch and carries its context', () =>
   };
   const store = {
     listPlanningRequests: () => triageRows,
-    listTasks: () => [decompose, dependencies, validate, criticTask],
+    listTasks: () => [decompose, dependencies, validate, criticTask], listAllTasks: () => [decompose, dependencies, validate, criticTask], listTasksByStates: () => [decompose, dependencies, validate, criticTask], listTasksByFlow: () => [decompose, dependencies, validate, criticTask], listTasksByScope: () => [decompose, dependencies, validate, criticTask],
   };
   const prompt = criticPrompt({ store, project: { id: 'P', spec: 'spec' }, task: criticTask, artifactRoot });
   assert.ok(prompt.includes('BATCH SCOPE'), 'scope banner present');

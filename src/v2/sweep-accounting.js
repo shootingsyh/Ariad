@@ -134,13 +134,13 @@ export function evaluateSweepAccounting({ baseTaskIds, authorshipResults }) {
 // a recorded ROLE_RESULT count; the latest such result per task wins.
 export function authorshipResultsForBatch(store, task) {
   const batchId = task?.input?.planningBatchId;
-  if (!batchId || typeof store?.listTasks !== 'function') return [];
+  if (!batchId || typeof store?.listAllTasks !== 'function') return [];
   const orderOf = (t) => {
     if (t.input?.purpose === 'PLANNER_DECOMPOSE') return 0;
     const round = Number(t.input?.round);
     return Number.isFinite(round) && round > 0 ? round : 99;
   };
-  const authored = (store.listTasks(task.projectId, { all: true }) ?? [])
+  const authored = (store.listAllTasks(task.projectId) ?? [])
     .filter(t => t?.input?.planningBatchId === batchId && SWEEP_AUTHORSHIP_PURPOSES.includes(t?.input?.purpose))
     .map(t => {
       const entry = [...(t.history ?? [])].reverse().find(h => h?.type === 'ROLE_RESULT');
