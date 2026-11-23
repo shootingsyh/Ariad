@@ -130,6 +130,7 @@ export class VersionedStore {
   // See SQLiteV2Store.reopen: drop a stale cached handle so subsequent
   // operations run on a fresh connection.
   reopen() {
+    this._effectiveTasksCache = null;
     if (this.db) {
       try { this.db.close(); } catch { /* already dead: reopening anyway */ }
       this.db = null;
@@ -617,6 +618,7 @@ export class VersionedStore {
     const nextVersion = (existing?.version ?? 0) + 1;
     this.db.prepare('INSERT INTO exec_tasks (id, project_id, embedded, data_json, version, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, embedded = excluded.embedded, version = excluded.version, updated_at = excluded.updated_at')
       .run(id, projectId, embedded ? 1 : 0, encode(data), nextVersion, nowIso());
+    this._effectiveTasksCache = null;
     return this.getExecTask(id);
   }
 
@@ -640,7 +642,16 @@ export class VersionedStore {
   }
 
   effectiveTasks() {
+    // Memoized: every merged listTasks()/getTask() call recomputed this
+    // merge (two table reads, a decode of every exec history, a full
+    // object rebuild), and one reconcile pass calls it many times. The
+    // inputs change only when the prod pointer moves (promotion - prod
+    // spec rows themselves are immutable), when an exec task is
+    // upserted (the single write funnel, which invalidates below), or
+    // when the store reopens on a fresh connection.
     const prod = this.getProdVersion();
+    const cached = this._effectiveTasksCache;
+    if (cached && cached.prodVersion === prod) return [...cached.tasks];
     const specs = prod == null ? [] : this.listSpecTasks(prod);
     const specIds = new Set(specs.map(s => s.id));
     const execById = new Map(this.listExecTasks().map(e => [e.id, e]));
@@ -691,7 +702,8 @@ export class VersionedStore {
         out.push({ id: ex.id, projectId: ex.projectId, state: ex.data.state === 'DONE' ? 'DONE' : 'OBSOLETE', stage: ex.data.stage ?? null, history: ex.data.history ?? [], execution: ex.data.execution ?? null, artifacts: ex.data.artifacts ?? null, specMissing: true, version: ex.version, updatedAt: ex.updatedAt });
       }
     }
-    return out;
+    this._effectiveTasksCache = { prodVersion: prod, tasks: out };
+    return [...out];
   }
 
   getEffectiveTask(id) {
