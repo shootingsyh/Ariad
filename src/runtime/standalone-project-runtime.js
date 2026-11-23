@@ -11,7 +11,8 @@ import { FunctionProvider } from '../v2/function-provider.js';
 import { createDefaultV2Roles } from '../v2/default-roles.js';
 import { ensureTakeoverReviewState } from '../v2/takeover-gate.js';
 import { applyTaskEvent } from '../v2/state-machine.js';
-import { scopeOfTask } from '../v2/control-task-policy.js';
+import { TASK_KINDS, openDiagnosisGate, scopeOfTask } from '../v2/control-task-policy.js';
+import { diagnosisTaskView } from '../v2/system-block-diagnosis.js';
 import { auditTasks } from '../v2/dispatch-fairness.js';
 import { CURRENT_STORAGE_VERSION } from '../v2/schema-version.js';
 
@@ -146,6 +147,44 @@ export class StandaloneProjectRuntime {
       providers,
       resources: this.resources,
       incidentSink,
+      startDiagnosisSession: async ({ projectId, task, attemptId }) => {
+        // The supervisor runs the debugger session itself; this starter
+        // is the runtime's half of that arrangement (the role registry
+        // and the providers live here). The session runs on the blocked
+        // task itself: no diagnostic task is created or scheduled.
+        const project = this.store.getProject(projectId);
+        const role = roleRegistry.get('project_debugger');
+        const view = diagnosisTaskView(task);
+        const spec = role.prepare({ project, task: view });
+        if (!spec?.provider) throw new Error('project_debugger role produced no provider');
+        const requirements = spec.resources ?? [];
+        if (requirements.length && !this.resources.claim(requirements, task.id)) {
+          throw new Error('diagnosis session resources unavailable');
+        }
+        try {
+          const provider = providers.get(spec.provider);
+          const handle = await provider.start({
+            ...spec,
+            projectId,
+            taskId: task.id,
+            role: 'project_debugger',
+            taskKind: TASK_KINDS.DIAGNOSTIC,
+            scope: scopeOfTask(view),
+            flowId: `diagnostic:${projectId}`,
+            sessionPolicy: spec.sessionPolicy ?? role.sessionPolicy ?? 'fresh',
+            attemptId,
+            idempotencyKey: `ariad:v2:${attemptId}`,
+          });
+          return {
+            provider: spec.provider,
+            externalId: handle?.externalId ?? handle?.id ?? null,
+            completionProtocol: spec.completionProtocol ?? 'provider_terminal',
+          };
+        } catch (error) {
+          this.resources.release(task.id);
+          throw error;
+        }
+      },
     });
     this.supervisor.recover(project.id);
   }
@@ -301,9 +340,32 @@ export class StandaloneProjectRuntime {
   }
 
   submitDecision(decision) {
-    const task = this.store.listTasks(this.projectId).find(item => item.state === 'NEEDS_HUMAN');
+    const tasks = this.store.listTasks(this.projectId);
+    const gateTask = tasks.find(item => item.state === 'NEEDS_HUMAN');
+    const task = gateTask ?? tasks.find(item =>
+      item.state === 'SYSTEM_BLOCKED' && openDiagnosisGate(item));
     if (!task) throw new Error('project has no pending human decision');
-    const systemDiagnosis = task.stage === 'project_debugger' && Boolean(task.input?.blockedTaskId);
+    const systemDiagnosis = Boolean(openDiagnosisGate(task))
+      || (task.stage === 'project_debugger' && Boolean(task.input?.blockedTaskId));
+    if (!gateTask && systemDiagnosis) {
+      // The gate lives on the blocked task itself (supervisor-managed
+      // diagnosis): record the decision in its history and leave the
+      // task SYSTEM_BLOCKED - the operator resume that follows performs
+      // the recovery (SYSTEM_RECOVERY), as it did when the gate was a
+      // separate diagnostic task.
+      const updated = this.store.appendTaskHistory(task.id, task.version, {
+        type: 'HUMAN_DECISION',
+        decision,
+        at: new Date().toISOString(),
+      }, { ...task, execution: null });
+      return {
+        taskId: updated.id,
+        decision,
+        systemDiagnosis,
+        blockedTaskId: task.id,
+        taskState: updated.state,
+      };
+    }
     const updated = this.store.appendTaskHistory(task.id, task.version, {
       type: 'HUMAN_DECISION',
       decision,

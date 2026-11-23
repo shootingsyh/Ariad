@@ -1,311 +1,281 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { SQLiteV2Store } from '../src/v2/sqlite-store.js';
-import { ProviderRegistry } from '../src/v2/provider-registry.js';
-import { ResourcePool } from '../src/v2/resource-pool.js';
+import { test } from 'node:test';
 import { V2Supervisor } from '../src/v2/supervisor.js';
 import {
-  ensureSystemBlockDiagnosis,
+  autoCarryExhausted,
+  diagnosisAttemptsExhausted,
+  diagnosisDecidedAwaitingResume,
+  diagnosisGateOpen,
   systemIncidentFromHistory,
 } from '../src/v2/system-block-diagnosis.js';
+import { deriveProjectExecutionState } from '../src/v2/state-machine.js';
 
-const FAILURE = 'PI_PROVIDER_ERROR: 503: {"message":"Loading model"}';
+// The supervisor manages diagnosis sessions itself (owner directive,
+// 2026-11-22): no DIAGNOSTIC task is created and nothing is scheduled.
+// These tests drive V2Supervisor.audit against an in-memory store, a
+// fake provider and a fake session starter.
 
-function tempDb() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ariad-sysblock-'));
-  return { dir, file: path.join(dir, 'state.db') };
+const interruption = (failure = 'provider exploded') => ({
+  type: 'SYSTEM_INTERRUPTION', role: 'developer', failure,
+  at: '2000-01-01T00:00:00.000Z',
+});
+
+const blockedTask = (id, extra = {}) => ({
+  id, projectId: 'p', taskKind: 'FEATURE_TASK', stage: 'developer',
+  state: 'SYSTEM_BLOCKED', version: 1, execution: null, input: {},
+  artifacts: [], history: [interruption()], ...extra,
+});
+
+function makeStore(tasks) {
+  const byId = new Map(tasks.map(t => [t.id, structuredClone(t)]));
+  return {
+    byId, incidents: [], planningRequests: [],
+    listTasks(projectId, { states } = {}) {
+      const all = [...byId.values()].filter(t => t.projectId === projectId);
+      return states ? all.filter(t => states.includes(t.state)) : all;
+    },
+    getTask(id) { return byId.get(id) ?? null; },
+    updateTask(id, version, patch) {
+      const next = { ...byId.get(id), ...patch, version: byId.get(id).version + 1 };
+      byId.set(id, next);
+      return next;
+    },
+    appendTaskHistory(id, version, entry, updated) {
+      const base = updated ?? byId.get(id);
+      const next = {
+        ...base,
+        history: [...(base.history ?? []), entry],
+        version: byId.get(id).version + 1,
+      };
+      byId.set(id, next);
+      return next;
+    },
+    recordIncident(incident) { this.incidents.push(incident); },
+    enqueuePlanningRequest(req) { this.planningRequests.push(req); },
+  };
 }
 
-function blockedDeliveryTask(store, projectId, id = 'T-blocked') {
-  store.createTask({
-    taskKind: 'MILESTONE_TASK', id, projectId, stage: 'developer', state: 'SYSTEM_BLOCKED',
+function makeSupervisor(store, { poll, starter } = {}) {
+  const calls = [];
+  const start = starter ?? (async ({ task, attemptId }) => {
+    calls.push({ taskId: task.id, attemptId });
+    return { provider: 'fake', externalId: `run-${calls.length}` };
   });
-  const task = store.getTask(id);
-  store.appendTaskHistory(id, task.version, {
-    type: 'SYSTEM_INTERRUPTION', role: 'developer', failure: FAILURE,
-    consumeAttempt: true, at: '2026-11-04T18:00:05.000Z',
-  }, { execution: null });
-  return store.getTask(id);
+  const supervisor = new V2Supervisor({
+    store,
+    providers: { get: () => ({ poll: poll ?? (async () => ({ state: 'RUNNING' })) }) },
+    resources: { release() {}, claim: () => true, recover() {} },
+    startDiagnosisSession: start,
+  });
+  return { supervisor, calls };
 }
 
-test('systemIncidentFromHistory: last interruption wins, empty history degrades', () => {
-  const task = { stage: 'tester', history: [
-    { type: 'SYSTEM_INTERRUPTION', failure: 'first', role: 'developer', consumeAttempt: true, at: 't1' },
-    { type: 'ROLE_RESULT', outcome: 'PASS' },
-    { type: 'SYSTEM_INTERRUPTION', failure: 'last', role: 'tester', consumeAttempt: false, at: 't2' },
-  ] };
-  assert.deepEqual(systemIncidentFromHistory(task), {
-    code: 'SYSTEM_BLOCKED', failure: 'last', role: 'tester', consumeAttempt: false, at: 't2',
+function seedResult(store, taskId, entry) {
+  const task = store.getTask(taskId);
+  store.appendTaskHistory(taskId, task.version, {
+    type: 'ROLE_RESULT', source: 'role_result_tool', role: 'project_debugger',
+    attemptId: task.diagnosisRun.attemptId, summary: 'diagnosed', ...entry,
   });
-  assert.deepEqual(systemIncidentFromHistory({ stage: 'developer', history: [] }), {
-    code: 'SYSTEM_BLOCKED', failure: null, role: 'developer', at: null,
+}
+
+test('systemIncidentFromHistory reads the latest interruption', () => {
+  const task = { stage: 'developer', history: [interruption('first'), interruption('second')] };
+  const incident = systemIncidentFromHistory(task);
+  assert.equal(incident.failure, 'second');
+  assert.equal(incident.code, 'SYSTEM_BLOCKED');
+  assert.equal(systemIncidentFromHistory({ stage: 'pm', history: [] }).failure, null);
+});
+
+test('autoCarryExhausted counts carried routes and resets on recovery', () => {
+  const route = { type: 'DEBUGGER_ROUTE', autoCarried: true };
+  assert.equal(autoCarryExhausted({ history: [route] }), false);
+  assert.equal(autoCarryExhausted({ history: [route, route] }), true);
+  assert.equal(autoCarryExhausted({ history: [route, route, { type: 'SYSTEM_RECOVERY' }] }), false);
+});
+
+test('diagnosis gate lifecycle on the blocked task history', () => {
+  const gate = { type: 'SYSTEM_DIAGNOSIS' };
+  const decided = { type: 'HUMAN_DECISION' };
+  const recovered = { type: 'SYSTEM_RECOVERY' };
+  assert.equal(diagnosisGateOpen({ history: [gate] }), true);
+  assert.equal(diagnosisDecidedAwaitingResume({ history: [gate] }), false);
+  assert.equal(diagnosisGateOpen({ history: [gate, decided] }), false);
+  assert.equal(diagnosisDecidedAwaitingResume({ history: [gate, decided] }), true);
+  assert.equal(diagnosisDecidedAwaitingResume({ history: [gate, decided, recovered] }), false);
+});
+
+test('diagnosisAttemptsExhausted bounds verdict-less session deaths', () => {
+  const attempt = { type: 'SYSTEM_DIAGNOSIS_ATTEMPT' };
+  assert.equal(diagnosisAttemptsExhausted({ history: [attempt, attempt] }), false);
+  assert.equal(diagnosisAttemptsExhausted({ history: [attempt, attempt, attempt] }), true);
+  assert.equal(
+    diagnosisAttemptsExhausted({ history: [attempt, attempt, attempt, { type: 'DEBUGGER_ROUTE' }, attempt] }),
+    false,
+  );
+});
+
+test('supervisor starts a debugger session on the blocked task itself and creates no task', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor, calls } = makeSupervisor(store);
+  await supervisor.audit('p');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].taskId, 't1');
+  const task = store.getTask('t1');
+  assert.equal(task.diagnosisRun.externalId, 'run-1');
+  assert.ok(task.history.some(e => e.type === 'SYSTEM_DIAGNOSIS_STARTED'));
+  // No diagnostic task was minted: the store still holds exactly the
+  // blocked task, and nothing in it is a DIAGNOSTIC task.
+  assert.equal(store.listTasks('p').length, 1);
+  assert.equal(store.listTasks('p').filter(t => t.taskKind === 'DIAGNOSTIC').length, 0);
+});
+
+test('at most one diagnosis session is active in a project', async () => {
+  const store = makeStore([blockedTask('t1'), blockedTask('t2')]);
+  const { supervisor, calls } = makeSupervisor(store);
+  await supervisor.audit('p');
+  await supervisor.audit('p');
+  assert.equal(calls.length, 1);
+  assert.ok(store.getTask('t1').diagnosisRun);
+  assert.equal(store.getTask('t2').diagnosisRun, undefined);
+});
+
+test('a live diagnosis run is polled and left alone', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor, calls } = makeSupervisor(store, {
+    poll: async () => ({ state: 'RUNNING' }),
   });
+  await supervisor.audit('p');
+  await supervisor.audit('p');
+  assert.equal(calls.length, 1);
+  assert.equal(store.getTask('t1').diagnosisRun.externalId, 'run-1');
+  assert.equal(store.getTask('t1').state, 'SYSTEM_BLOCKED');
 });
 
-test('ensure creates one diagnostic task for a system-blocked delivery task', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag' });
-    blockedDeliveryTask(store, 'P-diag');
-    const first = ensureSystemBlockDiagnosis(store, 'P-diag');
-    assert.equal(first.failures.length, 0);
-    assert.equal(first.created.length, 1);
-    const diagnosis = store.getTask('debug:T-blocked:1');
-    assert.ok(diagnosis);
-    assert.equal(diagnosis.taskKind, 'DIAGNOSTIC');
-    assert.equal(diagnosis.stage, 'project_debugger');
-    assert.equal(diagnosis.state, 'READY');
-    assert.equal(diagnosis.input.blockedTaskId, 'T-blocked');
-    assert.equal(diagnosis.input.systemIncident.code, 'SYSTEM_BLOCKED');
-    assert.equal(diagnosis.input.systemIncident.failure, FAILURE);
-    // Idempotent while the diagnosis is active.
-    const second = ensureSystemBlockDiagnosis(store, 'P-diag');
-    assert.equal(second.created.length, 0);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('an open operator gate occupies the diagnosis slot', async () => {
+  const gated = blockedTask('t1', {
+    history: [interruption(), { type: 'SYSTEM_DIAGNOSIS', diagnosis: 'SYSTEM_RUNTIME_FAILURE' }],
+  });
+  const store = makeStore([gated, blockedTask('t2')]);
+  const { supervisor, calls } = makeSupervisor(store);
+  await supervisor.audit('p');
+  assert.equal(calls.length, 0);
 });
 
-test('ensure sequences a fresh diagnosis after the previous one completed', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag2' });
-    blockedDeliveryTask(store, 'P-diag2');
-    ensureSystemBlockDiagnosis(store, 'P-diag2');
-    const done = store.getTask('debug:T-blocked:1');
-    store.updateTask(done.id, done.version, { state: 'DONE' });
-    const again = ensureSystemBlockDiagnosis(store, 'P-diag2');
-    assert.equal(again.created.length, 1);
-    assert.ok(store.getTask('debug:T-blocked:2'));
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('a decided gate starts no session until the recovery lands', async () => {
+  const decided = blockedTask('t1', {
+    history: [
+      interruption(),
+      { type: 'SYSTEM_DIAGNOSIS', diagnosis: 'SYSTEM_RUNTIME_FAILURE' },
+      { type: 'HUMAN_DECISION', decision: 'approved' },
+    ],
+  });
+  const store = makeStore([decided]);
+  const { supervisor, calls } = makeSupervisor(store);
+  await supervisor.audit('p');
+  assert.equal(calls.length, 0);
 });
 
-test('ensure covers planning tasks but skips debugger-stage delivery tasks and unblocked tasks', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag3' });
-    store.createTask({ taskKind: 'PLANNING', id: 'T-plan', projectId: 'P-diag3', stage: 'tech_lead', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag3', input: { purpose: 'PLANNER_DECOMPOSE' } });
-    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-dbg', projectId: 'P-diag3', stage: 'project_debugger', state: 'SYSTEM_BLOCKED' });
-    store.createTask({ taskKind: 'MILESTONE_TASK', id: 'T-ready', projectId: 'P-diag3', stage: 'developer', state: 'READY' });
-    const { created, failures } = ensureSystemBlockDiagnosis(store, 'P-diag3');
-    assert.equal(failures.length, 0);
-    assert.equal(created.length, 1);
-    const diagnosis = store.getTask('debug:T-plan:1');
-    assert.ok(diagnosis);
-    assert.equal(diagnosis.input.blockedTaskKind, 'PLANNING');
-    assert.equal(diagnosis.input.blockedTaskPurpose, 'PLANNER_DECOMPOSE');
-    assert.equal(store.getTask('debug:T-dbg:1'), null);
-    assert.equal(store.getTask('debug:T-ready:1'), null);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('a RETRY_WITH_GUIDANCE verdict routes the blocked task onward', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor } = makeSupervisor(store, {
+    poll: async () => ({ state: 'COMPLETED' }),
+  });
+  await supervisor.audit('p');
+  seedResult(store, 't1', { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'check the provider config' } });
+  await supervisor.audit('p');
+  const task = store.getTask('t1');
+  assert.equal(task.state, 'READY');
+  assert.equal(task.stage, 'developer');
+  assert.equal(task.diagnosisRun, null);
+  const route = task.history.find(e => e.type === 'DEBUGGER_ROUTE');
+  assert.equal(route.diagnosis, 'RETRY_WITH_GUIDANCE');
+  assert.equal(route.guidance, 'check the provider config');
+  assert.equal(route.source, 'system_block_diagnosis');
 });
 
-test('ensure diagnoses a planning task parked in the debugger stage by its own terminal diagnosis', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag6' });
-    store.createTask({ taskKind: 'PLANNING', id: 'T-gate', projectId: 'P-diag6', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag6', input: { purpose: 'PLANNER_FINAL_VALIDATE' } });
-    const task = store.getTask('T-gate');
-    store.appendTaskHistory('T-gate', task.version, {
-      type: 'PLAN_DEBUGGER_DIAGNOSIS', outcome: 'SYSTEM_RUNTIME_FAILURE', at: '2026-11-15T21:38:54.000Z',
-    }, { execution: null });
-    const { created, failures } = ensureSystemBlockDiagnosis(store, 'P-diag6');
-    assert.equal(failures.length, 0);
-    assert.equal(created.length, 1);
-    const diagnosis = store.getTask('debug:T-gate:1');
-    assert.ok(diagnosis);
-    assert.equal(diagnosis.input.blockedTaskKind, 'PLANNING');
-    assert.equal(diagnosis.input.blockedTaskPurpose, 'PLANNER_FINAL_VALIDATE');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('an auto-carried runtime verdict retries the task without a gate', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor } = makeSupervisor(store, {
+    poll: async () => ({ state: 'COMPLETED' }),
+  });
+  await supervisor.audit('p');
+  seedResult(store, 't1', { outcome: 'SYSTEM_RUNTIME_FAILURE', result: { reason: 'daemon restarted' } });
+  await supervisor.audit('p');
+  const task = store.getTask('t1');
+  assert.equal(task.state, 'READY');
+  const route = task.history.find(e => e.type === 'DEBUGGER_ROUTE');
+  assert.equal(route.autoCarried, true);
+  assert.equal(task.history.some(e => e.type === 'SYSTEM_DIAGNOSIS'), false);
 });
 
-test('ensure stops diagnosing a planning task once auto-carries are exhausted', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag7' });
-    store.createTask({ taskKind: 'PLANNING', id: 'T-loop', projectId: 'P-diag7', stage: 'plan_validator', state: 'SYSTEM_BLOCKED', flowId: 'planner:P-diag7', input: { purpose: 'PLANNER_VALIDATE' } });
-    const carried = {
-      type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'plan_validator',
-      diagnosis: 'SYSTEM_RUNTIME_FAILURE', autoCarried: true, at: '2026-11-15T21:40:00.000Z',
-    };
-    let task = store.getTask('T-loop');
-    store.appendTaskHistory('T-loop', task.version, carried, { execution: null });
-    task = store.getTask('T-loop');
-    store.appendTaskHistory('T-loop', task.version, carried, { execution: null });
-    const { created } = ensureSystemBlockDiagnosis(store, 'P-diag7');
-    assert.equal(created.length, 0);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('an operator-required verdict parks the gate on the blocked task itself', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor, calls } = makeSupervisor(store, {
+    poll: async () => ({ state: 'COMPLETED' }),
+  });
+  await supervisor.audit('p');
+  seedResult(store, 't1', {
+    outcome: 'SYSTEM_RUNTIME_FAILURE',
+    result: { operatorRequired: true, reason: 'runtime policy is broken' },
+  });
+  await supervisor.audit('p');
+  const task = store.getTask('t1');
+  assert.equal(task.state, 'SYSTEM_BLOCKED');
+  assert.equal(task.diagnosisRun, null);
+  const gate = task.history.find(e => e.type === 'SYSTEM_DIAGNOSIS');
+  assert.ok(gate);
+  assert.equal(gate.diagnosis, 'SYSTEM_RUNTIME_FAILURE');
+  assert.ok(Array.isArray(gate.questions) && gate.questions.length > 0);
+  // The project waits at the human gate, and no new session starts
+  // while the gate is open.
+  assert.equal(deriveProjectExecutionState({ tasks: store.listTasks('p') }), 'NEEDS_HUMAN');
+  await supervisor.audit('p');
+  assert.equal(calls.length, 1);
 });
 
-test('ensure stops creating diagnoses once auto-carries are exhausted, until an operator recovery', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag5' });
-    blockedDeliveryTask(store, 'P-diag5');
-    const carried = {
-      type: 'DEBUGGER_ROUTE', role: 'project_debugger', route: 'developer',
-      diagnosis: 'SYSTEM_RUNTIME_FAILURE', autoCarried: true, at: '2026-11-04T18:05:00.000Z',
-    };
-    let task = store.getTask('T-blocked');
-    store.appendTaskHistory(task.id, task.version, carried, { execution: null });
-    task = store.getTask('T-blocked');
-    store.appendTaskHistory(task.id, task.version, carried, { execution: null });
-    const exhausted = ensureSystemBlockDiagnosis(store, 'P-diag5');
-    assert.equal(exhausted.created.length, 0);
-    task = store.getTask('T-blocked');
-    store.appendTaskHistory(task.id, task.version, {
-      type: 'SYSTEM_RECOVERY', role: 'developer', reason: 'MANUAL_RESUME', at: '2026-11-04T18:10:00.000Z',
-    }, { execution: null });
-    const afterRecovery = ensureSystemBlockDiagnosis(store, 'P-diag5');
-    assert.equal(afterRecovery.created.length, 1);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('a planning task verdict routes it back to its planning stage', async () => {
+  const planning = blockedTask('p1', {
+    taskKind: 'PLANNING', stage: 'project_debugger', input: { purpose: 'PLANNER_TASK_SPLIT' },
+  });
+  const store = makeStore([planning]);
+  const { supervisor } = makeSupervisor(store, {
+    poll: async () => ({ state: 'COMPLETED' }),
+  });
+  await supervisor.audit('p');
+  seedResult(store, 'p1', { outcome: 'RETRY_WITH_GUIDANCE', result: { guidance: 'split it' } });
+  await supervisor.audit('p');
+  const task = store.getTask('p1');
+  assert.equal(task.state, 'READY');
+  assert.equal(task.stage, 'tech_lead');
 });
 
-test('supervisor audit sweeps a diagnostic task for a pre-blocked delivery task', async () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag4' });
-    blockedDeliveryTask(store, 'P-diag4');
-    const supervisor = new V2Supervisor({
-      store, providers: new ProviderRegistry(), resources: new ResourcePool({}),
-    });
-    await supervisor.audit('P-diag4');
-    const diagnosis = store.getTask('debug:T-blocked:1');
-    assert.ok(diagnosis);
-    assert.equal(diagnosis.state, 'READY');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('sessions that die without a verdict are retried, then the supervisor stops', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor, calls } = makeSupervisor(store, {
+    poll: async () => ({ state: 'LOST', failure: 'session gone' }),
+  });
+  for (let i = 0; i < 7; i += 1) await supervisor.audit('p');
+  assert.equal(calls.length, 3);
+  const task = store.getTask('t1');
+  assert.equal(task.state, 'SYSTEM_BLOCKED');
+  assert.equal(task.diagnosisRun, null);
+  assert.equal(task.history.filter(e => e.type === 'SYSTEM_DIAGNOSIS_ATTEMPT').length, 3);
+  // With no live session and the attempt budget spent, the project halts.
+  assert.equal(deriveProjectExecutionState({ tasks: store.listTasks('p') }), 'FAILED');
 });
 
-test('ensure does not duplicate a diagnosis parked at the human gate', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag8' });
-    blockedDeliveryTask(store, 'P-diag8');
-    ensureSystemBlockDiagnosis(store, 'P-diag8');
-    const diagnosis = store.getTask('debug:T-blocked:1');
-    store.updateTask(diagnosis.id, diagnosis.version, { state: 'NEEDS_HUMAN' });
-    const again = ensureSystemBlockDiagnosis(store, 'P-diag8');
-    assert.equal(again.created.length, 0);
-    assert.equal(store.getTask('debug:T-blocked:2'), null);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('ensure holds off after a human decision until the operator resume lands', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag9' });
-    blockedDeliveryTask(store, 'P-diag9');
-    ensureSystemBlockDiagnosis(store, 'P-diag9');
-    const diagnosis = store.getTask('debug:T-blocked:1');
-    store.appendTaskHistory(diagnosis.id, diagnosis.version, {
-      type: 'HUMAN_DECISION', decision: 'Runtime repaired; resume.', at: '2026-11-04T18:20:00.000Z',
-    }, { state: 'DONE', execution: null });
-    // The decision closed the gate; re-diagnosing before the resume
-    // would repeat the verdict and suppress the FAILED state it needs.
-    const held = ensureSystemBlockDiagnosis(store, 'P-diag9');
-    assert.equal(held.created.length, 0);
-    // Once the resume recovers the task and it blocks again, the sweep
-    // is free to diagnose the new block.
-    let task = store.getTask('T-blocked');
-    store.appendTaskHistory(task.id, task.version, {
-      type: 'SYSTEM_RECOVERY', role: 'developer', reason: 'MANUAL_RESUME_AFTER_FAILED_PROJECT',
-      at: '2026-11-04T18:25:00.000Z',
-    }, { execution: null });
-    const afterRecovery = ensureSystemBlockDiagnosis(store, 'P-diag9');
-    assert.equal(afterRecovery.created.length, 1);
-    assert.ok(store.getTask('debug:T-blocked:2'));
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('ensure caps active diagnoses at one project-wide and reports the rest as excess', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag-cap' });
-    blockedDeliveryTask(store, 'P-diag-cap', 'T-blocked-a');
-    blockedDeliveryTask(store, 'P-diag-cap', 'T-blocked-b');
-    const first = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
-    assert.equal(first.failures.length, 0);
-    assert.equal(first.created.length, 1);
-    assert.equal(first.excess.length, 1);
-    const served = first.created[0].input.blockedTaskId;
-    const denied = first.excess[0];
-    assert.notEqual(denied.taskId, served);
-    assert.equal(denied.activeDiagnosisId, first.created[0].id);
-    assert.match(denied.failure, /CONCURRENT_DIAGNOSIS_LIMIT/);
-    // Still capped on the next sweep while the diagnosis is active.
-    const second = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
-    assert.equal(second.created.length, 0);
-    assert.equal(second.excess.length, 1);
-    assert.equal(second.excess[0].taskId, denied.taskId);
-    // The active diagnosis completes and routes its task out of the
-    // block; the denied task then gets a diagnosis of its own.
-    const active = store.getTask(first.created[0].id);
-    store.updateTask(active.id, active.version, { state: 'DONE' });
-    const servedTask = store.getTask(served);
-    store.updateTask(servedTask.id, servedTask.version, { state: 'READY' });
-    const third = ensureSystemBlockDiagnosis(store, 'P-diag-cap');
-    assert.equal(third.created.length, 1);
-    assert.equal(third.created[0].input.blockedTaskId, denied.taskId);
-    assert.equal(third.excess.length, 0);
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('ensure counts a diagnosis parked at the human gate against the one-at-a-time limit', () => {
-  const { dir, file } = tempDb();
-  try {
-    const store = new SQLiteV2Store(file);
-    store.createProject({ id: 'P-diag-cap-nh' });
-    blockedDeliveryTask(store, 'P-diag-cap-nh', 'T-blocked-a');
-    const first = ensureSystemBlockDiagnosis(store, 'P-diag-cap-nh');
-    const gate = store.getTask(first.created[0].id);
-    store.updateTask(gate.id, gate.version, { state: 'NEEDS_HUMAN' });
-    blockedDeliveryTask(store, 'P-diag-cap-nh', 'T-blocked-b');
-    const second = ensureSystemBlockDiagnosis(store, 'P-diag-cap-nh');
-    assert.equal(second.created.length, 0);
-    assert.equal(second.excess.length, 1);
-    assert.equal(second.excess[0].taskId, 'T-blocked-b');
-    store.close();
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('a provider-terminal verdict rides on the poll status itself', async () => {
+  const store = makeStore([blockedTask('t1')]);
+  const { supervisor } = makeSupervisor(store, {
+    poll: async () => ({
+      state: 'COMPLETED', outcome: 'RETRY_WITH_GUIDANCE', summary: 'diagnosed',
+      result: { guidance: 'restart the session host' },
+    }),
+  });
+  await supervisor.audit('p');
+  await supervisor.audit('p');
+  const task = store.getTask('t1');
+  assert.equal(task.state, 'READY');
+  const route = task.history.find(e => e.type === 'DEBUGGER_ROUTE');
+  assert.equal(route.guidance, 'restart the session host');
 });

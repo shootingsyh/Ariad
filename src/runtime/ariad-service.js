@@ -8,7 +8,7 @@ import { SQLiteV2Store } from '../v2/sqlite-store.js';
 import { VersionedTaskStore } from '../v2/versioned-task-store.js';
 import { VersionedStore } from '../v2/versioned-store.js';
 import { docsRegimeAdopted, requirementsStatus } from '../v2/project-docs.js';
-import { isAdhocAnalysis } from '../v2/control-task-policy.js';
+import { isAdhocAnalysis, openDiagnosisGate } from '../v2/control-task-policy.js';
 import { requireCompleteRoleModels, requiredModelRoles } from './role-models.js';
 import { MemoryCurator } from './memory-curator.js';
 import { StandaloneProjectRuntime } from './standalone-project-runtime.js';
@@ -169,7 +169,7 @@ export class AriadService {
             resultReady: tasks.filter(task => task.state === 'RESULT_READY').length,
             done: tasks.filter(task => task.state === 'DONE').length,
             blocked: tasks.filter(task => task.state === 'SYSTEM_BLOCKED').length,
-            needsHuman: tasks.filter(task => task.state === 'NEEDS_HUMAN').length,
+            needsHuman: tasks.filter(task => task.state === 'NEEDS_HUMAN' || openDiagnosisGate(task)).length,
           },
         };
       } finally {

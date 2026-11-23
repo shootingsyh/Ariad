@@ -170,9 +170,10 @@ test('mock project system block is diagnosed and the debugger requeues it', asyn
   try {
     await service.ensureRunning(project.id);
 
-    // The system-blocked task no longer parks the project at FAILED: a
-    // diagnostic task picks it up and the debugger's runtime-failure
-    // verdict is auto-carried back into a developer work order.
+    // The system-blocked task no longer parks the project at FAILED:
+    // the supervisor runs a debugger session on it directly and the
+    // runtime-failure verdict is auto-carried back into a developer
+    // work order.
     const diagnosed = await reconcileUntil(
       service,
       project.id,
@@ -187,14 +188,19 @@ test('mock project system block is diagnosed and the debugger requeues it', asyn
     assert.equal(route.diagnosis, 'SYSTEM_RUNTIME_FAILURE');
     assert.equal(route.route, 'developer');
 
+    // Supervisor-managed diagnosis (2026-11-22): no diagnostic task is
+    // created - the session ran on the blocked task itself, its start
+    // is recorded in the task's own history, and the verdict cleared
+    // the run handle when it landed.
     const diagStore = new SQLiteV2Store(project.stateDb);
-    const diagnosis = diagStore.getTask('debug:T-mock:1');
+    assert.equal(diagStore.getTask('debug:T-mock:1') ?? null, null);
+    assert.equal(
+      diagStore.listTasks(project.id).filter(task => task.taskKind === 'DIAGNOSTIC').length,
+      0,
+    );
     diagStore.close();
-    assert.ok(diagnosis);
-    assert.equal(diagnosis.taskKind, 'DIAGNOSTIC');
-    assert.equal(diagnosis.state, 'DONE');
-    assert.equal(diagnosis.input.blockedTaskId, 'T-mock');
-    assert.equal(diagnosis.input.systemIncident.failure, 'UnexpectedModelBehavior: Exceeded maximum output retries (1)');
+    assert.ok(diagnosed.task.history.some(entry => entry.type === 'SYSTEM_DIAGNOSIS_STARTED'));
+    assert.equal(diagnosed.task.diagnosisRun, null);
 
     const recovered = await reconcileUntil(
       service,

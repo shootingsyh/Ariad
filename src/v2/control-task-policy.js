@@ -68,6 +68,19 @@ export function isDiagnosisEligible(task) {
   return true;
 }
 
+// The operator gate a system-block diagnosis leaves on the blocked task
+// itself: a SYSTEM_DIAGNOSIS history entry that no HUMAN_DECISION (or
+// later recovery) has answered yet. While it is open the project waits
+// at NEEDS_HUMAN and the supervisor starts no new diagnosis session.
+export function openDiagnosisGate(task) {
+  let gate = null;
+  for (const entry of task?.history ?? []) {
+    if (entry?.type === 'SYSTEM_DIAGNOSIS') gate = entry;
+    if (entry?.type === 'HUMAN_DECISION' || entry?.type === 'SYSTEM_RECOVERY') gate = null;
+  }
+  return gate;
+}
+
 // Delivery work lives in one of two parallel queues: the milestone task
 // tree (default) or the standalone issue queue (triaged fixes). The
 // scheduler drains the issue queue first.

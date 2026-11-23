@@ -1,8 +1,12 @@
-import { isAdhocAnalysis } from './control-task-policy.js';
+import { isAdhocAnalysis, isDiagnosisEligible, openDiagnosisGate } from './control-task-policy.js';
 import { applyTaskEvent } from './state-machine.js';
 import { isNonretryableProviderFailure } from './nonretryable-provider-failure.js';
 import { isTransientProviderFailure, transientRetryCooldownMs, transientWindowExpired } from './transient-provider-failure.js';
-import { ensureSystemBlockDiagnosis } from './system-block-diagnosis.js';
+import {
+  autoCarryExhausted, diagnosisAttemptsExhausted, diagnosisDecidedAwaitingResume,
+  diagnosisTaskView, systemIncidentFromHistory,
+} from './system-block-diagnosis.js';
+import { milestoneResultTransition } from './milestone-result-executor.js';
 
 function submittedRoleToolResult(task, attemptId = task?.execution?.attemptId) {
   if (!attemptId) return null;
@@ -26,11 +30,12 @@ function systemFailureCount(task) {
 }
 
 export class V2Supervisor {
-  constructor({ store, providers, resources, incidentSink = null }) {
+  constructor({ store, providers, resources, incidentSink = null, startDiagnosisSession = null }) {
     this.store = store;
     this.providers = providers;
     this.resources = resources;
     this.incidentSink = incidentSink;
+    this.startDiagnosisSession = startDiagnosisSession;
   }
 
   recover(projectId) {
@@ -209,20 +214,167 @@ export class V2Supervisor {
       this.resources.release(task.id);
     }
     // A blocked task cannot escalate itself into the project debugger,
-    // so park a diagnostic task next to it; the debugger's verdict routes
-    // the blocked task onward (or parks it for the operator) through the
-    // existing diagnosis transitions.
+    // so the supervisor runs the debugger session itself (see
+    // system-block-diagnosis.js): it polls the one active diagnosis
+    // run, applies its verdict to the blocked task, and starts a
+    // session for the next blocked task when the slot is free.
     try {
-      const { failures, excess } = ensureSystemBlockDiagnosis(this.store, projectId);
-      for (const failure of failures) {
-        const blockedTask = this.store.getTask(failure.taskId);
-        if (blockedTask) incidents.push(await this.#incident(blockedTask, failure.failure));
-      }
-      for (const entry of excess ?? []) {
-        const blockedTask = this.store.getTask(entry.taskId);
-        if (blockedTask) incidents.push(await this.#incident(blockedTask, entry.failure));
-      }
+      await this.#diagnosisSweep(projectId, incidents);
     } catch { /* the diagnosis sweep must never break supervision; the next audit retries */ }
     return { incidents };
+  }
+
+  // ---- system-block diagnosis (supervisor-managed sessions) ----
+
+  async #diagnosisSweep(projectId, incidents) {
+    const running = this.store.listTasks(projectId)
+      .find(task => task.diagnosisRun?.externalId);
+    if (running) {
+      const slotFreed = await this.#pollDiagnosisRun(running, incidents);
+      if (!slotFreed) return;
+    }
+    if (!this.startDiagnosisSession) return;
+    // An open operator gate occupies the diagnosis slot: the operator
+    // is already being asked about one block.
+    if (this.store.listTasks(projectId).some(task => openDiagnosisGate(task))) return;
+    for (const task of this.store.listTasks(projectId)) {
+      if (!isDiagnosisEligible(task)) continue;
+      if (diagnosisDecidedAwaitingResume(task)) continue;
+      if (autoCarryExhausted(task)) continue;
+      if (diagnosisAttemptsExhausted(task)) continue;
+      await this.#startDiagnosisRun(projectId, task, incidents);
+      return;
+    }
+  }
+
+  async #startDiagnosisRun(projectId, task, incidents) {
+    const started = (task.history ?? [])
+      .filter(entry => entry?.type === 'SYSTEM_DIAGNOSIS_STARTED').length;
+    const attemptId = `${projectId}:${task.id}:project_debugger:diagnosis:${started + 1}`;
+    let handle;
+    try {
+      handle = await this.startDiagnosisSession({ projectId, task, attemptId });
+    } catch (error) {
+      incidents.push(await this.#incident(task, `SYSTEM_DIAGNOSIS_START_FAILED: ${error?.message ?? String(error)}`));
+      return;
+    }
+    if (!handle?.externalId) {
+      incidents.push(await this.#incident(task, 'SYSTEM_DIAGNOSIS_START_FAILED: provider returned no run handle'));
+      return;
+    }
+    const current = this.store.getTask(task.id);
+    this.store.appendTaskHistory(task.id, current.version, {
+      type: 'SYSTEM_DIAGNOSIS_STARTED', role: 'project_debugger', attemptId,
+      at: new Date().toISOString(),
+    }, {
+      ...current,
+      diagnosisRun: {
+        provider: handle.provider, externalId: handle.externalId, attemptId,
+        completionProtocol: handle.completionProtocol ?? 'provider_terminal',
+        startedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  // Returns true when the diagnosis slot is free afterwards (the run
+  // was moot or stale and its handle was dropped); false while a live
+  // session owns the slot or a verdict was applied this audit.
+  async #pollDiagnosisRun(task, incidents) {
+    const run = task.diagnosisRun;
+    const incidentAt = systemIncidentFromHistory(task).at;
+    // The block went away under the session (an operator resume
+    // recovered the task), or the task blocked again after this run
+    // started: the run's verdict would describe a stale block. Drop
+    // the handle; a fresh session is started for the current block.
+    if (task.state !== 'SYSTEM_BLOCKED' || (incidentAt && run.startedAt && incidentAt > run.startedAt)) {
+      const current = this.store.getTask(task.id);
+      this.store.updateTask(task.id, current.version, { ...current, diagnosisRun: null });
+      this.resources.release(task.id);
+      return true;
+    }
+    let status;
+    try {
+      const provider = this.providers.get(run.provider);
+      status = await provider.poll({ externalId: run.externalId, taskId: task.id });
+    } catch (error) {
+      status = { state: 'LOST', failure: error?.message ?? String(error) };
+    }
+    if (status?.state === 'RUNNING' || status?.state === 'QUEUED') return false;
+    if (status?.state === 'COMPLETED') {
+      const fresh = this.store.getTask(task.id);
+      const submitted = [...(fresh?.history ?? [])].reverse().find(entry =>
+        entry?.type === 'ROLE_RESULT' && entry?.source === 'role_result_tool'
+        && entry?.attemptId === run.attemptId && entry?.role === 'project_debugger');
+      if (submitted) {
+        await this.#applyDiagnosisVerdict(fresh, submitted, incidents);
+        return false;
+      }
+      if (run.completionProtocol === 'role_result_tool') {
+        await this.#diagnosisRunDied(fresh ?? task, 'MISSING_ROLE_RESULT_TOOL', incidents);
+        return false;
+      }
+      // Provider-terminal completion: the verdict rides on the poll
+      // status itself, exactly as it does for a dispatched task.
+      await this.#applyDiagnosisVerdict(fresh ?? task, {
+        outcome: status.outcome ?? 'PASS',
+        summary: status.summary ?? '',
+        result: status.result ?? null,
+      }, incidents);
+      return false;
+    }
+    await this.#diagnosisRunDied(task, status?.failure ?? status?.state ?? 'EXECUTION_LOST', incidents);
+    return false;
+  }
+
+  async #diagnosisRunDied(task, failure, incidents) {
+    incidents.push(await this.#incident(task, failure));
+    const current = this.store.getTask(task.id);
+    this.store.appendTaskHistory(task.id, current.version, {
+      type: 'SYSTEM_DIAGNOSIS_ATTEMPT', role: 'project_debugger',
+      attemptId: task.diagnosisRun?.attemptId ?? null, failure,
+      at: new Date().toISOString(),
+    }, { ...current, diagnosisRun: null });
+    this.resources.release(task.id);
+  }
+
+  async #applyDiagnosisVerdict(task, result, incidents) {
+    let next = null;
+    try {
+      next = milestoneResultTransition(diagnosisTaskView(task), result, {});
+    } catch { next = null; }
+    const current = this.store.getTask(task.id);
+    if (next?.blockedRoute) {
+      const route = next.blockedRoute;
+      const updated = this.store.appendTaskHistory(task.id, current.version, route.history, {
+        ...current, ...(route.patch ?? {}), diagnosisRun: null,
+      });
+      if (next.planningRequest) {
+        this.store.enqueuePlanningRequest({
+          id: next.planningRequest.id, projectId: task.projectId,
+          request: next.planningRequest.request,
+        });
+      }
+      this.resources.release(task.id);
+      return updated;
+    }
+    if (next?.transitionHistory?.type === 'SYSTEM_DIAGNOSIS') {
+      // Operator-required verdict: the gate entry lands on the blocked
+      // task itself. It stays SYSTEM_BLOCKED; the project waits at
+      // NEEDS_HUMAN until the operator decides, and the resume after
+      // the decision performs the recovery.
+      const updated = this.store.appendTaskHistory(task.id, current.version, next.transitionHistory, {
+        ...current, diagnosisRun: null,
+      });
+      this.resources.release(task.id);
+      return updated;
+    }
+    incidents.push(await this.#incident(task, 'SYSTEM_DIAGNOSIS_UNROUTABLE_VERDICT'));
+    const updated = this.store.appendTaskHistory(task.id, current.version, {
+      type: 'SYSTEM_DIAGNOSIS_ATTEMPT', role: 'project_debugger',
+      attemptId: task.diagnosisRun?.attemptId ?? null, failure: 'SYSTEM_DIAGNOSIS_UNROUTABLE_VERDICT',
+      at: new Date().toISOString(),
+    }, { ...current, diagnosisRun: null });
+    this.resources.release(task.id);
+    return updated;
   }
 }

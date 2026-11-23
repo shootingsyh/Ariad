@@ -40,16 +40,16 @@ test('project state is derived by ordered declarative rules', () => {
   assert.equal(
     deriveProjectExecutionState({
       tasks: [
-        { ...delivery('SYSTEM_BLOCKED'), id: 'blocked' },
-        {
-          taskKind: 'DIAGNOSTIC',
-          stage: 'project_debugger',
-          state: 'WORKING',
-          input: { blockedTaskId: 'blocked' },
-        },
+        { ...delivery('SYSTEM_BLOCKED'), id: 'blocked', diagnosisRun: { provider: 'p', externalId: 'run-1' } },
       ],
     }),
     'RUNNING',
+  );
+  assert.equal(
+    deriveProjectExecutionState({
+      tasks: [{ ...delivery('SYSTEM_BLOCKED'), history: [{ type: 'SYSTEM_DIAGNOSIS' }] }],
+    }),
+    'NEEDS_HUMAN',
   );
   assert.equal(
     deriveProjectExecutionState({ tasks: [delivery('NEEDS_HUMAN')] }),
@@ -78,36 +78,31 @@ test('project control lifecycle is declared rather than hard-coded in service me
 });
 
 test('project halts when a blocked task has no diagnosis of its own', () => {
-  const delivery = (state, id) => ({ taskKind: 'MILESTONE_TASK', state, id });
-  const diagnosis = (blockedTaskId, state = 'WORKING') => ({
-    taskKind: 'DIAGNOSTIC',
-    stage: 'project_debugger',
-    state,
-    input: { blockedTaskId },
-  });
-  // One covered block: still running.
+  const delivery = (state, id, extra = {}) => ({ taskKind: 'MILESTONE_TASK', state, id, ...extra });
+  const run = { provider: 'p', externalId: 'run-1' };
+  // One covered block (the supervisor's diagnosis session is live on
+  // it): still running.
   assert.equal(
     deriveProjectExecutionState({
-      tasks: [delivery('SYSTEM_BLOCKED', 'a'), diagnosis('a')],
+      tasks: [delivery('SYSTEM_BLOCKED', 'a', { diagnosisRun: run })],
     }),
     'RUNNING',
   );
-  // A second blocked task without its own diagnosis halts the project,
-  // even though another task's diagnosis is active.
+  // A second blocked task without a diagnosis of its own halts the
+  // project, even though another task's diagnosis is active.
   assert.equal(
     deriveProjectExecutionState({
-      tasks: [delivery('SYSTEM_BLOCKED', 'a'), delivery('SYSTEM_BLOCKED', 'b'), diagnosis('a')],
+      tasks: [delivery('SYSTEM_BLOCKED', 'a', { diagnosisRun: run }), delivery('SYSTEM_BLOCKED', 'b')],
     }),
     'FAILED',
   );
-  // A blocked task that is not diagnosis-eligible (a diagnostic task
-  // itself) neither needs coverage nor provides it.
+  // A blocked task that is not diagnosis-eligible (a delivery task
+  // parked in the debugger stage) neither needs coverage nor provides it.
   assert.equal(
     deriveProjectExecutionState({
       tasks: [
-        delivery('SYSTEM_BLOCKED', 'a'),
-        { taskKind: 'DIAGNOSTIC', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', id: 'debug:a:1', input: { blockedTaskId: 'a' } },
-        diagnosis('a'),
+        delivery('SYSTEM_BLOCKED', 'a', { diagnosisRun: run }),
+        { taskKind: 'FEATURE_TASK', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', id: 't-deb' },
       ],
     }),
     'RUNNING',
@@ -116,7 +111,7 @@ test('project halts when a blocked task has no diagnosis of its own', () => {
   // covered it runs, uncovered it halts.
   const planning = { taskKind: 'PLANNING', stage: 'project_debugger', state: 'SYSTEM_BLOCKED', id: 'p1' };
   assert.equal(
-    deriveProjectExecutionState({ tasks: [planning, diagnosis('p1')] }),
+    deriveProjectExecutionState({ tasks: [{ ...planning, diagnosisRun: run }] }),
     'RUNNING',
   );
   assert.equal(
