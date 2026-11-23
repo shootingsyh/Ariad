@@ -88,6 +88,12 @@ function consecutiveRoleFailures(task, role) {
 // Test Engineer prompt states the rule). The validator enforces the tier
 // mechanically; what counts as a journey in a given project is that
 // project's own business, not platform knowledge.
+//
+// Owner refinement (2026-11-22): the gate classifies declared execution,
+// not scenario shape. A case may follow the full journey's shape on any
+// task when everything outside the task's own scope is mocked and the
+// real application process is never launched for those parts; executed
+// that way the case is scope-limited and carries no 'full-journey' tag.
 export const FULL_JOURNEY_SCOPE_TAG = 'full-journey';
 
 export function isFullJourneyCase(c) {
@@ -127,7 +133,7 @@ export function testPlanValidationIssues(task, result) {
   }
   if (!isIntegrationOrReleaseTask(task) && !debuggerAuthorizedFullJourney(task)) {
     for (const [i, c] of cases.entries()) {
-      if (isFullJourneyCase(c)) errors.push('testCases[' + i + '] (' + (c.id ?? c.entry) + ') is a full-journey case; full journeys are reserved for integration/release tasks - replace it with scope-limited cases for the surfaces this task changes');
+      if (isFullJourneyCase(c)) errors.push('testCases[' + i + '] (' + (c.id ?? c.entry) + ') is a full-journey case; full journeys are reserved for integration/release tasks - replace it with scope-limited cases for the surfaces this task changes, or keep the journey shape with everything outside its own scope mocked (the real application process is never launched for out-of-scope surfaces) and drop the reserved full-journey tag');
     }
   }
   for (const id of criteria) if (!cases.some(c => c?.covers?.includes(id))) errors.push('missing coverage for ' + id);
