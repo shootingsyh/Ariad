@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { plannerFlowTasks, usesThreePassFlow } from '../src/v2/planner-flow.js';
 import { planningPhaseSkipIds } from '../src/v2/planning-helpers.js';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
-import { plannerPrompt, criticPrompt } from '../src/v2/role-prompts.js';
+import { plannerPrompt, criticPrompt, planPayloadFromStore } from '../src/v2/role-prompts.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 import { recordRequirementsApproval } from '../src/v2/project-docs.js';
@@ -105,14 +105,17 @@ function phaseValidatorSetup({ withDraft = true } = {}) {
   return { dir, prepared };
 }
 
-test('phase validator passes a contracts-only draft and carries the contracts', async () => {
-  const { prepared } = phaseValidatorSetup();
+test('phase validator passes a contracts-only draft; the payload assembled from the store carries the contracts', async () => {
+  const { dir, prepared } = phaseValidatorSetup();
   const out = await prepared.execute();
   assert.equal(out.outcome, 'PASS');
   assert.equal(out.result.plan.source, 'db-draft-features');
   assert.equal(out.result.plan.phase, 'functional');
   assert.equal(out.result.plan.contractCount, 1);
-  assert.equal(out.result.plan.contracts[0].id, 'feature.alpha');
+  // The result archived in the task carries no copy of the contracts.
+  assert.equal(out.result.plan.contracts, undefined);
+  const payload = planPayloadFromStore({ filePath: join(dir, 'state.db') }, { workspace: dir }, out.result);
+  assert.equal(payload.contracts[0].id, 'feature.alpha');
 });
 
 test('phase validator fails when no draft is open', async () => {

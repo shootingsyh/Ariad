@@ -103,9 +103,9 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
 }
 
 import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
-import { authorshipResultsForBatch, derivedSweepAccounting } from './sweep-accounting.js';
+import { authorshipResultsForBatch } from './sweep-accounting.js';
 import { evaluateIssueAssignment } from './issue-assignment.js';
-import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
+import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt, planPayloadFromStore } from './role-prompts.js';
 export function createDefaultV2Roles({
   store,
   providerId = 'pi-agent-session',
@@ -925,8 +925,7 @@ export function createDefaultV2Roles({
             version: draft.version,
             phase,
             contractCount: contracts.length,
-            contracts,
-            tasks: draftStore.listSpecTasks(draft.version),
+            taskCount: draftStore.listSpecTasks(draft.version).length,
             taskErrorsDeferredToTaskPass: allErrors.filter(e => !isContractError(e)),
           },
           error: null,
@@ -1511,18 +1510,17 @@ export function createDefaultV2Roles({
               // through to the on-disk planner bundle below - it is a
               // legacy medium for versioned projects and a stale bundle
               // must not fail a valid draft (SRPG, 2026-10-31).
-              // The PASS payload carries the full draft content (tasks
-              // and contracts), because the critic and the PM judge
-              // this plan from the validator result: with only a stub
-              // {version, taskCount} both of them accepted a plan they
-              // could not see (SRPG art iteration, 2026-11-01).
+              // The PASS result carries only a stub (owner design,
+              // 2026-11-22): the plan lives in the versioned store,
+              // and the critic / PM payload builders load the full
+              // draft from the store by version at dispatch time
+              // (planPayloadFromStore) - reviewers still judge the
+              // complete draft text (the 2026-11-01 lesson), but no
+              // validator task archives another copy of the tree.
               const planDiff = draftStore.diffDraft();
-              const baseTaskIds = draft.base_version != null
-                ? draftStore.listSpecTasks(draft.base_version).map(t => t.id).filter(Boolean)
-                : [];
               return {
                 outcome: 'PASS',
-                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftTasks.length, tasks: draftTasks, contracts: draftContracts, diff: planDiff, sweepAccounting: { derived: true, entries: derivedSweepAccounting(planDiff, baseTaskIds) } }, error: null, errorCode: null },
+                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftTasks.length, diffHash: planDiff.diffHash }, error: null, errorCode: null },
               };
             } finally {
               draftStore.close();
@@ -1642,12 +1640,16 @@ export function createDefaultV2Roles({
           priorReview = null;
         }
         // Plan diff + derived sweep accounting (owner design,
-        // 2026-11-22): both ride in the validator result's plan - the
-        // system-computed diff of the draft against prod and the
-        // accounting derived from it. The PM judges and approves the
-        // diff itself; its hash is what the acceptance must name.
-        const planDiff = validation?.plan?.diff ?? null;
-        const sweepAccounting = validation?.plan?.sweepAccounting ?? null;
+        // 2026-11-22): assembled from the store by
+        // planPayloadFromStore - the validator result names the
+        // draft version and the diffHash; the system-computed diff
+        // of the draft against prod and the accounting derived from
+        // it are loaded from the draft itself. The PM judges and
+        // approves the diff itself; its hash is what the acceptance
+        // must name.
+        const planPayload = planPayloadFromStore(store, project, validation);
+        const planDiff = planPayload?.diff ?? null;
+        const sweepAccounting = planPayload?.sweepAccounting ?? null;
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain only through requirements-authoring tasks - never by editing it during a plan review; the runtime denies such writes, and a requirements change counts only once an authoring task has folded it in and the human has approved the new hash. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
@@ -1677,7 +1679,7 @@ export function createDefaultV2Roles({
           JSON.stringify({
             project: { id: project.id, spec: project.spec ?? null, mode: project.mode ?? 'NEW', sourcePath: project.sourcePath ?? null },
             takeover,
-            plan: validation?.plan ?? null,
+            plan: planPayload,
             sweepAccounting,
             planDiff,
             humanDecision,

@@ -2,8 +2,10 @@
  * extracted from default-roles.js. */
 import { acceptanceCriterionIds } from './acceptance.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { flowTasks, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
+import { VersionedStore } from './versioned-store.js';
+import { derivedSweepAccounting } from './sweep-accounting.js';
 
 export const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
@@ -103,6 +105,50 @@ export function plannerPublicPlan(plan) {
   if (!plan) return null;
   const { executionTasks, ...publicPlan } = plan;
   return publicPlan;
+}
+
+// Plan payload for reviewers (owner design, 2026-11-22): validator
+// results carry only a stub (version + diffHash) - the plan itself
+// lives in the versioned store, never archived inside a task. Prompt
+// builders assemble the full payload (tasks, contracts, diff, derived
+// sweep accounting) from the store at dispatch time, so the critic
+// and the PM still judge the complete draft text (the 2026-11-01
+// lesson) without every validator task warehousing another copy of
+// the tree. Legacy results that still embed the plan are used as-is.
+export function planPayloadFromStore(store, project, validation) {
+  const stub = validation?.plan ?? null;
+  if (!stub) return null;
+  if (Array.isArray(stub.tasks)) return stub;
+  if (stub.version == null) return stub;
+  let vs = null;
+  try {
+    vs = new VersionedStore(store.filePath ?? join(project.workspace, '.ariad', 'state.db'));
+    const tasks = vs.listSpecTasks(stub.version);
+    const contracts = vs.listSpecContracts(stub.version);
+    let diff = null;
+    let sweepAccounting = null;
+    const open = vs.getOpenDraft();
+    if (open?.version === stub.version) {
+      diff = vs.diffDraft();
+      const baseTaskIds = open.base_version != null
+        ? vs.listSpecTasks(open.base_version).map(t => t.id).filter(Boolean)
+        : [];
+      sweepAccounting = { derived: true, entries: derivedSweepAccounting(diff, baseTaskIds) };
+    }
+    return {
+      ...stub,
+      taskCount: tasks.length,
+      contractCount: contracts.length,
+      tasks,
+      contracts,
+      diff,
+      sweepAccounting,
+    };
+  } catch {
+    return stub;
+  } finally {
+    vs?.close();
+  }
 }
 
 // SWEEP ACCOUNTING mandate, shared verbatim by the decompose and
@@ -280,7 +326,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
         project: { id: project.id, spec: project.spec ?? null },
         phase,
         validation,
-        plan: validation?.plan ?? null,
+        plan: planPayloadFromStore(store, project, validation),
       }, null, 2),
     ].join('\n\n');
   }
@@ -320,12 +366,14 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     batchRequests = [];
     techLeadResults = [];
   }
-  // Plan diff + derived sweep accounting ride in the validator
-  // result's plan (owner design, 2026-11-22): computed by the system
-  // from the draft's actual diff against prod, never authored by the
-  // Tech Lead, so they cannot be lost between passes.
-  const sweepAccounting = validation?.plan?.sweepAccounting ?? null;
-  const planDiff = validation?.plan?.diff ?? null;
+  // Plan diff + derived sweep accounting are assembled from the
+  // store by planPayloadFromStore (owner design, 2026-11-22): the
+  // validator result names the draft version and the diffHash; the
+  // payload content is loaded from the draft itself, never archived
+  // in the validator task, so it cannot be lost between passes.
+  const planPayload = planPayloadFromStore(store, project, validation);
+  const sweepAccounting = planPayload?.sweepAccounting ?? null;
+  const planDiff = planPayload?.diff ?? null;
   return [
     'You are Ariad\'s delivery-plan critic.',
     'BATCH SCOPE: You are reviewing exactly one planning batch. Its requests and the Tech Lead results for it are included below as batchRequests and techLeadResults.',
@@ -349,7 +397,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       techLeadResults,
       sweepAccounting,
       planDiff,
-      plan: validation?.plan ?? null,
+      plan: planPayload,
     }, null, 2),
   ].join('\n\n');
 }

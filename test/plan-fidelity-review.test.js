@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDefaultV2Roles } from '../src/v2/default-roles.js';
-import { criticPrompt } from '../src/v2/role-prompts.js';
+import { criticPrompt, planPayloadFromStore } from '../src/v2/role-prompts.js';
 import { buildTechLeadPrompt } from '../src/v2/tech-lead-prompt.js';
 import { VersionedStore } from '../src/v2/versioned-store.js';
 
@@ -14,7 +14,11 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 // action sets became "no placeholders"), and neither the critic nor
 // the PM could have caught it from what the system showed them:
 //  - the DB-first validator PASS payload was a stub {source, version,
-//    taskCount}, so neither reviewer ever saw a task spec;
+//    taskCount}, so neither reviewer ever saw a task spec (fixed at the
+//    time by embedding the plan in the result; superseded 2026-11-22 -
+//    the reviewers' payloads are now assembled from the store by
+//    version at dispatch time and the result is a stub again by
+//    design: the plan lives in the store, not inside the task);
 //  - the PM review prompt judged coverage from summaries and carried
 //    no fidelity standard (production vs verification, enumeration
 //    completeness, art/ux markings);
@@ -22,7 +26,7 @@ import { VersionedStore } from '../src/v2/versioned-store.js';
 //    an auditable per-requirement disposition in the plan result.
 // These tests pin all three fixes.
 
-test('plan validator PASS payload carries the full draft tasks and contracts', async () => {
+test('plan validator PASS result is a stub; the reviewer payload is assembled from the store', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-planpayload-'));
   const dbPath = join(dir, 'state.db');
   const vs = new VersionedStore(dbPath);
@@ -42,11 +46,20 @@ test('plan validator PASS payload carries the full draft tasks and contracts', a
   assert.equal(out.outcome, 'PASS');
   assert.equal(out.result.plan.source, 'db-draft');
   assert.equal(out.result.plan.taskCount, 1);
-  assert.equal(out.result.plan.tasks.length, 1);
-  assert.equal(out.result.plan.tasks[0].id, 'a-task');
-  assert.match(out.result.plan.tasks[0].acceptanceCriteria[0], /all three variants/);
-  assert.equal(out.result.plan.contracts.length, 1);
-  assert.equal(out.result.plan.contracts[0].id, 'feature.alpha');
+  assert.equal(typeof out.result.plan.diffHash, 'string');
+  // The result archived in the task carries no copy of the tree.
+  assert.equal(out.result.plan.tasks, undefined);
+  assert.equal(out.result.plan.contracts, undefined);
+  // Reviewers still judge the full draft: their payload is assembled
+  // from the store by the version the stub names.
+  const payload = planPayloadFromStore(store, { workspace: dir }, out.result);
+  assert.equal(payload.tasks.length, 1);
+  assert.equal(payload.tasks[0].id, 'a-task');
+  assert.match(payload.tasks[0].acceptanceCriteria[0], /all three variants/);
+  assert.equal(payload.contracts.length, 1);
+  assert.equal(payload.contracts[0].id, 'feature.alpha');
+  assert.equal(payload.diff.diffHash, out.result.plan.diffHash);
+  assert.equal(payload.sweepAccounting.derived, true);
 });
 
 test('PM plan-review prompt carries the fidelity standard', () => {
