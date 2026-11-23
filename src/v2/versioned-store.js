@@ -66,6 +66,14 @@ function fail(code, message, details = undefined) {
   throw err;
 }
 
+
+// Patchable spec fields for patchTask / patchContract (owner design,
+// 2026-11-22): a patch names only the fields it changes, validated
+// against this schema; every other field of the existing spec is
+// preserved by construction.
+export const TASK_PATCH_FIELDS = ['taskKind', 'title', 'parentId', 'dependsOn', 'interfaceIds', 'featureId', 'intent', 'acceptanceCriteria', 'acceptanceCriterionIds', 'testStrategy', 'issueRefs', 'art', 'ux', 'executionMode', 'logicalRefs', 'milestoneId', 'unifiedTaskSchemaVersion'];
+export const CONTRACT_PATCH_FIELDS = ['nodeType', 'parentId', 'behavior', 'exportedInterfaces', 'integrationScenarios'];
+
 export class VersionedStore {
   constructor(file) {
     if (!file) throw new Error('VersionedStore requires a database file path');
@@ -481,23 +489,53 @@ export class VersionedStore {
     try {
       ops.forEach((op, index) => {
         const at = `ops[${index}]`;
-        if (!op || typeof op !== 'object' || !op.op) fail('BAD_OP', `${at}: op.op is required - each ops entry must be an object like {"op":"upsertTask","task":{...}}, {"op":"removeTask","taskId":"..."}, {"op":"upsertContract","contract":{...}} or {"op":"removeContract","contractId":"..."}`);
-        if (op.op === 'upsertTask') {
+        if (!op || typeof op !== 'object' || !op.op) fail('BAD_OP', `${at}: op.op is required - each ops entry must be an object like {\"op\":\"createTask\",\"task\":{...}}, {\"op\":\"patchTask\",\"taskId\":\"...\",\"set\":{...}}, {\"op\":\"removeTask\",\"taskId\":\"...\"}, {\"op\":\"createContract\",\"contract\":{...}}, {\"op\":\"patchContract\",\"contractId\":\"...\",\"set\":{...}} or {\"op\":\"removeContract\",\"contractId\":\"...\"}`);
+        if (op.op === 'createTask' || op.op === 'upsertTask') {
+          // Whole-object writes are CREATE-ONLY (owner design, 2026-11-22):
+          // replacing an existing spec wholesale silently dropped fields
+          // the author did not resend (SRPG v238 lost five tasks'
+          // acceptanceCriteria this way). Changes go through patchTask.
           const task = op.task ?? {};
           const { id, ...spec } = task;
-          if (!id) fail('BAD_OP', `${at}: upsertTask requires task.id`);
-          this.db.prepare('INSERT INTO spec_tasks (version, task_id, spec_json) VALUES (?, ?, ?) ON CONFLICT(version, task_id) DO UPDATE SET spec_json = excluded.spec_json')
+          if (!id) fail('BAD_OP', `${at}: ${op.op} requires task.id`);
+          const exists = this.db.prepare('SELECT 1 FROM spec_tasks WHERE version = ? AND task_id = ?').get(version, id);
+          if (exists) fail('BAD_OP', `${at}: ${op.op} ${id} already exists in the draft - whole-object replacement is not offered; use patchTask with only the fields you change`);
+          this.db.prepare('INSERT INTO spec_tasks (version, task_id, spec_json) VALUES (?, ?, ?)')
             .run(version, id, encode(spec));
+        } else if (op.op === 'patchTask') {
+          const taskId = op.taskId ?? op.task?.id;
+          if (!taskId) fail('BAD_OP', `${at}: patchTask requires taskId`);
+          const set = op.set ?? {};
+          const badFields = Object.keys(set).filter(k => !TASK_PATCH_FIELDS.includes(k));
+          if (badFields.length) fail('BAD_OP', `${at}: patchTask cannot set ${badFields.join(', ')} - patchable task fields: ${TASK_PATCH_FIELDS.join(', ')}`);
+          const row = this.db.prepare('SELECT spec_json FROM spec_tasks WHERE version = ? AND task_id = ?').get(version, taskId);
+          if (!row) fail('BAD_OP', `${at}: patchTask ${taskId} is not in the draft - use createTask for a new task`);
+          const merged = { ...decode(row.spec_json), ...structuredClone(set) };
+          this.db.prepare('UPDATE spec_tasks SET spec_json = ? WHERE version = ? AND task_id = ?')
+            .run(encode(merged), version, taskId);
         } else if (op.op === 'removeTask') {
           if (!op.taskId) fail('BAD_OP', `${at}: removeTask requires taskId`);
           this.db.prepare('DELETE FROM spec_tasks WHERE version = ? AND task_id = ?').run(version, op.taskId);
-        } else if (op.op === 'upsertContract') {
+        } else if (op.op === 'createContract' || op.op === 'upsertContract') {
           const contract = op.contract ?? {};
           const cid = contract.id ?? contract.nodeId;
-          if (!cid) fail('BAD_OP', `${at}: upsertContract requires contract.id`);
+          if (!cid) fail('BAD_OP', `${at}: ${op.op} requires contract.id`);
+          const exists = this.db.prepare('SELECT 1 FROM spec_contracts WHERE version = ? AND contract_id = ?').get(version, cid);
+          if (exists) fail('BAD_OP', `${at}: ${op.op} ${cid} already exists in the draft - whole-object replacement is not offered; use patchContract with only the fields you change`);
           const { id, ...rest } = contract;
-          this.db.prepare('INSERT INTO spec_contracts (version, contract_id, contract_json) VALUES (?, ?, ?) ON CONFLICT(version, contract_id) DO UPDATE SET contract_json = excluded.contract_json')
+          this.db.prepare('INSERT INTO spec_contracts (version, contract_id, contract_json) VALUES (?, ?, ?)')
             .run(version, cid, encode(rest));
+        } else if (op.op === 'patchContract') {
+          const contractId = op.contractId ?? op.contract?.id ?? op.contract?.nodeId;
+          if (!contractId) fail('BAD_OP', `${at}: patchContract requires contractId`);
+          const set = op.set ?? {};
+          const badFields = Object.keys(set).filter(k => !CONTRACT_PATCH_FIELDS.includes(k));
+          if (badFields.length) fail('BAD_OP', `${at}: patchContract cannot set ${badFields.join(', ')} - patchable contract fields: ${CONTRACT_PATCH_FIELDS.join(', ')}`);
+          const row = this.db.prepare('SELECT contract_json FROM spec_contracts WHERE version = ? AND contract_id = ?').get(version, contractId);
+          if (!row) fail('BAD_OP', `${at}: patchContract ${contractId} is not in the draft - use createContract for a new contract`);
+          const merged = { ...decode(row.contract_json), ...structuredClone(set) };
+          this.db.prepare('UPDATE spec_contracts SET contract_json = ? WHERE version = ? AND contract_id = ?')
+            .run(encode(merged), version, contractId);
         } else if (op.op === 'removeContract') {
           if (!op.contractId) fail('BAD_OP', `${at}: removeContract requires contractId`);
           this.db.prepare('DELETE FROM spec_contracts WHERE version = ? AND contract_id = ?').run(version, op.contractId);
@@ -536,6 +574,38 @@ export class VersionedStore {
       else if (changed(baseContracts.get(id), c)) out.contracts.changed.push(id);
     }
     for (const id of baseContracts.keys()) if (!draftContracts.has(id)) out.contracts.removed.push(id);
+    // Field-level detail + a canonical hash of the delta (owner design,
+    // 2026-11-22): reviewers approve THIS diff, and promotion re-computes
+    // the hash - what was approved must be what lands. Values are capped
+    // so review payloads stay readable; the hash covers the capped form,
+    // which is exactly what reviewers see.
+    const capVal = (v) => {
+      if (v === undefined) return null;
+      const s = stableStringify(v);
+      return s.length > 400 ? s.slice(0, 400) + '...' : JSON.parse(s);
+    };
+    const fieldDetail = (baseMap, draftMap, changedIds) => {
+      const detail = {};
+      for (const id of changedIds) {
+        const a = baseMap.get(id) ?? {};
+        const b = draftMap.get(id) ?? {};
+        const fields = {};
+        for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+          if (stableStringify(a[k]) !== stableStringify(b[k])) fields[k] = { from: capVal(a[k]), to: capVal(b[k]) };
+        }
+        detail[id] = fields;
+      }
+      return detail;
+    };
+    out.detail = {
+      tasks: fieldDetail(baseTasks, draftTasks, out.tasks.changed),
+      contracts: fieldDetail(baseContracts, draftContracts, out.contracts.changed),
+    };
+    out.diffHash = sha256(stableStringify({
+      baseVersion: base,
+      tasks: { added: [...out.tasks.added].sort(), removed: [...out.tasks.removed].sort(), changed: out.detail.tasks },
+      contracts: { added: [...out.contracts.added].sort(), removed: [...out.contracts.removed].sort(), changed: out.detail.contracts },
+    }));
     out.protectedTasks = this.protectedTasks();
     out.promotionBlockers = this.promotionBlockers(draft.version);
     return out;

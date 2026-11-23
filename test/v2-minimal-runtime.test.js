@@ -1091,6 +1091,7 @@ test('accepted takeover plan pauses at human review until a human decision is re
     vs.createDraft({ createdBy: 'tl' });
     const draft = vs.getOpenDraft();
     vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Recovered root', intent: 'Finish the recovered project.', acceptanceCriteria: ['Recovered project is freshly verified.'], testStrategy: 'Run current acceptance checks.' } }]);
+    const takeDiffHash = vs.diffDraft().diffHash;
     vs.close();
     store.enqueuePlanningRequest({
       id: 'restore-1',
@@ -1147,7 +1148,7 @@ test('accepted takeover plan pauses at human review until a human decision is re
     });
     const second = definitions.pm.transition({
       task: pmTask,
-      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true } },
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Human accepted reconstruction.', startDelivery: true, approvedDiffHash: takeDiffHash } },
     });
     assert.equal(second.state, 'DONE');
     assert.equal(second.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED');
@@ -1177,6 +1178,7 @@ test('later technical replans in an approved TAKEOVER project do not create anot
     vs.createDraft({ createdBy: 'tl' });
     const draft = vs.getOpenDraft();
     vs.applyTreeOps([{ op: 'upsertTask', task: { id: 'ROOT', taskKind: 'MILESTONE_TASK', title: 'Recovered root', intent: 'Finish the recovered project.', acceptanceCriteria: ['Project still completes.'], testStrategy: 'Run project E2E.' } }]);
+    const replanDiffHash = vs.diffDraft().diffHash;
     vs.close();
     store.enqueuePlanningRequest({
       id: 'replan-1',
@@ -1224,7 +1226,7 @@ test('later technical replans in an approved TAKEOVER project do not create anot
 
     const landed = definitions.pm.transition({
       task: pmTask,
-      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true } },
+      result: { outcome: 'PLAN_ACCEPTED', result: { reason: 'Technical split is sound.', startDelivery: true, approvedDiffHash: replanDiffHash } },
     });
     assert.equal(landed.state, 'DONE');
     assert.equal(landed.transitionHistory.type, 'VERSIONED_TREE_PLAN_ACCEPTED');

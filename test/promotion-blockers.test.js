@@ -40,9 +40,9 @@ function seedProtected(store) {
 function breakAllThree(store) {
   store.createDraft({ createdBy: 'tl' });
   store.applyTreeOps([
-    { op: 'upsertTask', task: { ...TASK_A, executionMode: 'staged' } },
+    { op: 'patchTask', taskId: TASK_A.id, set: { executionMode: 'staged' } },
     { op: 'removeTask', taskId: 'b-task' },
-    { op: 'upsertTask', task: { ...TASK_C, dependsOn: ['a-task'] } },
+    { op: 'patchTask', taskId: TASK_C.id, set: { dependsOn: ['a-task'] } },
   ]);
 }
 
@@ -84,9 +84,9 @@ test('promote with several violations fails once, naming every task', (t) => {
   });
   // Fixing all blockers in one pass lets the same draft promote.
   store.applyTreeOps([
-    { op: 'upsertTask', task: TASK_A },
+    { op: 'patchTask', taskId: TASK_A.id, set: { executionMode: TASK_A.executionMode } },
     { op: 'upsertTask', task: TASK_B },
-    { op: 'upsertTask', task: TASK_C },
+    { op: 'patchTask', taskId: TASK_C.id, set: { dependsOn: TASK_C.dependsOn } },
   ]);
   assert.deepEqual(store.diffDraft().promotionBlockers, []);
   const res = store.promoteDraft({ approvedBy: 'pm' });
@@ -97,7 +97,7 @@ test('a single violation keeps its legacy code and gains the violations list', (
   const store = makeStore(t);
   seedProtected(store);
   store.createDraft({ createdBy: 'tl' });
-  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_A, executionMode: 'staged' } }]);
+  store.applyTreeOps([{ op: 'patchTask', taskId: TASK_A.id, set: { executionMode: 'staged' } }]);
   assert.throws(() => store.promoteDraft({ approvedBy: 'pm' }), (e) => {
     assert.equal(e.code, 'REVISE_COMPLETED_TASK');
     assert.equal(e.details.taskId, 'a-task');
@@ -163,7 +163,7 @@ test('promotion cannot change the gate signature of a started task', (t) => {
   const store = makeStore(t);
   seedStarted(store);
   store.createDraft({ createdBy: 'tl' });
-  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_D, dependsOn: ['e-task'] } }]);
+  store.applyTreeOps([{ op: 'patchTask', taskId: TASK_D.id, set: { dependsOn: ['e-task'] } }]);
   const blockers = store.diffDraft().promotionBlockers;
   assert.equal(blockers.length, 1);
   assert.equal(blockers[0].id, 'd-task');

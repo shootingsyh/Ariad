@@ -87,9 +87,13 @@ test('draft edits are isolated until promotion; diff reports the change', (t) =>
   const store = makeStore(t);
   seedV1(store);
   store.createDraft({ createdBy: 'tl' });
-  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_A, title: 'Alpha task v2' } }]);
+  store.applyTreeOps([{ op: 'patchTask', taskId: TASK_A.id, set: { title: 'Alpha task v2' } }]);
   const diff = store.diffDraft();
   assert.deepEqual(diff.tasks.changed, ['a-task']);
+  assert.equal(diff.detail.tasks['a-task'].title.to, 'Alpha task v2');
+  assert.equal(diff.detail.tasks['a-task'].title.from, 'Alpha task');
+  assert.equal(typeof diff.diffHash, 'string');
+  assert.equal(diff.diffHash.length, 64);
   assert.equal(store.getEffectiveTask('a-task').title, 'Alpha task');
   store.promoteDraft({ approvedBy: 'pm' });
   assert.equal(store.getProdVersion(), 2);
@@ -143,7 +147,7 @@ test('promotion guards: DONE gate signature frozen, text drift allowed, in-fligh
   store.upsertExecTask({ id: 'b-task', projectId: 'proj', state: 'WORKING', stage: 'developer', history: [] });
   // structural change to DONE task -> blocked
   store.createDraft({ createdBy: 'tl' });
-  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_A, executionMode: 'staged' } }]);
+  store.applyTreeOps([{ op: 'patchTask', taskId: TASK_A.id, set: { executionMode: 'staged' } }]);
   assert.throws(() => store.promoteDraft({ approvedBy: 'pm' }), (e) => e.code === 'REVISE_COMPLETED_TASK');
   store.discardDraft();
   // removing in-flight task -> defer
@@ -153,7 +157,7 @@ test('promotion guards: DONE gate signature frozen, text drift allowed, in-fligh
   store.discardDraft();
   // text-only drift on DONE task -> allowed
   store.createDraft({ createdBy: 'tl' });
-  store.applyTreeOps([{ op: 'upsertTask', task: { ...TASK_A, title: 'Alpha task (renamed)' } }]);
+  store.applyTreeOps([{ op: 'patchTask', taskId: TASK_A.id, set: { title: 'Alpha task (renamed)' } }]);
   const res = store.promoteDraft({ approvedBy: 'pm' });
   assert.equal(store.getProdVersion(), res.version);
   const eff = store.getEffectiveTask('a-task');
@@ -222,7 +226,7 @@ test('feature tree: contract parentId builds a hierarchy and rejects dangling pa
   );
   assert.throws(
     () => store.applyTreeOps([
-      { op: 'upsertContract', contract: { id: 'feature.sys', nodeType: 'feature', parentId: 'feature.sys.sub', exportedInterfaces: [], integrationScenarios: [{ id: 's', acceptanceCriteria: ['sys holds'] }] } },
+      { op: 'patchContract', contractId: 'feature.sys', set: { parentId: 'feature.sys.sub' } },
     ]),
     err => err.code === 'TREE_VALIDATION_FAILED' && err.details.some(d => d.includes('feature tree cycle')),
   );

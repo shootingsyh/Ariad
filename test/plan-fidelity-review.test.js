@@ -196,17 +196,22 @@ test('PM plan review inherits prior objections and all human decisions as payloa
   assert.match(prompt, /never re-demand it/);
 });
 
-test('PM plan-review payload carries the batch sweep accounting verbatim (2026-11-15)', () => {
+test('PM plan-review payload carries the derived sweep accounting and the plan diff (2026-11-22)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ariad-pmsweep-'));
-  const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [] } } }] };
-  const decompose = { id: 'planner:b9:decompose', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', flowId: 'flow-1', input: { planningBatchId: 'b9', purpose: 'PLANNER_DECOMPOSE' }, history: [{ type: 'ROLE_RESULT', role: 'tech_lead', outcome: 'PLANNED', summary: 'drafted', result: { sweepAccounting: ['T-battle - REVISED: reworded', 'T-combat - NON-CONFLICTING.'] } }] };
+  const derived = { derived: true, entries: [{ taskId: 'T-battle', disposition: 'revised', reason: 'fields changed: acceptanceCriteria' }, { taskId: 'T-combat', disposition: 'non-conflicting', reason: 'unchanged by the draft' }] };
+  const diff = { draftVersion: 8, baseVersion: 7, diffHash: 'abc123hash', tasks: { added: [], removed: [], changed: ['T-battle'] }, contracts: { added: [], removed: [], changed: [] }, detail: { tasks: { 'T-battle': { acceptanceCriteria: { from: ['old'], to: ['new'] } } }, contracts: {} } };
+  const fv = { id: 'fv1', projectId: 'P', taskKind: 'PLANNING', stage: 'plan_validator', flowId: 'flow-1', history: [{ type: 'ROLE_RESULT', role: 'plan_validator', outcome: 'PASS', result: { plan: { tasks: [], sweepAccounting: derived, diff } } }] };
+  const decompose = { id: 'planner:b9:decompose', projectId: 'P', taskKind: 'PLANNING', stage: 'tech_lead', flowId: 'flow-1', input: { planningBatchId: 'b9', purpose: 'PLANNER_DECOMPOSE' }, history: [{ type: 'ROLE_RESULT', role: 'tech_lead', outcome: 'PLANNED', summary: 'drafted', result: {} }] };
   const pmTask = { id: 'pr9', projectId: 'P', taskKind: 'PLANNING', stage: 'pm', flowId: 'flow-1', dependsOn: ['fv1'], history: [], input: { purpose: 'PLANNER_PM_REVIEW', planningBatchId: 'b9' } };
   const store = { filePath: join(dir, 'state.db'), getProject: () => ({ id: 'P', versionedTree: true, workspace: dir, goal: 'G', mode: 'STANDARD', takeoverReviewRequired: false }), updateProject: () => ({}), listTasks: () => [fv, pmTask, decompose], listAllTasks: () => [fv, pmTask, decompose], listTasksByStates: () => [fv, pmTask, decompose], listTasksByFlow: () => [fv, pmTask, decompose], listTasksByScope: () => [fv, pmTask, decompose], listPlanningRequests: () => [{ batchId: 'b9', request: { purpose: 'PM_PLAN_REVISION' } }] };
   const roles = createDefaultV2Roles({ store, workspace: dir, enqueuePlanning: () => {} });
   const prepared = roles.pm.prepare({ project: { id: 'P', workspace: dir, mode: 'STANDARD' }, task: pmTask });
   const prompt = prepared.context.v2Prompt;
   assert.match(prompt, /"sweepAccounting": \{/);
-  assert.match(prompt, /"sourceTaskId": "planner:b9:decompose"/);
-  assert.match(prompt, /T-battle - REVISED: reworded/);
-  assert.match(prompt, /do not report the accounting missing when it is present in the payload/);
+  assert.match(prompt, /"derived": true/);
+  assert.match(prompt, /"taskId": "T-battle"/);
+  assert.match(prompt, /"planDiff": \{/);
+  assert.match(prompt, /"diffHash": "abc123hash"/);
+  assert.match(prompt, /YOU APPROVE THE DIFF, NOT A SUMMARY OF IT/);
+  assert.match(prompt, /result\.approvedDiffHash must carry the payload planDiff\.diffHash verbatim/);
 });

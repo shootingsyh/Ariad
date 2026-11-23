@@ -87,7 +87,7 @@ test('a second promotion keeps exec state; nothing is ever copied into the runti
   const leaf = facade.getTask('f-1');
   facade.updateTask('f-1', leaf.version, { state: 'DONE', stage: 'reviewer' });
   seed.createDraft({ createdBy: 'tl' });
-  seed.applyTreeOps([{ op: 'upsertTask', task: { ...F, title: 'Feature leaf renamed' } }]);
+  seed.applyTreeOps([{ op: 'patchTask', taskId: F.id, set: { title: 'Feature leaf renamed' } }]);
   promoteVersionedDraft({ versionedStore: seed, approvedBy: 'pm' });
   const after = facade.getTask('f-1');
   assert.equal(after.state, 'DONE');

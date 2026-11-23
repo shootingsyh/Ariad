@@ -4,7 +4,6 @@ import { acceptanceCriterionIds } from './acceptance.js';
 import { buildTechLeadPrompt } from './tech-lead-prompt.js';
 import { resolve } from 'node:path';
 import { flowTasks, latestRoleResult, planningBatchRequests, predecessorResults } from './planning-helpers.js';
-import { authorshipResultsForBatch, batchRequiresSweepAccounting, sweepAccountingEntries, sweepAccountingRaw } from './sweep-accounting.js';
 
 export const ARTIST_PROMPT = [
   "You are Ariad's artist role.",
@@ -112,7 +111,7 @@ export function plannerPublicPlan(plan) {
 // The two copies once drifted (only the repair copy warned that the
 // accounting must sit at the result's top level), and batches 53-55
 // sank on exactly that difference.
-export const SWEEP_ACCOUNTING_MANDATE = 'SWEEP ACCOUNTING: the result must carry the complete accounting in result.sweepAccounting, at the TOP LEVEL of the result - not nested inside validationPlan or any other field. One entry for EVERY pre-existing task of the draft\'s base version - not only the ones changed in this pass - each naming the task ID with its disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and the reason. The deterministic plan validator enforces this mechanically (SWEEP_ACCOUNTING_INCOMPLETE): it reads only the batch\'s LAST Tech Lead result, so an accounting left behind by an earlier pass, or a delta naming only the tasks this pass touched, fails validation with the missing IDs named, and the batch cannot reach PM review. A separate future task that merely promises to produce the accounting later does not count as the accounting.';
+export const SWEEP_ACCOUNTING_MANDATE = 'SWEEP ACCOUNTING IS DERIVED, NOT AUTHORED: do not include a sweepAccounting in your result. The system computes the accounting from your draft\'s diff against the base version - every pre-existing task you patch is recorded revised with the fields you changed, every task you remove is recorded retired, and every task you leave untouched is recorded non-conflicting. Before submitting, run the ariad_tree_patch diff action and read it as the reviewers will: if this batch was opened to change something, that change must be visible in the diff, and no field of an existing task may drop out of it unless the batch purpose calls for exactly that.';
 
 export function plannerPrompt({ store, project, task, artifactRoot }) {
   const purpose = task.input?.purpose;
@@ -233,41 +232,21 @@ export function plannerPrompt({ store, project, task, artifactRoot }) {
   if (purpose === 'PLANNER_REPAIR') {
     const previous = predecessorResults(store, task)[0]?.result ?? null;
     const repairRevisionRequests = (task.input?.requests ?? []).filter(item => item?.request?.purpose === 'PM_PLAN_REVISION');
-    // Sweep accounting delivery (2026-11-15 fix): the EXISTING TASK
-    // SWEEP clause ships only in the decompose prompt above, so repair
-    // passes never saw the mandate - while the deterministic gate
-    // judges the batch by its LAST Tech Lead result, so a bounded
-    // repair that dropped the accounting sank the whole batch (SRPG
-    // batches 53-55). When this batch requires the accounting, state
-    // the mandate in the repair prompt itself and carry the previous
-    // result's accounting forward in the payload, so the repair
-    // updates it instead of regenerating it from scratch.
-    let sweepRequired = false;
-    let previousSweepAccounting = null;
-    try {
-      sweepRequired = batchRequiresSweepAccounting(planningBatchRequests(store, task));
-      if (sweepRequired) {
-        const authored = authorshipResultsForBatch(store, task);
-        const lastAuthored = authored[authored.length - 1];
-        previousSweepAccounting = lastAuthored ? sweepAccountingRaw(lastAuthored.result) : null;
-      }
-    } catch {
-      sweepRequired = false;
-      previousSweepAccounting = null;
-    }
+    // Sweep accounting is derived from the draft diff (2026-11-22):
+    // repair passes no longer carry an authored accounting forward -
+    // the system recomputes it from the diff at validation time.
     return [
       'You are Ariad\'s Tech Lead repair pass.',
       'Repair only the affected parts of the open database draft using the critic findings below, with ariad_tree_patch applyOps. Do not rewrite or re-emit the complete project plan.',
       'Do not add unrelated scope.',
+      SWEEP_ACCOUNTING_MANDATE,
       repairRevisionRequests.length ? [
         'VERBATIM-PROTECTED STRINGS (PM PLAN REVISION)',
         'This batch continues a PM-rejected draft. The PM revision review in this batch requests quotes required wording and lists (acceptance clauses, media and deliverable names) character-for-character. Those quoted strings are protected: never paraphrase, merge, split, rename, or drop them, and never let a critic finding rewrite them. Repair structural defects around them - malformed shells, missing parents, broken hierarchy - never through them. If a critic finding asks you to change a quoted clause or list, treat that finding as out of scope and leave the quoted text untouched.',
         JSON.stringify({ revisionRequests: repairRevisionRequests }, null, 2),
       ].join('\n\n') : null,
-      sweepRequired ? [
-        'SWEEP ACCOUNTING (MANDATORY FOR THIS BATCH - THE GATE JUDGES YOUR RESULT): ' + SWEEP_ACCOUNTING_MANDATE + ' The previous Tech Lead result\'s accounting is in the payload as previousSweepAccounting: carry it forward, updating the entries for the tasks your repair changed, and re-submit the complete list.',
-      ].join('\n\n') : null,
-      JSON.stringify({ context, critic: previous, ...(sweepRequired ? { previousSweepAccounting } : {}) }, null, 2),
+
+      JSON.stringify({ context, critic: previous }, null, 2),
       buildTechLeadPrompt({ projectContext: context, schema: null }),
     ].filter(Boolean).join('\n\n');
   }
@@ -322,12 +301,10 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     const summarize = (stage, sibling) => {
       const entry = sibling ? latestRoleResult(sibling) : null;
       if (!entry) return null;
-      const entries = sweepAccountingEntries(entry.result);
       return {
         stage,
         outcome: entry.outcome ?? null,
         summary: entry.summary ?? null,
-        ...(entries ? { sweepAccountingEntries: entries.length } : {}),
       };
     };
     techLeadResults = [
@@ -343,28 +320,16 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
     batchRequests = [];
     techLeadResults = [];
   }
-  // Review payload completeness (2026-11-15 fix): the critic is told to
-  // judge the Tech Lead's sweep disposition, but its payload carried
-  // only result summaries - the accounting itself never reached it, so
-  // critics reported it missing in batches where it existed (SRPG
-  // batch-55 critic-1, against a decompose result carrying 47 entries).
-  // Attach the batch's latest accounting verbatim, as the PM payload
-  // now does.
-  let sweepAccounting = null;
-  try {
-    const authored = authorshipResultsForBatch(store, task);
-    const lastAuthored = authored[authored.length - 1];
-    if (lastAuthored) {
-      const raw = sweepAccountingRaw(lastAuthored.result);
-      if (raw != null) sweepAccounting = { sourceTaskId: lastAuthored.taskId, accounting: raw };
-    }
-  } catch {
-    sweepAccounting = null;
-  }
+  // Plan diff + derived sweep accounting ride in the validator
+  // result's plan (owner design, 2026-11-22): computed by the system
+  // from the draft's actual diff against prod, never authored by the
+  // Tech Lead, so they cannot be lost between passes.
+  const sweepAccounting = validation?.plan?.sweepAccounting ?? null;
+  const planDiff = validation?.plan?.diff ?? null;
   return [
     'You are Ariad\'s delivery-plan critic.',
     'BATCH SCOPE: You are reviewing exactly one planning batch. Its requests and the Tech Lead results for it are included below as batchRequests and techLeadResults.',
-    'SWEEP ACCOUNTING: when this batch carries new or changed requirements, the Tech Lead\'s sweep accounting is included in the payload as sweepAccounting (verbatim, from the batch\'s latest Tech Lead result). Judge its dispositions against the draft; do not report the accounting missing when it is present in the payload.',
+    'PLAN DIFF AND SWEEP ACCOUNTING: the payload planDiff is the system-computed diff of the draft against the production version (added / removed / changed, with field-level from/to detail), and sweepAccounting is derived from that diff - every pre-existing task is accounted for by construction, so never report it missing. Judge the diff against this batch\'s purpose: a batch opened to change something whose diff does not contain the change is an ISSUE, and a change that silently drops or empties a field of an existing task (acceptanceCriteria, testStrategy, dependsOn) is an ISSUE - name the task and the field.',
     'Review what this batch produced or changed, and its consistency with the surrounding accepted plan. Properties of the pre-existing accepted plan that this batch did not create or modify are out of scope: if you notice such a concern, report it in result.observations only - never in result.issues - and do not let it change your outcome.',
     'Return ISSUES only for defects in this batch\'s own product: a wrong triage or assignment, a broken boundary or dependency change it introduced, or artifacts it wrote.',
     'Review the candidate v2 delivery plan and validator result. Focus on logical-tree quality, milestone structure, project-wide completeness, missing integration/testing responsibility, invalid milestone direction, missing dependencies, over-broad serialization, bad hierarchy, and tasks that are too large.',
@@ -383,6 +348,7 @@ export function criticPrompt({ store, project, task, artifactRoot }) {
       batchRequests,
       techLeadResults,
       sweepAccounting,
+      planDiff,
       plan: validation?.plan ?? null,
     }, null, 2),
   ].join('\n\n');

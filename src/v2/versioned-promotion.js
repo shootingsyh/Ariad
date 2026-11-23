@@ -11,7 +11,7 @@ import { persistPlanningState } from './planning-persistence.js';
 // VersionedStore.promoteDraft against the exec records. The returned
 // created/updated/obsoleted lists come from the pre-promotion draft
 // diff and describe the spec delta for the PM's summary only.
-export function promoteVersionedDraft({ versionedStore, workspace = null, approvedBy = null }) {
+export function promoteVersionedDraft({ versionedStore, workspace = null, approvedBy = null, expectedDiffHash = null }) {
   // Root-document gate (same semantics as the file-based flow): when the
   // project has adopted the docs regime (.ariad/docs exists), a version
   // may only be promoted from human-finalized requirements. PM finalizes
@@ -44,6 +44,26 @@ export function promoteVersionedDraft({ versionedStore, workspace = null, approv
     throw err;
   }
   const diff = versionedStore.diffDraft();
+  // Diff-approval guards (owner design, 2026-11-22): promotion lands
+  // exactly the diff the PM approved. An empty diff must never be
+  // promoted (SRPG batch-234 promoted an unchanged tree as if the
+  // requested change had been made); when the approval named a diff
+  // hash, a draft changed since approval is refused.
+  const diffEmpty = [diff.tasks.added, diff.tasks.removed, diff.tasks.changed, diff.contracts.added, diff.contracts.removed, diff.contracts.changed]
+    .every(list => list.length === 0);
+  if (diffEmpty && draft.base_version != null) {
+    const prodRow = versionedStore.db.prepare('SELECT requirements_hash FROM spec_versions WHERE version = ?').get(versionedStore.getProdVersion());
+    if ((draft.requirements_hash ?? null) === (prodRow?.requirements_hash ?? null)) {
+      const err = new Error('EMPTY_DIFF: the open draft changes nothing against prod (no task or contract changes, requirements unchanged) - there is nothing to promote; if this batch was opened to change the plan, the change never landed in the draft');
+      err.code = 'EMPTY_DIFF';
+      throw err;
+    }
+  }
+  if (expectedDiffHash != null && expectedDiffHash !== diff.diffHash) {
+    const err = new Error(`DIFF_CHANGED_SINCE_APPROVAL: the draft diff hash is now ${diff.diffHash} but the approval named ${expectedDiffHash} - the plan changed after approval and must be reviewed again`);
+    err.code = 'DIFF_CHANGED_SINCE_APPROVAL';
+    throw err;
+  }
   const flip = versionedStore.promoteDraft({ approvedBy });
   // Planning persistence (2026-11-03): a promotion - including the
   // promotion that accepts a planning/replan batch - persists a store
@@ -57,6 +77,7 @@ export function promoteVersionedDraft({ versionedStore, workspace = null, approv
     created: diff.tasks.added,
     updated: diff.tasks.changed,
     obsoleted: diff.tasks.removed,
+    diffHash: diff.diffHash,
     total: versionedStore.listSpecTasks(flip.version).length,
     version: flip.version,
     contentHash: flip.contentHash,

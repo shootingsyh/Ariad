@@ -1,133 +1,18 @@
-// Sweep accounting gate (owner-approved product fix, 2026-11-15).
-//
-// Since b9da159 the Tech Lead prompt mandates an EXISTING TASK SWEEP with
-// a SWEEP ACCOUNTING in the Tech Lead result whenever a planning batch
-// carries new or changed requirements, and the PM prompt checks for it
-// under PLAN FIDELITY. That mandate was prompt-only: nothing verified the
-// accounting mechanically, so Tech Lead results kept reaching PM review
-// with the accounting missing, partial, or silently dropped by a later
-// repair result - and every miss cost a full planning round (SRPG battle
-// iteration: PM_PLAN_REVISION rounds 48-52 all failed on this one point
-// before the PM escalated to a human).
-//
-// This module is the deterministic half of the rule, enforced by the
-// plan validator (see default-roles): in a requirements-changing batch,
-// the LAST completed Tech Lead authorship result (decompose, then
-// repair-1..3) must carry a sweep accounting that covers EVERY task of
-// the draft's base version. Presence and ID coverage are mechanical;
-// whether each disposition is right remains the PM's judgement.
-
-export const SWEEP_REQUIREMENT_PURPOSES = [
-  'PM_PLAN_REVISION',
-  'LOCAL_REPLAN',
-  'INITIAL_PLAN',
-  'UPDATE_DELIVERY_PLAN',
-];
+// Sweep accounting (owner design, 2026-11-22): the accounting is
+// DERIVED from the draft's diff against its base version - never
+// authored by the Tech Lead, and no longer gated on a hand-written
+// list. (History: from b9da159 to 2026-11-22 the Tech Lead had to
+// author a complete sweep accounting in its result, and the plan
+// validator rejected batches whose final Tech Lead result lacked
+// one - SWEEP_ACCOUNTING_INCOMPLETE. SRPG batch-234 showed the
+// failure mode: the accounting described the draft the Tech Lead
+// MEANT to write, a repair round rebuilt the draft without the
+// change, and the batch promoted an unchanged tree. The derived
+// accounting below is computed from the diff itself, so it cannot
+// disagree with what would actually land.)
 
 export const SWEEP_AUTHORSHIP_PURPOSES = ['PLANNER_DECOMPOSE', 'PLANNER_REPAIR'];
 
-export function batchRequiresSweepAccounting(requests) {
-  return (requests ?? []).some(item => SWEEP_REQUIREMENT_PURPOSES.includes(item?.request?.purpose));
-}
-
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// Collect the raw accounting entries from a Tech Lead result payload.
-// Accepted shapes (all have been emitted by Tech Lead sessions):
-//   result.sweepAccounting / result.completeSweepAccounting as
-//   - an array of strings ("T-battle - ... - REVISED: ...")
-//   - an array of objects ({ taskId } / { id })
-//   - an object keyed by disposition, values arrays of the above
-// Returns null when the payload carries no accounting at all.
-// Resolve the raw accounting value from a Tech Lead result payload, in
-// every location sessions have been observed to put it. The 2026-11-15
-// batch-55 repair-3 result carried the complete accounting nested under
-// result.validationPlan: the validator read only the top level, reported
-// the accounting absent, and the batch burned its remaining rounds on a
-// placement dispute instead of a content gap.
-export function sweepAccountingRaw(result) {
-  const payload = result && typeof result === 'object' ? result : null;
-  if (!payload) return null;
-  return payload.sweepAccounting ?? payload.completeSweepAccounting
-    ?? payload.result?.sweepAccounting ?? payload.result?.completeSweepAccounting
-    ?? payload.validationPlan?.sweepAccounting ?? payload.validationPlan?.completeSweepAccounting
-    ?? null;
-}
-
-export function sweepAccountingEntries(result) {
-  const raw = sweepAccountingRaw(result);
-  if (raw == null) return null;
-  const entries = [];
-  const push = (value) => {
-    if (typeof value === 'string') entries.push({ taskId: null, text: value });
-    else if (value && typeof value === 'object') {
-      const taskId = value.taskId ?? value.id ?? null;
-      entries.push({ taskId, text: taskId ?? '' });
-    }
-  };
-  if (Array.isArray(raw)) raw.forEach(push);
-  else if (typeof raw === 'string') entries.push({ taskId: null, text: raw });
-  else if (typeof raw === 'object') {
-    Object.values(raw).forEach(list => { if (Array.isArray(list)) list.forEach(push); });
-  }
-  return entries;
-}
-
-// Which of the base task IDs does the accounting cover? Object entries
-// cover by exact taskId; string entries cover an ID they mention as a
-// whole token (IDs are hyphenated, so a mention must not be flanked by
-// [A-Za-z0-9-] on either side - "T-battle" inside "T-battle-hud" does
-// not count).
-export function sweepAccountingCoverage(baseTaskIds, entries) {
-  const covered = new Set();
-  const texts = [];
-  for (const entry of entries ?? []) {
-    if (entry.taskId) covered.add(entry.taskId);
-    if (entry.text) texts.push(entry.text);
-  }
-  for (const id of baseTaskIds ?? []) {
-    if (covered.has(id)) continue;
-    const mention = new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(id)}(?![A-Za-z0-9-])`);
-    if (texts.some(text => mention.test(text))) covered.add(id);
-  }
-  return covered;
-}
-
-// authorshipResults: [{ taskId, result }] for the batch's completed Tech
-// Lead authorship tasks, in flow order (decompose first, repair-3 last).
-// Only the LAST one is judged: it must carry the complete accounting for
-// the draft as it stands when it completed - an accounting left behind
-// by an earlier decompose does not cover a tree a later repair changed.
-export function evaluateSweepAccounting({ baseTaskIds, authorshipResults }) {
-  const base = [...(baseTaskIds ?? [])];
-  if (base.length === 0) return { ok: true, missing: [], sourceTaskId: null };
-  const completed = (authorshipResults ?? []).filter(item => item?.result != null);
-  if (completed.length === 0) {
-    return {
-      ok: false, code: 'SWEEP_ACCOUNTING_ABSENT', sourceTaskId: null, missing: base,
-      error: 'no completed Tech Lead authorship result in this batch is available to carry the sweep accounting',
-    };
-  }
-  const last = completed[completed.length - 1];
-  const entries = sweepAccountingEntries(last.result);
-  if (!entries || entries.length === 0) {
-    return {
-      ok: false, code: 'SWEEP_ACCOUNTING_ABSENT', sourceTaskId: last.taskId, missing: base,
-      error: `the latest Tech Lead result (${last.taskId}) carries no sweepAccounting - the batch's final Tech Lead result must carry the complete SWEEP ACCOUNTING for the draft as it now stands`,
-    };
-  }
-  const covered = sweepAccountingCoverage(base, entries);
-  const missing = base.filter(id => !covered.has(id));
-  if (missing.length > 0) {
-    return {
-      ok: false, code: 'SWEEP_ACCOUNTING_INCOMPLETE', sourceTaskId: last.taskId, missing,
-      error: `the sweep accounting in ${last.taskId} does not cover every pre-existing task - missing: ${missing.join(', ')}`,
-    };
-  }
-  return { ok: true, missing: [], sourceTaskId: last.taskId };
-}
 
 // The batch's Tech Lead authorship results in flow order, read from the
 // v2 store: decompose (round 0) then repair rounds 1..3. Only tasks with
@@ -164,4 +49,30 @@ export function authorshipResultsForBatch(store, task) {
     if (own) authored.push({ taskId: task.id, result: own.result });
   }
   return authored;
+}
+
+// Derived sweep accounting (owner design, 2026-11-22): the accounting is
+// COMPUTED from the draft's actual diff against its base version, never
+// authored by the Tech Lead. Every pre-existing task is accounted for by
+// construction: removed -> retired, field-changed -> revised (reason
+// names the changed fields), untouched -> non-conflicting; tasks the
+// draft adds are listed as created. Reviewers judge these dispositions
+// against the batch's purpose; there is no hand-written list to lose.
+export function derivedSweepAccounting(diff, baseTaskIds) {
+  const entries = [];
+  const changed = diff?.detail?.tasks ?? {};
+  const removed = new Set(diff?.tasks?.removed ?? []);
+  for (const id of baseTaskIds ?? []) {
+    if (removed.has(id)) {
+      entries.push({ taskId: id, disposition: 'retired', reason: 'removed by the draft' });
+    } else if (changed[id]) {
+      entries.push({ taskId: id, disposition: 'revised', reason: `fields changed: ${Object.keys(changed[id]).join(', ')}` });
+    } else {
+      entries.push({ taskId: id, disposition: 'non-conflicting', reason: 'unchanged by the draft' });
+    }
+  }
+  for (const id of diff?.tasks?.added ?? []) {
+    entries.push({ taskId: id, disposition: 'created', reason: 'new in the draft' });
+  }
+  return entries;
 }

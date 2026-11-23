@@ -65,7 +65,7 @@ test('executed work is protected by exec records across promotions', (t) => {
   // the SoT for prose, the exec record keeps the DONE state untouched.
   vs.createDraft({ createdBy: 'tl' });
   vs.applyTreeOps([
-    { op: 'upsertTask', task: { ...A, title: 'Alpha task renamed' } },
+    { op: 'patchTask', taskId: A.id, set: { title: 'Alpha task renamed' } },
     { op: 'upsertTask', task: C },
   ]);
   const res2 = promoteVersionedDraft({ versionedStore: vs, approvedBy: 'pm' });
@@ -76,7 +76,7 @@ test('executed work is protected by exec records across promotions', (t) => {
 
   // draft 3: gate drift on the DONE task -> refused, prod stays at 2.
   vs.createDraft({ createdBy: 'tl' });
-  vs.applyTreeOps([{ op: 'upsertTask', task: { ...A, title: 'Alpha task renamed', executionMode: 'staged' } }]);
+  vs.applyTreeOps([{ op: 'patchTask', taskId: A.id, set: { executionMode: 'staged' } }]);
   assert.throws(
     () => promoteVersionedDraft({ versionedStore: vs, approvedBy: 'pm' }),
     (e) => e.code === 'REVISE_COMPLETED_TASK',

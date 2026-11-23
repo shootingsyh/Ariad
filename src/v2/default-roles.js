@@ -103,7 +103,7 @@ export function pmRevisionRoundsSinceAcceptance(store, projectId) {
 }
 
 import { pmEscalationHasQuestions, taskHasArtistFlow, flowTasks, predecessorResults, failureCount, roleSealFailureCount, strategyEpoch, planningSkipIds, planningPhaseSkipIds, planningBatchRequests, isTakeoverPlanningTask, iterationRequest, debugHoldPending } from './planning-helpers.js';
-import { batchRequiresSweepAccounting, evaluateSweepAccounting, authorshipResultsForBatch, sweepAccountingRaw } from './sweep-accounting.js';
+import { authorshipResultsForBatch, derivedSweepAccounting } from './sweep-accounting.js';
 import { evaluateIssueAssignment } from './issue-assignment.js';
 import { ARTIST_PROMPT, CODE_NAVIGATION_PROMPT, DEVELOPER_REUSE_PROMPT, TESTER_REUSE_PROMPT, REVIEWER_FRESH_EVIDENCE_PROMPT, deliveryRoleSuffix, plannerPrompt, criticPrompt } from './role-prompts.js';
 export function createDefaultV2Roles({
@@ -527,11 +527,28 @@ export function createDefaultV2Roles({
               at: new Date().toISOString(),
             } };
           }
+          // Diff approval binding (owner design, 2026-11-22): a plan
+          // review acceptance must name the diff it approved (the
+          // payload's planDiff.diffHash, echoed as
+          // result.approvedDiffHash). Promotion re-computes the hash
+          // and refuses to land any other diff; an acceptance naming
+          // none is parked here instead of landing unbound.
+          const approvedDiffHash = result.result?.approvedDiffHash ?? null;
+          if (task.input?.purpose === 'PLANNER_PM_REVIEW' && !approvedDiffHash) {
+            return {
+              state: 'NEEDS_HUMAN',
+              transitionHistory: {
+                type: 'VERSIONED_TREE_PLAN_ACCEPTED_BLOCKED', role: 'pm',
+                summary: 'PM accepted the plan without naming the diff it approved (result.approvedDiffHash missing): the acceptance does not bind to a specific draft diff, so nothing was landed. Re-review and accept with the payload planDiff.diffHash echoed verbatim as result.approvedDiffHash.',
+                reconcileIssues: null, at: new Date().toISOString(),
+              },
+            };
+          }
           let vlanded;
           let versionedStore = null;
           try {
             versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state.db'));
-            vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace });
+            vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace, expectedDiffHash: approvedDiffHash });
           } catch (error) {
             if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
             return {
@@ -1459,30 +1476,10 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: error?.message ?? String(error), errorCode: error?.code ?? 'INVALID_AUTONOMY_REQUIREMENT' },
                 };
               }
-              // Sweep accounting gate (2026-11-15): in a batch carrying
-              // new or changed requirements, the batch's final Tech Lead
-              // authorship result must carry a SWEEP ACCOUNTING covering
-              // every task of the draft's base version. The mandate has
-              // stood in the Tech Lead and PM prompts since b9da159; this
-              // is its deterministic half - presence and ID coverage are
-              // mechanical, disposition quality stays with the PM. A miss
-              // fails validation here, feeding the critic/repair loop
-              // (rounds 1-3) or, at final validate, the existing
-              // validation escalation - instead of a full PM rejection
-              // round (SRPG: PM_PLAN_REVISION rounds 48-52 all burned on
-              // this one point).
-              if (typeof store?.listAllTasks === 'function'
-                && batchRequiresSweepAccounting(planningBatchRequests(store, task))
-                && draft.base_version != null) {
-                const baseTaskIds = draftStore.listSpecTasks(draft.base_version).map(t => t.id).filter(Boolean);
-                const verdict = evaluateSweepAccounting({ baseTaskIds, authorshipResults: authorshipResultsForBatch(store, task) });
-                if (!verdict.ok) {
-                  return {
-                    outcome: 'NOT_PASS',
-                    result: { valid: false, plan: null, error: `SWEEP_ACCOUNTING_INCOMPLETE: ${verdict.error}. Every pre-existing task must appear in result.sweepAccounting of the batch's final Tech Lead result with a disposition (revised / retired / merged / re-scoped / flagged / non-conflicting) and a reason; a future task promising the accounting later does not count.`, errorCode: 'SWEEP_ACCOUNTING_INCOMPLETE' },
-                  };
-                }
-              }
+              // Sweep accounting (owner design, 2026-11-22): the
+              // accounting is no longer authored by the Tech Lead or gated
+              // here. It is DERIVED from the draft diff and attached to
+              // the PASS plan below; reviewers judge the diff itself.
               // Issue assignment gate (2026-11-16): in a batch that
               // triages issues, the batch's final Tech Lead result must
               // disposition every triaged issue, and every task ID it
@@ -1519,9 +1516,13 @@ export function createDefaultV2Roles({
               // this plan from the validator result: with only a stub
               // {version, taskCount} both of them accepted a plan they
               // could not see (SRPG art iteration, 2026-11-01).
+              const planDiff = draftStore.diffDraft();
+              const baseTaskIds = draft.base_version != null
+                ? draftStore.listSpecTasks(draft.base_version).map(t => t.id).filter(Boolean)
+                : [];
               return {
                 outcome: 'PASS',
-                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftTasks.length, tasks: draftTasks, contracts: draftContracts }, error: null, errorCode: null },
+                result: { valid: true, plan: { source: 'db-draft', version: draft.version, taskCount: draftTasks.length, tasks: draftTasks, contracts: draftContracts, diff: planDiff, sweepAccounting: { derived: true, entries: derivedSweepAccounting(planDiff, baseTaskIds) } }, error: null, errorCode: null },
               };
             } finally {
               draftStore.close();
@@ -1640,27 +1641,13 @@ export function createDefaultV2Roles({
         } catch {
           priorReview = null;
         }
-        // Sweep accounting visibility (2026-11-15 fix): the PM prompt's
-        // EXISTING TASK SWEEP clause orders the PM to judge the Tech
-        // Lead's sweep, but the review payload never carried it - the
-        // PM received only the draft, so batches were rejected for a
-        // missing accounting that existed in the Tech Lead result
-        // (SRPG batch-54; batch-53's PM found it only by fetching the
-        // result itself). Attach the batch's latest accounting
-        // verbatim, as the critic payload now does.
-        let sweepAccounting = null;
-        try {
-          if (batchRequiresSweepAccounting(planningBatchRequests(store, task))) {
-            const authored = authorshipResultsForBatch(store, task);
-            const lastAuthored = authored[authored.length - 1];
-            if (lastAuthored) {
-              const raw = sweepAccountingRaw(lastAuthored.result);
-              if (raw != null) sweepAccounting = { sourceTaskId: lastAuthored.taskId, accounting: raw };
-            }
-          }
-        } catch {
-          sweepAccounting = null;
-        }
+        // Plan diff + derived sweep accounting (owner design,
+        // 2026-11-22): both ride in the validator result's plan - the
+        // system-computed diff of the draft against prod and the
+        // accounting derived from it. The PM judges and approves the
+        // diff itself; its hash is what the acceptance must name.
+        const planDiff = validation?.plan?.diff ?? null;
+        const sweepAccounting = validation?.plan?.sweepAccounting ?? null;
         const prompt = [
           'You are Ariad\'s PM reviewing a validated delivery plan against user intent.',
           'Your yardstick is the human-approved requirements document at .ariad/docs/REQUIREMENTS.md (approval pinned by hash in .ariad/docs/approvals.json), which you maintain only through requirements-authoring tasks - never by editing it during a plan review; the runtime denies such writes, and a requirements change counts only once an authoring task has folded it in and the human has approved the new hash. If this plan embodies product requirements that are not in the approved document, do not accept it — return PLAN_REVISION_REQUIRED and say the requirements must be re-finalized with the human first.',
@@ -1672,9 +1659,9 @@ export function createDefaultV2Roles({
           'Do not accept fake E2E that jumps over required workflow state by calling internals directly, injecting final state/data, opening a late screen directly, starting at a final game level, or otherwise bypassing steps an actual user must perform. Focused unit/integration tests may supplement E2E but cannot replace it.',
           'The project/root plan must culminate in a product-level end-to-end journey that demonstrates the intended user can start from a realistic initial state and obtain the product\'s promised value. Require setup/onboarding/persistence/recovery or other lifecycle steps only when they are truly part of that product experience; do not invent unrelated commercial requirements.',
           'PLAN FIDELITY - JUDGE THE DRAFT ITSELF, NOT SUMMARIES OF IT: the payload plan carries the full draft (every task with intent, acceptanceCriteria, testStrategy and flags, plus the feature contracts). Trace every requirement in the approved requirements document - above all every addition or change in its delta - to the task or tasks that carry it, and judge each carrying task by the text of its own acceptanceCriteria. Return PLAN_REVISION_REQUIRED when you find any of these: (a) a requirement is carried only by verification or regression wording (reuse the existing implementation, verify, repair only what verification finds) while the document presents it as something this version adds, changes, or completes, and the plan names no concrete existing evidence that the current implementation already satisfies it exactly as written - work the document calls for must be produced by a production task, not presumed already present; (b) acceptance criteria dilute an enumerated requirement into generic language (for example: no placeholders remain, assets are consistent) that would pass without the enumerated specifics existing - every enumerated item in the document (each named action, variant, deliverable, or member of a list) must appear in the acceptance criteria of some task, complete and not sampled; a list covered only in part is not covered; (c) a visual or media requirement is carried by tasks lacking the markings the quality flow relies on - media production needs art.required with named deliverables and the artist stage, and visual delivery needs ux.required so the rendered-evidence review actually runs; (d) the plan treats existing assets or implementation as satisfying a requirement on the basis of names, counts, or file presence alone, without evidence at the granularity the requirement enumerates. When you return PLAN_REVISION_REQUIRED for any of these, quote the requirement and name the missing or diluted item in result.guidance so the Tech Lead can repair it without guessing. Validator PASS and critic CLEAN establish structure only; they are not evidence of fidelity, and accepting on their summaries alone is a review failure. ACCOUNTING - YOUR RESULT MUST CARRY THE TRACE ITSELF: in result.reason (and in result.guidance when you revise), list every enumerated item you traced, one line per item at clause granularity, naming the carrying task and your verdict. A document section is a list of clauses, not a headline: an item buried in the middle of a dense paragraph (an expression or scar variant set inside a presentation paragraph, one named effect inside an effects list) counts exactly as much as a headline item, and the sections the delta touches are in scope, not only the lines of the delta itself. An acceptance whose reason does not enumerate the traced items is an incomplete review: if you cannot account for an item, return PLAN_REVISION_REQUIRED for it instead of accepting.',
-          'EXISTING TASK SWEEP - WHEN THIS PLAN EMBODIES NEW OR CHANGED REQUIREMENTS, THE SWEEP IS PART OF FIDELITY: the Tech Lead must have swept the full pre-existing task list against the new requirements, not only authored new tasks. Verify from the draft itself and from the SWEEP ACCOUNTING in the Tech Lead result that every pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements was revised to the new requirements in this draft, retired, merged, or explicitly re-scoped - and that no new-requirement task is gated behind a stale task whose own acceptance criteria embody the superseded requirement, so new work never waits for the old construction to be completed and accepted first. A draft that adds new tasks while a contradictory pre-existing task stands unrevised, or a missing sweep accounting in a batch that changed requirements, is PLAN_REVISION_REQUIRED: name the stale task and its conflicting text in result.guidance. A task the promotion rules protect because it already started may stand only when the plan flags it explicitly with a proposed disposition.',
+          'EXISTING TASK SWEEP - WHEN THIS PLAN EMBODIES NEW OR CHANGED REQUIREMENTS, THE SWEEP IS PART OF FIDELITY: the Tech Lead must have swept the full pre-existing task list against the new requirements, not only authored new tasks. Verify from the draft itself, from the payload planDiff, and from the derived SWEEP ACCOUNTING in the payload that every pre-existing task whose intent, acceptanceCriteria, or testStrategy conflicts with, duplicates, or is superseded by the new requirements was revised to the new requirements in this draft, retired, merged, or explicitly re-scoped - and that no new-requirement task is gated behind a stale task whose own acceptance criteria embody the superseded requirement, so new work never waits for the old construction to be completed and accepted first. A draft that adds new tasks while a contradictory pre-existing task stands unrevised is PLAN_REVISION_REQUIRED: name the stale task and its conflicting text in result.guidance. A task the promotion rules protect because it already started may stand only when the plan flags it explicitly with a proposed disposition.',
           'TASK TARGETS - DELIVERY TASKS CHANGE PROJECT FILES ONLY: return PLAN_REVISION_REQUIRED for any task whose deliverable requires a delivery role to modify Ariad-held data - the spec tree, a stored test plan, task records, anything persisted in the project state database. Corrections to such data are the Tech Lead own work, done through ariad_tree_patch in the same batch and carried in the spec of the task that will produce the plan; a plan that delegates one to a delivery task has misassigned it, however small the correction looks.',
-          'The Tech Lead\'s sweep accounting for this batch, when the batch carries one, is included in the payload as sweepAccounting (verbatim, from the batch\'s latest Tech Lead result). Judge the dispositions from it; do not report the accounting missing when it is present in the payload.',
+          'PLAN DIFF - YOU APPROVE THE DIFF, NOT A SUMMARY OF IT: the payload planDiff is the system-computed diff of the draft against the production version (tasks and contracts added, removed, and changed, with field-level from/to detail and a diffHash), and sweepAccounting is derived from that diff - every pre-existing task is accounted for by construction (retired / revised with the changed fields named / non-conflicting), so it cannot be missing or partial. Judge the diff against this batch\'s stated purpose: if the batch was opened to change something and the diff does not contain that change, return PLAN_REVISION_REQUIRED and name the missing change; if the diff drops or empties a field of an existing task (acceptanceCriteria, testStrategy, dependsOn) that the batch purpose does not call for, return PLAN_REVISION_REQUIRED and name the task and the field. For PLAN_ACCEPTED, echo planDiff.diffHash verbatim as result.approvedDiffHash: promotion re-computes the hash and refuses to land any other diff.',
           'For takeover, compare the known authoritative roadmap/docs and the logical tree against the milestone list. Do not accept if known later major scope is missing from milestones, or if the milestone list contains placeholder/unused/TBD entries instead of real checkpoints.',
           'If this is a game project, do not accept a plan whose completion evidence only shows that maps/levels were launched, traversed, or exercised. The product-level E2E must begin from a normal player entry/start state and play through the required progression to an actual win/clear; directly opening the final level or injecting progression state is not a valid full playthrough. Ariad must know how to execute that successful path autonomously without relying on external human players unless the user explicitly requested a human study.',
           takeover
@@ -1684,7 +1671,7 @@ export function createDefaultV2Roles({
               : null,
           'HUMAN DECISIONS ARE AUTHORITATIVE: the payload humanDecision field carries the human\'s answer to a parked review (a debug hold or another human gate), when one exists. Follow it exactly. If it asks for any change or correction to the plan, return PLAN_REVISION_REQUIRED and carry the requested changes verbatim in result.guidance - never re-accept the unchanged plan over a correction. Accept the plan only when the decision unconditionally approves or releases it, or when no decision is present and the plan merits acceptance on its own.',
           'INHERITED CONTEXT: the payload carries priorReview (the previous review round\'s verdict and guidance) and humanDecisions (every human decision recorded on this project\'s tasks). You review in a fresh session by design: judge the CURRENT draft in the payload, not any earlier draft. Treat priorReview strictly as a checklist to verify against the current draft text - an objection whose demanded text is present in the current draft is resolved; never re-demand it. Human decisions are authoritative instructions whenever they were given, not only the decision attached to this task.',
-          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. Use NEEDS_HUMAN only when the requirements/goal themselves are the problem (unclear, contradictory, infeasible, or missing a decision only the requirements owner can make); it is honored only with concrete questions in result.questions - a question-less NEEDS_HUMAN is rejected and treated as a revision request. For any plan problem, use PLAN_REVISION_REQUIRED. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
+          'Submit the PM decision through the provider\'s structured role-result mechanism when available. Use outcome PLAN_ACCEPTED|PLAN_REVISION_REQUIRED|NEEDS_HUMAN with result.reason, result.startDelivery, optional result.guidance, and result.questions. For PLAN_ACCEPTED, result.approvedDiffHash must carry the payload planDiff.diffHash verbatim - your acceptance approves that exact diff, and an empty planDiff cannot be accepted for a batch whose purpose is to change the plan. Use NEEDS_HUMAN only when the requirements/goal themselves are the problem (unclear, contradictory, infeasible, or missing a decision only the requirements owner can make); it is honored only with concrete questions in result.questions - a question-less NEEDS_HUMAN is rejected and treated as a revision request. For any plan problem, use PLAN_REVISION_REQUIRED. Terminal prose or JSON is NOT a result; if you do not submit through the structured mechanism, the attempt fails.',
           'Delivery has a durable gate. Tech Lead/validator/critic can never start delivery. For PLAN_ACCEPTED, set result.startDelivery=true only when you explicitly authorize delivery to begin or resume now. Set it false to keep delivery gated. For an existing project whose required human review/requirements approval has not been recorded, delivery must remain gated until it has been; only a later PM review may explicitly start it.',
           'REVISION ROUND CAP: revision rounds are capped per draft lineage (5); a further rejection after the cap parks the plan for a human decision instead of spawning another replan. Write guidance that can settle the plan in one round - complete, clause-level, and final - rather than guidance that spends rounds.',
           JSON.stringify({
@@ -1692,6 +1679,7 @@ export function createDefaultV2Roles({
             takeover,
             plan: validation?.plan ?? null,
             sweepAccounting,
+            planDiff,
             humanDecision,
             priorReview,
             humanDecisions: inheritedHumanDecisions,
