@@ -318,6 +318,34 @@ export class VersionedStore {
     return row ? { ...decode(row.contract_json), id: contractId } : null;
   }
 
+  // Depth of every feature contract in the prod feature tree: a root
+  // contract (no parent in the version) is depth 1, each parentId hop
+  // adds one. The scheduler's soft order uses it to run leaf-ward
+  // feature work before shallow feature work. Memoized on the prod
+  // pointer, like effectiveTasks: contracts never change inside a
+  // version, so a promotion is the only invalidation.
+  featureDepths() {
+    const prod = this.getProdVersion();
+    const cached = this._featureDepthsCache;
+    if (cached && cached.prodVersion === prod) return cached.depths;
+    const depths = new Map();
+    if (prod != null) {
+      const byId = new Map(this.listSpecContracts(prod).map(c => [c.id ?? c.nodeId, c]));
+      const depthOf = (id, seen) => {
+        if (depths.has(id)) return depths.get(id);
+        if (seen.has(id)) return 0; // cycle guard; validation forbids cycles
+        seen.add(id);
+        const parent = byId.get(id)?.parentId;
+        const depth = parent != null && byId.has(parent) ? depthOf(parent, seen) + 1 : 1;
+        depths.set(id, depth);
+        return depth;
+      };
+      for (const id of byId.keys()) depthOf(id, new Set());
+    }
+    this._featureDepthsCache = { prodVersion: prod, depths };
+    return depths;
+  }
+
   // ---- TL draft writes -------------------------------------------------
 
   #validateTaskSpec(task, errors) {

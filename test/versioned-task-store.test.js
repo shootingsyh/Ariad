@@ -146,3 +146,24 @@ test('facade routes triaged fixes into the issue queue and resolves the issue on
   assert.deepEqual(facade.reconcileAssignedIssues('proj'), [issue.id]);
   assert.equal(runtime.getIssue(issue.id).state, 'RESOLVED');
 });
+
+test('facade featureDepths: prod contract tree depths, root is 1', (t) => {
+  const { seed, facade } = makeFacade(t);
+  const root = { id: 'feature.root', nodeType: 'feature', parentId: null, exportedInterfaces: [], behavior: ['Root behavior.'] };
+  const mid = { id: 'feature.mid', nodeType: 'feature', parentId: 'feature.root', exportedInterfaces: [], behavior: ['Mid behavior.'] };
+  const leaf = { id: 'feature.leaf', nodeType: 'feature', parentId: 'feature.mid', exportedInterfaces: [{ id: 'leaf_api' }], behavior: ['Leaf behavior.'] };
+  const task = { id: 'f-leaf-task', taskKind: 'FEATURE_TASK', featureId: 'feature.leaf', title: 'Leaf task', parentId: 'm-1', dependsOn: [], interfaceIds: ['leaf_api'], executionMode: 'direct' };
+  seed.createDraft({ createdBy: 'tl' });
+  seed.applyTreeOps([
+    { op: 'upsertContract', contract: root },
+    { op: 'upsertContract', contract: mid },
+    { op: 'upsertContract', contract: leaf },
+    { op: 'upsertTask', task: M },
+    { op: 'upsertTask', task },
+  ]);
+  promoteVersionedDraft({ versionedStore: seed, approvedBy: 'pm' });
+  const depths = facade.featureDepths('proj');
+  assert.equal(depths.get('feature.root'), 1);
+  assert.equal(depths.get('feature.mid'), 2);
+  assert.equal(depths.get('feature.leaf'), 3);
+});

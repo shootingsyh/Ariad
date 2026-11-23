@@ -63,6 +63,10 @@ export class VersionedTaskStore {
     return this.versioned.specFirstSeenAt(taskId);
   }
 
+  featureDepths(projectId) {
+    return this.versioned.featureDepths();
+  }
+
   #effectiveById() {
     return new Map(this.versioned.effectiveTasks().map(t => [t.id, t]));
   }

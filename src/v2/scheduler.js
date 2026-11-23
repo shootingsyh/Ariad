@@ -141,11 +141,24 @@ export class V2Scheduler {
 
     // The issue queue drains first: triaged fixes are standalone work
     // parallel to the milestone tree and take dispatch priority over it.
-    // Within a queue, prefer work that can unblock the largest unfinished
-    // downstream region; stable tie-breakers keep scheduling reproducible.
+    // Within a queue, a soft order applies (owner, 2026-11-22): feature
+    // work first, integration next, milestones last - integration and
+    // milestone runs are the expensive whole-product checks and must not
+    // fire before the leaf work they verify has landed. Inside a tier,
+    // deeper feature-tree work (closer to the leaves) goes first. Only
+    // then does downstream impact decide, with stable tie-breakers so
+    // scheduling stays reproducible. The soft order never overrides
+    // dependsOn: only runnable tasks are candidates at all, and the
+    // starvation aging in orderCandidates still ranks above it.
     const queueRank = candidate => (queueOfTask(candidate.task) === 'issue' ? 0 : 1);
+    const featureDepths = this.store.featureDepths?.(projectId) ?? null;
+    const tierRank = candidate => (candidate.task.taskKind === TASK_KINDS.INTEGRATION_TASK ? 1
+      : candidate.task.taskKind === TASK_KINDS.MILESTONE_TASK ? 2 : 0);
+    const depthRank = candidate => featureDepths?.get(candidate.task.featureId) ?? 0;
     candidates.sort((a, b) =>
       queueRank(a) - queueRank(b)
+      || tierRank(a) - tierRank(b)
+      || depthRank(b) - depthRank(a)
       || b.impact - a.impact
       || a.graphKey.localeCompare(b.graphKey)
       || a.task.id.localeCompare(b.task.id)
