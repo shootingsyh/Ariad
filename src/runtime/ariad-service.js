@@ -397,11 +397,22 @@ export class AriadService {
     }
 
     const runtime = this.runtimeFor(project);
-    if (['SUCCEEDED', 'NEEDS_HUMAN'].includes(project.executionState)) return;
+    if (project.executionState === 'SUCCEEDED') return;
 
     const beforeState = project.executionState;
     try {
-      const tickResult = await runtime.tick({ schedule: project.desiredState === 'RUNNING' });
+      // A pending human decision pauses new delivery dispatch, not the
+      // reconcile loop itself. Result harvesting, execution polling,
+      // diagnosis and planning-batch claims all live in the tick, and a
+      // decision delivered as a replan is claimed by the very tick the
+      // wait would otherwise suspend (SRPG 2026-11-23/24: a diagnosis
+      // gate froze the loop for a day - a finished session's result was
+      // never harvested and the operator's defer replan sat unclaimed
+      // behind the gate it was sent to answer).
+      const tickResult = await runtime.tick({
+        schedule: project.desiredState === 'RUNNING',
+        pauseDelivery: project.executionState === 'NEEDS_HUMAN',
+      });
       const nextState = this.deriveExecutionState(runtime, tickResult?.scheduled?.tasks);
       if (nextState !== beforeState) this.manager.setExecutionState(project.id, nextState);
       if (nextState !== beforeState && ['NEEDS_HUMAN', 'FAILED', 'SUCCEEDED'].includes(nextState)) {

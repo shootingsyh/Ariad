@@ -228,9 +228,9 @@ export class StandaloneProjectRuntime {
     });
   }
 
-  async tick({ schedule = true, adhocOnly = false } = {}) {
+  async tick({ schedule = true, adhocOnly = false, pauseDelivery = false } = {}) {
     try {
-      const result = await this.#tickOnce({ schedule, adhocOnly });
+      const result = await this.#tickOnce({ schedule, adhocOnly, pauseDelivery });
       this.consecutiveStoreFailures = 0;
       return result;
     } catch (error) {
@@ -244,7 +244,7 @@ export class StandaloneProjectRuntime {
       // retry the tick before the failure is allowed to park the project.
       this.store.reopen?.();
       try {
-        const result = await this.#tickOnce({ schedule, adhocOnly });
+        const result = await this.#tickOnce({ schedule, adhocOnly, pauseDelivery });
         this.consecutiveStoreFailures = 0;
         return result;
       } catch (retryError) {
@@ -263,9 +263,9 @@ export class StandaloneProjectRuntime {
     }
   }
 
-  async #tickOnce({ schedule = true, adhocOnly = false } = {}) {
+  async #tickOnce({ schedule = true, adhocOnly = false, pauseDelivery = false } = {}) {
     const audit = await this.supervisor.audit(this.projectId, { adhocOnly });
-    const scheduled = schedule ? await this.scheduler.tick(this.projectId, { adhocOnly }) : { started: [] };
+    const scheduled = schedule ? await this.scheduler.tick(this.projectId, { adhocOnly, pauseDelivery }) : { started: [] };
     this.store.checkpoint();
     return { audit, scheduled, status: this.status(scheduled?.tasks) };
   }

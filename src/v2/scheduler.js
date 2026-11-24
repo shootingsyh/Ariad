@@ -66,7 +66,7 @@ export class V2Scheduler {
     }
   }
 
-  async tick(projectId, { adhocOnly = false } = {}) {
+  async tick(projectId, { adhocOnly = false, pauseDelivery = false } = {}) {
     const initialProject = this.store.getProject(projectId);
     if (!initialProject) throw new Error(`unknown project: ${projectId}`);
     await this.resultExecutor.advanceResults(projectId, { adhocOnly });
@@ -111,7 +111,7 @@ export class V2Scheduler {
     const deliveryEnabled = project.deliveryEnabled !== false;
     const isUnifiedDiagnostic = task =>
       task.stage === 'project_debugger' && scopeOfTask(task) === 'control' && Boolean(task.input?.blockedTaskId);
-    const schedulableTasks = adhocOnly
+    let schedulableTasks = adhocOnly
       ? allTasks.filter(isAdhocAnalysis)
       : planningBlocked
         ? allTasks.filter(task => isPlannerTask(task) || isUnifiedDiagnostic(task) || isAdhocAnalysis(task) || [TASK_KINDS.NODE_PLANNING, TASK_KINDS.GLOBAL_REVIEW].includes(task.taskKind))
@@ -119,6 +119,15 @@ export class V2Scheduler {
             (!isPlannerTask(task) || isUnifiedDiagnostic(task))
             && (scopeOfTask(task) !== 'delivery' || deliveryEnabled)
           );
+    if (pauseDelivery && !adhocOnly) {
+      // Paused by a pending human decision: delivery-scope tasks are
+      // not dispatch candidates this pass. Result advancement and the
+      // planning-batch claim above already ran, and every non-delivery
+      // task below keeps moving, so the machinery that can answer the
+      // gate (a replan's planning flow, a diagnosis, a submitted
+      // result) is never frozen by the wait itself.
+      schedulableTasks = schedulableTasks.filter(task => scopeOfTask(task) !== 'delivery');
+    }
     const candidates = [];
     // Workflow parents are orchestrators, never Pi role sessions.
     // They must not be dispatched until a durable workflow executor owns them.
