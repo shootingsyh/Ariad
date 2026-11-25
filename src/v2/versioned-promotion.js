@@ -11,7 +11,7 @@ import { persistPlanningState } from './planning-persistence.js';
 // VersionedStore.promoteDraft against the exec records. The returned
 // created/updated/obsoleted lists come from the pre-promotion draft
 // diff and describe the spec delta for the PM's summary only.
-export function promoteVersionedDraft({ versionedStore, workspace = null, approvedBy = null, expectedDiffHash = null }) {
+export function promoteVersionedDraft({ versionedStore, workspace = null, approvedBy = null, expectedDiffHash = null, uxReviewEnabled = false }) {
   // Root-document gate (same semantics as the file-based flow): when the
   // project has adopted the docs regime (.ariad/docs exists), a version
   // may only be promoted from human-finalized requirements. PM finalizes
@@ -36,7 +36,7 @@ export function promoteVersionedDraft({ versionedStore, workspace = null, approv
     err.code = 'NO_OPEN_DRAFT';
     throw err;
   }
-  const validationErrors = versionedStore.validateVersion(draft.version);
+  const validationErrors = versionedStore.validateVersion(draft.version, { requireUxDecision: uxReviewEnabled });
   if (validationErrors.length) {
     const err = new Error(`TREE_VALIDATION_FAILED: ${validationErrors.join('; ')}`);
     err.code = 'TREE_VALIDATION_FAILED';

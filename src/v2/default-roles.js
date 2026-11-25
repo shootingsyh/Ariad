@@ -548,7 +548,7 @@ export function createDefaultV2Roles({
           let versionedStore = null;
           try {
             versionedStore = new VersionedStore(store.filePath ?? join(versionedProject.workspace, '.ariad', 'state.db'));
-            vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace, expectedDiffHash: approvedDiffHash });
+            vlanded = promoteVersionedDraft({ versionedStore, approvedBy: 'pm', workspace: versionedProject.workspace, expectedDiffHash: approvedDiffHash, uxReviewEnabled });
           } catch (error) {
             if (error?.code === 'UNIFIED_TASK_DELIVERY_IN_FLIGHT') throw error;
             // Nothing-to-promote is a terminal outcome, not a block
@@ -1480,7 +1480,7 @@ export function createDefaultV2Roles({
                   result: { valid: false, plan: null, error: 'DRAFT_EMPTY: the open DB draft contains no tasks - author the tree into it with ariad_tree_patch applyOps before validation', errorCode: 'DRAFT_EMPTY' },
                 };
               }
-              const draftErrors = draftStore.validateVersion(draft.version);
+              const draftErrors = draftStore.validateVersion(draft.version, { requireUxDecision: uxReviewEnabled });
               if (draftErrors.length) {
                 return {
                   outcome: 'NOT_PASS',

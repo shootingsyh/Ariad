@@ -393,7 +393,7 @@ export class VersionedStore {
     }
   }
 
-  validateVersion(version) {
+  validateVersion(version, { requireUxDecision = false } = {}) {
     const errors = [];
     const tasks = this.listSpecTasks(version);
     const contracts = this.listSpecContracts(version);
@@ -402,6 +402,31 @@ export class VersionedStore {
     for (const t of tasks) {
       const ref = ariadStateDbRefInTask(t);
       if (ref) errors.push(`task ${t.id}: targets the Ariad state database (${ref}) - delivery tasks change project files only; task and plan data are changed by the Tech Lead via ariad_tree_patch, never published as a task`);
+    }
+    // UX-review declaration gate (owner decision, 2026-11-24): on a
+    // project that has opted into UX review, every task that can still
+    // execute must carry an explicit ux.required declaration. The
+    // reviewer PASS routes to the UX reviewer only when the task
+    // declares ux.required === true, so an omitted declaration silently
+    // skips the independent rendered-evidence review - eight SRPG
+    // presentation tasks shipped that way before this gate existed.
+    // The declaration is the planner's explicit decision (true when
+    // acceptance is judged on rendered/visual evidence, false when it
+    // is not); the platform does not guess which tasks are visual.
+    // Finished tasks (DONE / SKIPPED / OBSOLETE in the exec record)
+    // are exempt: their outcome can no longer change.
+    if (requireUxDecision) {
+      const execStates = new Map();
+      for (const ex of this.listExecTasks()) {
+        if (!ex.embedded) execStates.set(ex.id, ex.data?.state ?? null);
+      }
+      for (const t of tasks) {
+        const state = execStates.get(t.id);
+        if (state === 'DONE' || state === 'SKIPPED' || state === 'OBSOLETE') continue;
+        if (typeof t.ux?.required !== 'boolean') {
+          errors.push(`task ${t.id}: ux.required is not declared - this project has UX review enabled, so every task that can still execute must declare ux: {required: true} when its acceptance is judged on rendered/visual evidence, or ux: {required: false} when it is not`);
+        }
+      }
     }
     for (const t of tasks) {
       if (t.parentId != null && !taskIds.has(t.parentId)) errors.push(`task ${t.id}: parentId ${t.parentId} not in version ${version}`);
