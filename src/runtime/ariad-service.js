@@ -20,6 +20,7 @@ import {
 } from './code-intelligence/project-capabilities.js';
 import { join } from 'node:path';
 import { restoreDbHistory as restoreDbHistoryFiles } from '../v2/db-history.js';
+import { provisionProjectComfyui } from './comfyui-provisioning.js';
 
 export class AriadService {
   constructor({
@@ -331,6 +332,19 @@ export class AriadService {
     const enqueued = runtime.enqueueLocalReplan({ id, instruction });
     this.wake('operator-local-replan');
     return { projectId: project.id, requestId: enqueued.id, purpose: 'LOCAL_REPLAN', state: enqueued.state };
+  }
+
+  async provisionComfyui(name) {
+    // Deliberately independent of the live runtime, like dbRestore:
+    // provisioning is initialize-time machine setup, and it must also
+    // work for a stopped project or one whose store cannot open.
+    const project = this.manager.status(name);
+    if (project.features?.comfyui?.enabled !== true) {
+      this.manager.writeManifest(name, {
+        features: { ...(project.features ?? {}), comfyui: { enabled: true } },
+      });
+    }
+    return provisionProjectComfyui({ workspace: project.workspace });
   }
 
   dbCapture(name) {

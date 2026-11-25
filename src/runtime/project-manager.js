@@ -87,6 +87,7 @@ export class AriadProjectManager {
     const effectiveMode = mode ?? (sourcePath ? 'TAKEOVER' : 'NEW');
     if (!['NEW', 'TAKEOVER'].includes(effectiveMode)) throw new Error(`invalid project mode: ${effectiveMode}`);
     const artistOn = features?.artist?.enabled !== false;
+    const comfyuiOn = features?.comfyui?.enabled === true;
     const completeRoleModels = requireCompleteRoleModels(roleModels ?? {}, {
       roles: requiredModelRoles({ artistEnabled: artistOn }),
     });
@@ -145,7 +146,7 @@ export class AriadProjectManager {
       projectVersion: 0,
       activeVersion: 1,
       roleModels: completeRoleModels,
-      features: { artist: { enabled: artistOn } },
+      features: { artist: { enabled: artistOn }, ...(comfyuiOn ? { comfyui: { enabled: true } } : {}) },
       frontdeskBinding: frontdeskBinding ?? projectAgent ?? null,
     });
     if (adoptedWorkspace) {

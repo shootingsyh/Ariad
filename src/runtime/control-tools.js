@@ -57,10 +57,19 @@ export class AriadControlTools {
     return this.manager.setRoleModels(name, normalized);
   }
 
-  create({ name, goal = null, roleModels, mode = 'NEW', sourcePath = null, features = null } = {}) {
+  async create({ name, goal = null, roleModels, mode = 'NEW', sourcePath = null, features = null } = {}) {
     if (!name) throw new Error('project name is required');
     const project = this.manager.create(name, { goal, roleModels, mode, sourcePath, features });
-    return this.service.status(project.id);
+    const status = this.service.status(project.id);
+    // Initialize-time provisioning for declared capabilities: a project
+    // that declares features.comfyui gets its ComfyUI MCP registered and
+    // smoke-checked before create reports success; failure is loud here,
+    // not at the artist's first generation. Repair path after fixing the
+    // machine environment: project provision-comfyui.
+    if (status.features?.comfyui?.enabled === true) {
+      status.comfyuiProvision = await this.service.provisionComfyui(project.id);
+    }
+    return status;
   }
 
   takeover({ name, sourcePath, goal = null, roleModels } = {}) {
@@ -68,10 +77,14 @@ export class AriadControlTools {
     return this.create({ name, sourcePath, goal, roleModels, mode: 'TAKEOVER' });
   }
 
-  adopt({ name, sourcePath, roleModels = null, features = null } = {}) {
+  async adopt({ name, sourcePath, roleModels = null, features = null } = {}) {
     if (!name) throw new Error('project name is required');
-    if (!sourcePath) throw new Error('sourcePath is required for adopt');
-    return this.manager.adopt(name, sourcePath, { roleModels, features });
+    if (!sourcePath) throw new Error('sourcePath is required for adoption');
+    const project = this.manager.adopt(name, sourcePath, { roleModels, features });
+    if (project.features?.comfyui?.enabled === true) {
+      project.comfyuiProvision = await this.service.provisionComfyui(project.id);
+    }
+    return project;
   }
 
   start(name, audit = {}) {
@@ -97,6 +110,11 @@ export class AriadControlTools {
 
   openIssue(name, issue) {
     return this.service.openIssue(name, issue);
+  }
+
+  provisionComfyui(name) {
+    if (!name) throw new Error('project name is required');
+    return this.service.provisionComfyui(name);
   }
 
   dbCapture(name) {
@@ -135,6 +153,7 @@ export class AriadControlTools {
       case 'resume': return this.resume(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'stop': return this.stop(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'open_issue': return this.openIssue(input.name, input.issue ?? input);
+      case 'provision_comfyui': return this.provisionComfyui(input.name);
       case 'db_capture': return this.dbCapture(input.name);
       case 'db_restore': return this.dbRestore(input.name);
       case 'list_issues': return this.listIssues(input.name, input.states ?? null);
