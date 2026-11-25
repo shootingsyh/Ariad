@@ -99,6 +99,14 @@ export class AriadControlTools {
     return this.service.openIssue(name, issue);
   }
 
+  dbCapture(name) {
+    return this.service.dbCapture(name);
+  }
+
+  dbRestore(name) {
+    return this.service.dbRestore(name);
+  }
+
   listIssues(name, states = null) {
     return this.service.listIssues(name, states);
   }
@@ -127,6 +135,8 @@ export class AriadControlTools {
       case 'resume': return this.resume(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'stop': return this.stop(input.name, { source: input.auditSource ?? 'unknown-client', requestId: input.requestId ?? null });
       case 'open_issue': return this.openIssue(input.name, input.issue ?? input);
+      case 'db_capture': return this.dbCapture(input.name);
+      case 'db_restore': return this.dbRestore(input.name);
       case 'list_issues': return this.listIssues(input.name, input.states ?? null);
       case 'decide': return this.decide(input.name, input.decision);
       default: throw new Error(`unknown Ariad control action: ${action}`);

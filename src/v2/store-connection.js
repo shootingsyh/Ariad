@@ -39,6 +39,16 @@ import { openGuardedDatabase, recordDbIncident } from './db-open-guard.js';
 //      from scratch).
 
 const boxes = new Map();
+const beforeReopenHooks = new Set();
+
+// Registers a callback invoked with the box just before a reopen
+// snapshots and closes the shared handle - the last chance for
+// riders on the current handle (e.g. db-history sessions) to drain
+// their state while it is still alive.
+export function registerBeforeReopenHook(fn) {
+  beforeReopenHooks.add(fn);
+  return () => beforeReopenHooks.delete(fn);
+}
 const MAX_PREREOPEN_SNAPSHOTS = 3;
 
 function keyOf(file) {
@@ -216,6 +226,9 @@ export function reopenStoreConnection(box, reason = null) {
       }
       if (attempt < 2) sleepSync(300);
     }
+  }
+  for (const hook of beforeReopenHooks) {
+    try { hook(box); } catch { /* a flush must never block recovery */ }
   }
   const snapshot = snapshotStoreFiles(box.file, 'prereopen');
   recordDbIncident(box.file, 'STORE_REOPEN',

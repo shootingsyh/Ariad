@@ -23,7 +23,7 @@ function usage() {
   return [
     'Usage:',
     '  ariad setup',
-    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project replan <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--fresh-store] [--projects-root <path>]',
+    '  ariad project {start|resume|pause|soft-stop|stop|status|models|issues|db-capture|db-restore} <name> [--projects-root <path>]\n  ariad project analyze <name> <instruction> [--projects-root <path>]\n  ariad project replan <name> <instruction> [--projects-root <path>]\n  ariad project decide <name> <decision> [--projects-root <path>]\n  ariad project approve-requirements <name> [--projects-root <path>]\n  ariad project issue-open <name> <json> [--projects-root <path>]\n  ariad project begin-iteration <name> [--db-file <file>] [--projects-root <path>]\n  ariad project debug-restore-requirements <name> [--sha <sha256>] [--discard-planning] [--fresh-store] [--projects-root <path>]',
     '  ariad project set-role-models <name> <json> [--projects-root <path>]',
     '  ariad project interfaces <name> [--id <interface-id>] [--projects-root <path>]',
     '  ariad daemon {start|status|stop|restart} [--projects-root <path>]',
@@ -434,10 +434,10 @@ export async function runAriadRuntimeCli(argv = process.argv.slice(2)) {
   if (scope === 'project' && action === 'decide' && !decision?.trim()) {
     throw new Error('decide requires decision text: ariad project decide <name> <decision>');
   }
-  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues', 'decide'].includes(action)) {
+  if (scope === 'project' && ['start', 'resume', 'pause', 'soft-stop', 'stop', 'status', 'models', 'interfaces', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'list', 'create', 'takeover', 'adopt', 'issue-open', 'issues', 'decide', 'db-capture', 'db-restore'].includes(action)) {
     if (action !== 'list' && !name) throw new Error('project name required');
-    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'create', 'takeover', 'adopt', 'issue-open', 'decide'].includes(action)) await ensureAriadDaemon(root);
-    const actualAction = action === 'set-ux-review' ? 'set_ux_review' : action === 'set-debug-hold' ? 'set_debug_hold' : action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action;
+    if (['start', 'resume', 'pause', 'soft-stop', 'stop', 'set-role-models', 'set-ux-review', 'set-debug-hold', 'create', 'takeover', 'adopt', 'issue-open', 'decide', 'db-capture', 'db-restore'].includes(action)) await ensureAriadDaemon(root);
+    const actualAction = action === 'set-ux-review' ? 'set_ux_review' : action === 'set-debug-hold' ? 'set_debug_hold' : action === 'set-role-models' ? 'set_role_models' : action === 'soft-stop' ? 'soft_stop' : action === 'issue-open' ? 'open_issue' : action === 'issues' ? 'list_issues' : action === 'db-capture' ? 'db_capture' : action === 'db-restore' ? 'db_restore' : action;
     return daemonRequest(root, {
       action: actualAction,
       name,

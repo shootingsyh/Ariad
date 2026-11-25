@@ -2,6 +2,9 @@ import { join } from 'node:path';
 
 import { SQLiteV2Store, isStaleStoreViewError } from '../v2/sqlite-store.js';
 import { VersionedTaskStore } from '../v2/versioned-task-store.js';
+import { DbHistory, restoreDbHistory as restoreDbHistoryFiles, ensureDbHistoryHook } from '../v2/db-history.js';
+import { registerBeforeReopenHook } from '../v2/store-connection.js';
+import { fileURLToPath } from 'node:url';
 import { RoleRegistry } from '../v2/role-registry.js';
 import { ProviderRegistry } from '../v2/provider-registry.js';
 import { ResourcePool, ScopedResourcePool } from '../v2/resource-pool.js';
@@ -96,6 +99,27 @@ export class StandaloneProjectRuntime {
     // scheduler or supervisor sees it.
     if (this.store.getProject(project.id)?.versionedTree === true) {
       this.store = new VersionedTaskStore(this.store);
+    }
+
+    // db-history (opt-in per project): a session rides the shared
+    // store connection; the repo's pre-commit hook drains it into
+    // .ariad/db-history on every project commit.
+    this.dbHistory = null;
+    if (project.dbHistory?.enabled === true) {
+      this.dbHistory = new DbHistory({
+        dbFile: project.stateDb,
+        historyDir: join(project.workspace, '.ariad', 'db-history'),
+        getHandle: () => { try { return this.store.db; } catch { return null; } },
+        anchor: `storage:${CURRENT_STORAGE_VERSION}`,
+      });
+      registerBeforeReopenHook(box => this.dbHistory?.flushForReopen(box));
+      try {
+        ensureDbHistoryHook({
+          workspace: project.workspace,
+          projectId: project.id,
+          cliFile: fileURLToPath(new URL('./cli.js', import.meta.url)),
+        });
+      } catch { /* hook installation is best-effort */ }
     }
 
     const providers = new ProviderRegistry();
@@ -429,7 +453,20 @@ export class StandaloneProjectRuntime {
     };
   }
 
+  captureDbHistory() {
+    if (!this.dbHistory) return { captured: false, reason: 'db-history is not enabled for this project' };
+    return this.dbHistory.capture();
+  }
+
+  restoreDbHistory() {
+    if (!this.dbHistory) throw new Error('db-history is not enabled for this project');
+    const stamp = new Date().toISOString().replaceAll(':', '').replaceAll('.', '');
+    const target = join(this.project.workspace, '.ariad', 'db-history', `restored-${stamp}.db`);
+    return restoreDbHistoryFiles(this.dbHistory.historyDir, target);
+  }
+
   close() {
+    try { this.dbHistory?.capture(); } catch { /* best-effort */ }
     this.codeIntelligence?.close?.();
     this.store.close();
   }

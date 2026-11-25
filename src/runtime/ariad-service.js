@@ -19,6 +19,7 @@ import {
   requireRuntimeDependencies,
 } from './code-intelligence/project-capabilities.js';
 import { join } from 'node:path';
+import { restoreDbHistory as restoreDbHistoryFiles } from '../v2/db-history.js';
 
 export class AriadService {
   constructor({
@@ -330,6 +331,21 @@ export class AriadService {
     const enqueued = runtime.enqueueLocalReplan({ id, instruction });
     this.wake('operator-local-replan');
     return { projectId: project.id, requestId: enqueued.id, purpose: 'LOCAL_REPLAN', state: enqueued.state };
+  }
+
+  dbCapture(name) {
+    const project = this.manager.status(name);
+    return this.runtimeFor(project).captureDbHistory();
+  }
+
+  dbRestore(name) {
+    // Deliberately independent of the live runtime: restore matters
+    // most exactly when the store cannot open at all.
+    const project = this.manager.status(name);
+    if (project.dbHistory?.enabled !== true) throw new Error('db-history is not enabled for this project');
+    const stamp = new Date().toISOString().replaceAll(':', '').replaceAll('.', '');
+    const historyDir = join(project.workspace, '.ariad', 'db-history');
+    return restoreDbHistoryFiles(historyDir, join(historyDir, `restored-${stamp}.db`));
   }
 
   openIssue(name, issue) {
