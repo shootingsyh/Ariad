@@ -55,8 +55,11 @@ export class VersionedTaskStore {
     try { this.versioned.close(); } catch { /* already closed */ }
   }
 
-  reopen() {
-    try { this.runtime.reopen(); } finally { this.versioned.reopen(); }
+  reopen(reason) {
+    // One shared connection underneath: the runtime store's reopen
+    // re-establishes it for both sides; the versioned side only drops
+    // its memoized views and re-syncs to the new handle.
+    try { this.runtime.reopen(reason); } finally { this.versioned.refresh(); }
   }
 
   specFirstSeenAt(taskId) {

@@ -242,7 +242,7 @@ export class StandaloneProjectRuntime {
       // incident; 2026-11-02 supervisor.audit -> listTasks; 2026-11-22
       // versioned listExecTasks). Reopen the project stores once and
       // retry the tick before the failure is allowed to park the project.
-      this.store.reopen?.();
+      this.store.reopen?.(error);
       try {
         const result = await this.#tickOnce({ schedule, adhocOnly, pauseDelivery });
         this.consecutiveStoreFailures = 0;

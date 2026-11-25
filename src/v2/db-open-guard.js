@@ -27,11 +27,11 @@ import { basename, dirname, join } from 'node:path';
 // still hard-fails at once, and if every retry fails the open still
 // refuses (health cannot be proven), exactly as before.
 
-export function recordDbIncident(filePath, code, detail) {
+export function recordDbIncident(filePath, code, detail, kind = 'DB_OPEN_GUARD') {
   try {
     const line = `${JSON.stringify({
       at: new Date().toISOString(),
-      kind: 'DB_OPEN_GUARD',
+      kind,
       code,
       file: basename(filePath),
       detail: String(detail ?? ''),
@@ -85,7 +85,102 @@ export function isTransientIoError(error) {
   return isTransientIoText(message);
 }
 
+// Read-only integrity verdict for an existing database file. Opens the
+// file with readOnly: true, so the check itself can never run WAL
+// recovery, checkpoint, or truncate anything (2026-11-25 post-mortem:
+// the previous guard opened read-write and closed the handle after
+// every failed attempt; each close checkpointed the WAL of a database
+// whose health was still unknown, destroying the very data the check
+// was meant to protect). States: 'ok' | 'structural' (the file itself
+// is damaged) | 'transient' (I/O-flavoured failure; the verdict is
+// untrustworthy, retry) | 'needs-rw' (a cold WAL the read-only open
+// cannot recover: SQLITE_CANTOPEN, e.g. wal present but no shm).
+function readOnlyIntegrityVerdict(filePath) {
+  let db;
+  try {
+    db = new DatabaseSync(filePath, { readOnly: true });
+  } catch (e) {
+    if (isTransientIoError(e)) {
+      return { state: 'transient', detail: `SQLite read-only open failed: ${e?.message ?? e}` };
+    }
+    const msg = String(e?.message ?? e);
+    const errcode = typeof e?.errcode === 'number' ? (e.errcode & 0xff) : null;
+    if (errcode === 14 || /unable to open database file/i.test(msg)) {
+      return { state: 'needs-rw', detail: `read-only open cannot recover this file: ${msg}` };
+    }
+    return { state: 'structural', detail: `SQLite read-only open failed: ${msg}` };
+  }
+  try {
+    const rows = db.prepare('PRAGMA integrity_check').all();
+    const values = rows.map(r => Object.values(r)[0]);
+    if (values.length === 1 && values[0] === 'ok') return { state: 'ok' };
+    const joined = values.join('; ');
+    if (isTransientIoText(joined)) {
+      return { state: 'transient', detail: `integrity_check reported: ${joined.slice(0, 300)}` };
+    }
+    return { state: 'structural', detail: `integrity_check reported: ${joined.slice(0, 300)}` };
+  } catch (e) {
+    if (isTransientIoError(e) || isTransientIoText(e?.message ?? '')) {
+      return { state: 'transient', detail: `integrity_check failed: ${e?.message ?? e}` };
+    }
+    return { state: 'structural', detail: `integrity_check failed: ${e?.message ?? e}` };
+  } finally {
+    try { db.close(); } catch { /* read-only close: no checkpoint, nothing at stake */ }
+  }
+}
+
 export function openGuardedDatabase(filePath, options = undefined) {
+  const exists = existsSync(filePath);
+  if (exists) {
+    let size = null;
+    try { size = statSync(filePath).size; } catch { size = null; }
+    if (size === 0) {
+      guardFailure('STORE_DB_EMPTY', filePath, 'existing database file is 0 bytes');
+    }
+  }
+  if (!exists) {
+    // A path that does not exist at all is the only file a caller may
+    // initialize as a new store.
+    return options ? new DatabaseSync(filePath, options) : new DatabaseSync(filePath);
+  }
+  if (options?.readOnly) {
+    const verdict = readOnlyIntegrityVerdict(filePath);
+    if (verdict.state === 'ok') return new DatabaseSync(filePath, options);
+    guardFailure('STORE_DB_CORRUPT', filePath, verdict.detail);
+  }
+  // Verify BEFORE opening read-write: until the file is proven healthy,
+  // no read-write handle is ever opened on it, so nothing can checkpoint
+  // or truncate its WAL while its health is unknown (2026-11-25).
+  let lastTransientDetail = null;
+  let verified = false;
+  for (let attempt = 0; attempt < GUARD_OPEN_ATTEMPTS; attempt++) {
+    if (attempt > 0) sleepSync(GUARD_RETRY_DELAYS_MS[attempt - 1] ?? 1600);
+    const verdict = readOnlyIntegrityVerdict(filePath);
+    if (verdict.state === 'ok') { verified = true; break; }
+    if (verdict.state === 'structural') {
+      guardFailure('STORE_DB_CORRUPT', filePath, verdict.detail);
+    }
+    if (verdict.state === 'needs-rw') {
+      // Cold WAL a read-only open cannot recover. Fall back to the
+      // legacy read-write guarded open, and record that the safe path
+      // was unavailable for this file.
+      recordDbIncident(filePath, 'STORE_DB_RO_FALLBACK', verdict.detail);
+      return openGuardedDatabaseLegacy(filePath, options);
+    }
+    lastTransientDetail = verdict.detail;
+  }
+  if (!verified) {
+    guardFailure('STORE_DB_CORRUPT', filePath, `${lastTransientDetail ?? 'integrity_check failed'} (transient I/O failure persisted across ${GUARD_OPEN_ATTEMPTS} read-only check attempts)`);
+  }
+  if (lastTransientDetail) {
+    recordDbIncident(filePath, 'STORE_DB_TRANSIENT_IO', `read-only integrity check passed after transient I/O failure (${lastTransientDetail})`);
+  }
+  // The file was proven healthy moments ago by the read-only check, in
+  // this same synchronous process; nothing else opened it in between.
+  return options ? new DatabaseSync(filePath, options) : new DatabaseSync(filePath);
+}
+
+function openGuardedDatabaseLegacy(filePath, options = undefined) {
   if (existsSync(filePath)) {
     let size = null;
     try { size = statSync(filePath).size; } catch { size = null; }

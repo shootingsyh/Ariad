@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createFreshProjectStore } from './fresh-store.js';
+import { invalidateStoreConnection } from './store-connection.js';
 import { VersionedStore, DELIVERY_KINDS } from './versioned-store.js';
 import { writeInventoryArtifact } from './inventory-artifact.js';
 import { approvalsPath } from './project-docs.js';
@@ -134,6 +135,12 @@ export function beginIteration({ manager, name, dbFile = null, now = new Date() 
     rmSync(f, { force: true });
   }
   if (newDbPath !== oldDbPath) rmSync(oldDbPath, { force: true });
+
+  // The generations at these paths were just replaced: drop any shared
+  // connection box keyed to them so the fresh store opens the NEW file
+  // instead of inheriting a handle on the retired one.
+  invalidateStoreConnection(oldDbPath);
+  if (newDbPath !== oldDbPath) invalidateStoreConnection(newDbPath);
 
   // Planner artifacts are the pre-DB-first plan medium: the new store's
   // drafts replace them, and leaving the old bundle in the workspace

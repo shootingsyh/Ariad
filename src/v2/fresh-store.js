@@ -106,7 +106,7 @@ export function createFreshProjectStore({
     mkdirSync(paths.ariad, { recursive: true });
     runtime = new SQLiteV2Store(dbPath);
     const created = runtime.createProject(record);
-    try { runtime.db.close(); } catch { /* best effort close */ }
+    try { runtime.close(); } catch { /* best effort close */ }
     runtime = null;
 
     versioned = new VersionedStore(dbPath);

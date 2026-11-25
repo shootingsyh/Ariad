@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { openGuardedDatabase } from './db-open-guard.js';
+import { acquireStoreConnection, ensureStoreHandle, openStoreHandle, releaseStoreConnection, reopenStoreConnection } from './store-connection.js';
 import { ariadStateDbRefInTask } from './state-db-refs.js';
 import { createHash } from 'node:crypto';
 
@@ -75,22 +75,48 @@ export const TASK_PATCH_FIELDS = ['taskKind', 'title', 'parentId', 'dependsOn', 
 export const CONTRACT_PATCH_FIELDS = ['nodeType', 'parentId', 'behavior', 'exportedInterfaces', 'integrationScenarios'];
 
 export class VersionedStore {
+  #box = null;
+  #gen = 0;
+  #released = false;
+
   constructor(file) {
     if (!file) throw new Error('VersionedStore requires a database file path');
     this.filePath = file;
-    this.db = null;
     this.#open();
   }
 
-  // (Re)opens the connection and (re)applies pragmas and schema; every
-  // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
+  // The shared connection for this file (store-connection.js): this
+  // store reads the same live handle as the runtime store, and a
+  // reopen swaps it for both at once. The effective-tasks memo is tied
+  // to the handle generation: a reopen invalidates it.
+  get db() {
+    if (this.#released || !this.#box) return null;
+    this.#syncHandle();
+    return this.#box.handle;
+  }
+
+  // Acquires this file's shared connection (same guarded open as the
+  // runtime store - see db-open-guard.js) and applies pragmas and
+  // schema on its handle; every schema statement is CREATE IF NOT
+  // EXISTS, so re-applying after a reopen is idempotent.
   #open() {
-    // Same guarded open as the runtime store (db-open-guard.js): an
-    // existing empty/corrupt file hard-fails instead of initializing.
-    this.db = openGuardedDatabase(this.filePath);
-    this.db.exec('PRAGMA journal_mode=WAL;');
-    this.db.exec('PRAGMA synchronous=FULL;');
-    this.db.exec(`
+    this.#box = acquireStoreConnection(this.filePath);
+    this.#gen = openStoreHandle(this.#box, (db) => this.#initHandle(db));
+    this._effectiveTasksCache = null;
+  }
+
+  #syncHandle() {
+    const gen = ensureStoreHandle(this.#box, this.#gen, (db) => this.#initHandle(db));
+    if (gen !== this.#gen) {
+      this.#gen = gen;
+      this._effectiveTasksCache = null;
+    }
+  }
+
+  #initHandle(db) {
+    db.exec('PRAGMA journal_mode=WAL;');
+    db.exec('PRAGMA synchronous=FULL;');
+    db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
       CREATE TABLE IF NOT EXISTS spec_versions (
         version INTEGER PRIMARY KEY,
@@ -135,18 +161,32 @@ export class VersionedStore {
     `);
   }
 
-  // See SQLiteV2Store.reopen: drop a stale cached handle so subsequent
-  // operations run on a fresh connection.
-  reopen() {
+  // See SQLiteV2Store.reopen: the shared connection is re-established
+  // through the connection layer's non-destructive path
+  // (store-connection.js); this store sees the new handle via the box.
+  reopen(reason) {
     this._effectiveTasksCache = null;
-    if (this.db) {
-      try { this.db.close(); } catch { /* already dead: reopening anyway */ }
-      this.db = null;
-    }
-    this.#open();
+    if (!this.#box || this.#released) return;
+    reopenStoreConnection(this.#box, reason ?? null);
+    this.#syncHandle();
   }
 
-  close() { this.db.close(); }
+  // The shared handle was reopened by another store over this file:
+  // drop memoized views and re-sync. Never reopens anything itself.
+  refresh() {
+    this._effectiveTasksCache = null;
+    if (!this.#box || this.#released) return;
+    this.#syncHandle();
+  }
+
+  close() {
+    if (this.#released) return;
+    this.#released = true;
+    if (this.#box) {
+      releaseStoreConnection(this.#box);
+      this.#box = null;
+    }
+  }
 
   #metaGet(key) {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key);

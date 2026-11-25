@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
-import { openGuardedDatabase } from './db-open-guard.js';
+import { acquireStoreConnection, ensureStoreHandle, openStoreHandle, releaseStoreConnection, reopenStoreConnection } from './store-connection.js';
+import { recordDbIncident } from './db-open-guard.js';
 import { createHash } from 'node:crypto';
 import { isApprovalGateTask, developerTaskPolicyFailure } from './developer-task-policy.js';
 import { controlTaskPolicyFailure, isDeliveryKind, scopeOfTask, TASK_KINDS } from './control-task-policy.js';
@@ -135,23 +136,43 @@ export function isStaleStoreViewError(error) {
 }
 
 export class SQLiteV2Store {
+  #box = null;
+  #gen = 0;
+  #released = false;
+
   constructor(file) {
     if (!file) throw new Error('SQLiteV2Store requires a database file path');
     this.filePath = file;
-    this.db = null;
     this.#open();
   }
 
-  // (Re)opens the connection and (re)applies pragmas and schema; every
-  // schema statement is CREATE IF NOT EXISTS, so reopening is idempotent.
+  // The shared connection for this file (store-connection.js): every
+  // store over the same file reads the same live handle through the
+  // box, and a reopen swaps it for all of them at once.
+  get db() {
+    if (this.#released || !this.#box) return null;
+    this.#syncHandle();
+    return this.#box.handle;
+  }
+
+  // Acquires this file's shared connection (guarded open: an existing
+  // 0-byte or integrity-failing store is a hard failure, never a silent
+  // fresh initialization - see db-open-guard.js) and applies pragmas
+  // and schema on its handle; every schema statement is CREATE IF NOT
+  // EXISTS, so re-applying after a reopen is idempotent.
   #open() {
-    // Guarded open: an existing 0-byte or integrity-failing store is a
-    // hard failure (STORE_DB_EMPTY / STORE_DB_CORRUPT), never a silent
-    // fresh initialization (2026-11-03 incident). See db-open-guard.js.
-    this.db = openGuardedDatabase(this.filePath);
-    this.db.exec('PRAGMA journal_mode=WAL;');
-    this.db.exec('PRAGMA synchronous=FULL;');
-    this.db.exec(`
+    this.#box = acquireStoreConnection(this.filePath);
+    this.#gen = openStoreHandle(this.#box, (db) => this.#initHandle(db));
+  }
+
+  #syncHandle() {
+    this.#gen = ensureStoreHandle(this.#box, this.#gen, (db) => this.#initHandle(db));
+  }
+
+  #initHandle(db) {
+    db.exec('PRAGMA journal_mode=WAL;');
+    db.exec('PRAGMA synchronous=FULL;');
+    db.exec(`
       CREATE TABLE IF NOT EXISTS v2_projects (
         id TEXT PRIMARY KEY,
         data_json TEXT NOT NULL,
@@ -208,16 +229,17 @@ export class SQLiteV2Store {
     `);
   }
 
-  // Drops the cached connection when it has gone stale (isDiskIoError)
-  // so subsequent operations run on a fresh one; the file itself and all
-  // committed data are untouched (2026-11-02: this store's listTasks kept
-  // failing with SQLITE_IOERR and parked the project FAILED).
-  reopen() {
-    if (this.db) {
-      try { this.db.close(); } catch { /* already dead: reopening anyway */ }
-      this.db = null;
-    }
-    this.#open();
+  // Reopens the shared connection after a stale-view failure, through
+  // the connection layer's non-destructive path: snapshot the
+  // db/-wal/-shm trio first, verify the old handle is really closed
+  // before its replacement opens, restore + latch faulted when the
+  // guarded open refuses (store-connection.js). The old doctrine -
+  // close blind, reopen, assume committed data untouched - is what
+  // turned the 2026-11-25 transient I/O failure into a destroyed WAL.
+  reopen(reason) {
+    if (!this.#box || this.#released) return;
+    reopenStoreConnection(this.#box, reason ?? null);
+    this.#syncHandle();
   }
 
   createProject(project) {
@@ -785,13 +807,30 @@ export class SQLiteV2Store {
     }));
   }
 
+  // Folds whatever WAL frames can currently be folded into the main
+  // file (called after every tick). PASSIVE only, never TRUNCATE: a
+  // checkpoint must never discard unfolded frames, and truncating from
+  // this connection while other connections held the file was a
+  // standing hazard (2026-11-25 post-mortem; the previous close() ran
+  // wal_checkpoint(TRUNCATE) unconditionally before closing).
   checkpoint() {
-    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+    const db = this.db;
+    if (!db) return;
+    try {
+      db.exec('PRAGMA wal_checkpoint(PASSIVE);');
+    } catch (e) {
+      recordDbIncident(this.filePath, 'STORE_CHECKPOINT_FAILED', String(e?.message ?? e));
+      throw e;
+    }
   }
 
   close() {
-    this.checkpoint();
-    this.db.close();
+    if (this.#released) return;
+    this.#released = true;
+    if (this.#box) {
+      releaseStoreConnection(this.#box);
+      this.#box = null;
+    }
   }
 }
 
