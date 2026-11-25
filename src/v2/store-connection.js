@@ -21,11 +21,15 @@ import { openGuardedDatabase, recordDbIncident } from './db-open-guard.js';
 //
 // reopenStoreConnection is the only sanctioned way to drop and
 // re-establish the handle, and it is built to be non-destructive:
+//   0. do not rush: probe the live handle a few times over about a
+//      second first - if it proves healthy, the reopen is skipped
+//      entirely and the caller just retries its operation;
 //   1. snapshot the db/-wal/-shm trio first (the pre-reopen state stays
 //      recoverable no matter what happens next);
-//   2. close the old handle and VERIFY it is really closed - a close
-//      that throws while the handle still works aborts the reopen, so
-//      a zombie connection can never coexist with its replacement;
+//   2. close the old handle with timed retries and VERIFY it is
+//      really closed - a close that still leaves the handle
+//      answering after every retry aborts the reopen, so a zombie
+//      connection can never coexist with its replacement;
 //   3. open the replacement through the guarded open (which now proves
 //      integrity read-only before any read-write handle exists);
 //   4. if the open fails, restore the snapshot trio byte-for-byte and
@@ -174,20 +178,70 @@ function reasonText(reason) {
   return msg.slice(0, 200);
 }
 
+// Blocking sleep for the synchronous store layer (Node permits
+// Atomics.wait on the main thread).
+function sleepSync(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, ms);
+}
+
+// 'ok'   - the handle answers and its database passes a quick check
+// 'dead' - the handle is closed and cannot answer at all
+// 'sick' - the handle answers but the database does not check out,
+//          or the probe itself hits an I/O-class error
+function probeHandle(handle) {
+  if (!handle || handle.isOpen === false) return 'dead';
+  try {
+    const row = handle.prepare('PRAGMA quick_check(1)').get();
+    const value = row ? Object.values(row)[0] : null;
+    return value === 'ok' ? 'ok' : 'sick';
+  } catch (e) {
+    if (e?.code === 'ERR_INVALID_STATE' || /database is not open/i.test(String(e?.message ?? ''))) return 'dead';
+    return 'sick';
+  }
+}
+
 export function reopenStoreConnection(box, reason = null) {
   if (box.faulted) throw box.faulted;
+  // Do not rush into a reopen: a caller that saw one stale-view or
+  // I/O error may be looking at a transient. Probe the live handle a
+  // few times over about a second; only a handle that stays dead or
+  // sick across every probe earns the full snapshot/close/reopen.
+  if (box.handle) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (probeHandle(box.handle) === 'ok') {
+        recordDbIncident(box.file, 'STORE_REOPEN_SKIPPED',
+          `reopen skipped: shared connection proved healthy on probe ${attempt + 1} (reason was: ${reasonText(reason)})`,
+          'STORE_CONNECTION');
+        return box.handle;
+      }
+      if (attempt < 2) sleepSync(300);
+    }
+  }
   const snapshot = snapshotStoreFiles(box.file, 'prereopen');
   recordDbIncident(box.file, 'STORE_REOPEN',
     `reopening shared connection (reason: ${reasonText(reason)}); pre-reopen snapshot: ${snapshot ?? 'none (file absent)'}`,
     'STORE_CONNECTION');
   const old = box.handle;
   if (old) {
-    let closed = false;
-    try { old.close(); closed = true; } catch { /* verified below */ }
-    if (!closed) {
+    // Close patiently: a close that errors or does not take is
+    // retried with backoff before anyone concludes the handle is a
+    // zombie - a rushed replacement is how two connections end up
+    // over one WAL.
+    let closed = old.isOpen === false;
+    let attempts = 0;
+    const CLOSE_BACKOFF_MS = [250, 750, 2000];
+    while (!closed && attempts < 4) {
+      if (attempts > 0) sleepSync(CLOSE_BACKOFF_MS[attempts - 1]);
+      attempts += 1;
+      try { old.close(); } catch { /* verified below */ }
       // A throwing close may still have closed the handle; only a
       // handle that still answers is a zombie we must not replace.
-      try { old.prepare('SELECT 1').get(); } catch { closed = true; }
+      if (old.isOpen === false) closed = true;
+      else { try { old.prepare('SELECT 1').get(); } catch { closed = true; } }
+    }
+    if (closed && attempts > 1) {
+      recordDbIncident(box.file, 'STORE_REOPEN_CLOSE_RETRY',
+        `existing connection closed after ${attempts} attempts`, 'STORE_CONNECTION');
     }
     if (!closed) {
       recordDbIncident(box.file, 'STORE_REOPEN_ABORTED',

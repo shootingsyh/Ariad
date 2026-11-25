@@ -67,13 +67,14 @@ test('the reconcile signal shares the store connection and counts its writes', (
   store.close();
 });
 
-test('reopen on a healthy file swaps the handle for every holder and snapshots first', () => {
+test('reopen over a dead handle swaps the handle for every holder and snapshots first', () => {
   const dir = tmp();
   const file = join(dir, 'state.db');
   const runtime = new SQLiteV2Store(file);
   runtime.createProject({ id: 'p1' });
   const facade = new VersionedTaskStore(runtime);
   const before = runtime.db;
+  runtime.db.close(); // the handle died underneath the holders
   facade.reopen(new Error('simulated stale view'));
   assert.notEqual(runtime.db, before);
   assert.equal(facade.versioned.db, runtime.db);
@@ -148,4 +149,24 @@ test('snapshot/restore round-trips the db trio byte-for-byte', () => {
   assert.equal(restoreStoreFiles(file, snap), true);
   assert.equal(readFileSync(file, 'utf8'), 'main-bytes');
   assert.equal(readFileSync(file + '-wal', 'utf8'), 'wal-bytes');
+});
+
+test('reopen is skipped while the shared handle proves healthy', () => {
+  const dir = tmp();
+  const file = join(dir, 'state.db');
+  const store = new SQLiteV2Store(file);
+  store.createProject({ id: 'p1' });
+  const before = store.db;
+  store.reopen(new Error('simulated transient stale view'));
+  assert.equal(store.db, before); // same handle: no close, no reopen
+  assert.equal(store.db.prepare('SELECT 1 AS one').get().one, 1);
+  const snapDir = join(dir, 'snapshots');
+  const snaps = existsSync(snapDir) ? readdirSync(snapDir).filter(n => n.startsWith('state-prereopen-')) : [];
+  assert.deepEqual(snaps, []); // and no snapshot was taken either
+  // Contrast: once the handle is really dead, reopen does replace it.
+  store.db.close();
+  store.reopen(new Error('handle actually dead'));
+  assert.notEqual(store.db, before);
+  assert.equal(store.db.prepare('SELECT 1 AS one').get().one, 1);
+  store.close();
 });
