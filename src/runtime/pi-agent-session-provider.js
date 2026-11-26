@@ -10,6 +10,7 @@ import {
   SettingsManager,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
+import { bundledSkillPaths, bundledSkillsCatalog, deliverySystemPrompt } from './bundled-skills.js';
 import { Type } from 'typebox';
 import { Check, Errors } from 'typebox/value';
 import { buildStandaloneRolePrompt } from './role-run-prompt.js';
@@ -33,6 +34,11 @@ const REVIEWER_MUTATING_TOOLS = new Set(['edit', 'write', 'ariad_memory_write'])
 // document: the PM, while running a requirements-authoring task.
 const REQUIREMENTS_AUTHOR_PURPOSES = new Set(['REQUIREMENTS_AUTHORING', 'LOCAL_REPLAN_REQUIREMENTS']);
 export const ARIAD_DELIVERY_SYSTEM_PROMPT = 'You are an Ariad execution agent. The canonical task artifact in the user message is authoritative. Follow the active role protocol, obey runtime tool policy, use tools as needed, and finish by calling ariad_role_result exactly once. Your file writes are confined to this project workspace: never edit Ariad itself or other projects - report such defects instead of fixing them. Never open or modify the Ariad state databases (.ariad/*.db) through any tool or command: task and plan data are changed only by the Tech Lead through the planning tools, so if a task appears to require a state-database change, escalate with ariad_report_issue instead of doing it yourself.';
+
+// Bundled skill catalog (skills/ in the install), computed once per
+// process: delivery sessions get it appended to their system prompt,
+// other sessions get the identical catalog from the resource loader.
+const BUNDLED_SKILLS_CATALOG = bundledSkillsCatalog();
 const DEFAULT_CODEX_QUOTA_FALLBACK = 'meta/muse-spark-1.2-contributor';
 
 /** Only a confirmed account usage/quota exhaustion triggers provider failover. */
@@ -667,12 +673,13 @@ export async function createDefaultPiRunSession(spec) {
     agentDir: paths.root,
     settingsManager,
     noSkills: true,
+    additionalSkillPaths: bundledSkillPaths(),
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
     ...(mcpExtensionPath ? { additionalExtensionPaths: [mcpExtensionPath] } : {}),
     ...(DELIVERY_ROLES.has(spec.role) ? {
-      systemPromptOverride: () => ARIAD_DELIVERY_SYSTEM_PROMPT,
+      systemPromptOverride: () => deliverySystemPrompt(ARIAD_DELIVERY_SYSTEM_PROMPT, BUNDLED_SKILLS_CATALOG),
       appendSystemPromptOverride: () => [],
     } : {}),
     extensionFactories: [(pi) => {
