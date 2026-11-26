@@ -14,9 +14,12 @@ import {
 test('the install ships the godot audio testing skill', () => {
   const { skills, diagnostics } = loadBundledSkills();
   assert.deepEqual(diagnostics.filter(d => d.type === 'error'), []);
+  for (const name of ['godot-audio-testing', 'godot-tilemap-production', 'visual-evidence-capture']) {
+    assert.ok(skills.some(s => s.name === name), `${name} skill is bundled`);
+  }
   const audio = skills.find(s => s.name === 'godot-audio-testing');
   assert.ok(audio, 'godot-audio-testing skill is bundled');
-  assert.match(audio.description, /Dummy audio driver/);
+  assert.match(audio.description, /Godot 4 game audio/);
   assert.ok(audio.filePath.endsWith(join('godot-audio-testing', 'SKILL.md')));
 });
 
