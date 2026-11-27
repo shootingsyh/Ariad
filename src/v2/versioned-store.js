@@ -71,7 +71,7 @@ function fail(code, message, details = undefined) {
 // 2026-11-22): a patch names only the fields it changes, validated
 // against this schema; every other field of the existing spec is
 // preserved by construction.
-export const TASK_PATCH_FIELDS = ['taskKind', 'title', 'parentId', 'dependsOn', 'interfaceIds', 'featureId', 'intent', 'acceptanceCriteria', 'acceptanceCriterionIds', 'testStrategy', 'issueRefs', 'art', 'ux', 'executionMode', 'logicalRefs', 'milestoneId', 'unifiedTaskSchemaVersion'];
+export const TASK_PATCH_FIELDS = ['taskKind', 'title', 'parentId', 'dependsOn', 'interfaceIds', 'featureId', 'intent', 'acceptanceCriteria', 'acceptanceCriterionIds', 'testStrategy', 'issueRefs', 'art', 'ux', 'executionMode', 'logicalRefs', 'milestoneId', 'unifiedTaskSchemaVersion', 'retirement'];
 export const CONTRACT_PATCH_FIELDS = ['nodeType', 'parentId', 'behavior', 'exportedInterfaces', 'integrationScenarios'];
 
 export class VersionedStore {
@@ -475,6 +475,33 @@ export class VersionedStore {
         else if (!taskIds.has(dep)) errors.push(`task ${t.id}: dependsOn ${dep} not in version ${version}`);
       }
     }
+    // Sanctioned retirement (owner decision, 2026-11-27): a task may carry
+    // retirement: { reason } to declare that a plan decision ends it without
+    // completion. The reason is required (the audit trail for why executed
+    // work was retired), and no task that stays live may keep depending on
+    // or sitting under a retired task - rewire it or co-retire it in the
+    // same version, so retirement never silently strands a dependent.
+    const retiredIds = new Set();
+    for (const t of tasks) {
+      if (t.retirement == null) continue;
+      const reason = typeof t.retirement === 'object' ? t.retirement.reason : null;
+      if (typeof reason !== 'string' || !reason.trim()) {
+        errors.push(`task ${t.id}: retirement must be an object with a non-empty reason string`);
+      } else retiredIds.add(t.id);
+    }
+    if (retiredIds.size) {
+      for (const t of tasks) {
+        if (retiredIds.has(t.id)) continue;
+        if (t.parentId != null && retiredIds.has(t.parentId)) {
+          errors.push(`task ${t.id}: parentId ${t.parentId} is retired in this version - reparent the task or retire it in the same version`);
+        }
+        for (const dep of t.dependsOn ?? []) {
+          if (retiredIds.has(dep)) {
+            errors.push(`task ${t.id}: dependsOn retired task ${dep} - rewire the dependency or retire this task in the same version`);
+          }
+        }
+      }
+    }
     // dependency cycle check (DFS over dependsOn edges)
     const byId = new Map(tasks.map(t => [t.id, t]));
     const mark = new Map();
@@ -721,6 +748,20 @@ export class VersionedStore {
       if (!frozen && !inFlight && !started) continue;
       const draftSpec = this.getSpecTask(draftVersion, ex.id);
       const prodSpec = prod == null ? null : this.getSpecTask(prod, ex.id);
+      // Retirement markers on tasks that may not be retired yet: work in
+      // flight must settle first, and a gated task's pending human gate
+      // must be decided - retirement never bypasses either. (DONE and
+      // started tasks retire cleanly; the removal / gate-signature checks
+      // below still apply unchanged, so retirement cannot smuggle a
+      // re-signing of the task it retires.)
+      const retireReason = typeof draftSpec?.retirement?.reason === 'string' ? draftSpec.retirement.reason.trim() : '';
+      if (draftSpec && retireReason) {
+        if (inFlight) {
+          blockers.push({ id: ex.id, state, reason: 'retire-in-flight', code: 'RETIRE_TASK_IN_FLIGHT', message: `draft retires in-flight task ${ex.id}; retirement defers until delivery settles` });
+        } else if (state === 'NEEDS_HUMAN' || state === 'SYSTEM_BLOCKED') {
+          blockers.push({ id: ex.id, state, reason: 'retire-gated', code: 'RETIRE_TASK_GATED', message: `draft retires ${state} task ${ex.id}; the pending gate must be decided before the task can be retired` });
+        }
+      }
       if (!draftSpec) {
         blockers.push(frozen
           ? { id: ex.id, state, reason: 'removed', code: 'PROMOTION_REMOVES_EXECUTED_TASK', message: `draft removes ${state} task ${ex.id}` }
@@ -757,17 +798,35 @@ export class VersionedStore {
         `draft violates executed-work protection on ${blockers.length} tasks - restore every one of them to its production spec (or restore the removed task) before resubmitting: ${blockers.map(b => `${b.id} (${b.state}: ${b.reason})`).join(', ')}`,
         { violations: blockers });
     }
-    const hash = this.contentHash(draft.version);
+    // Sanctioned retirement landing (owner decision, 2026-11-27): draft
+    // tasks carrying retirement: { reason } are dropped from the promoted
+    // spec and their exec records are marked OBSOLETE with a TASK_RETIRED
+    // history entry, all inside the flip transaction - a retired task is
+    // never silently dropped (plain removal of protected work is refused
+    // above) and never stays behind as a schedulable spec.
+    const retired = this.listSpecTasks(draft.version)
+      .filter(t => typeof t.retirement?.reason === 'string' && t.retirement.reason.trim());
     const ts = nowIso();
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      for (const t of retired) {
+        this.db.prepare('DELETE FROM spec_tasks WHERE version = ? AND task_id = ?').run(draft.version, t.id);
+      }
+      const hash = this.contentHash(draft.version);
       this.db.prepare("UPDATE spec_versions SET state = 'archived' WHERE state = 'prod'").run();
       this.db.prepare("UPDATE spec_versions SET state = 'prod', approved_by = ?, approved_at = ?, content_hash = ? WHERE version = ?")
         .run(approvedBy, ts, hash, draft.version);
       this.#metaSet('prod_version', draft.version);
+      for (const t of retired) {
+        const ex = this.getExecTask(t.id);
+        if (ex && !ex.embedded) {
+          this.updateExecTask(t.id, { state: 'OBSOLETE', execution: null },
+            { type: 'TASK_RETIRED', reason: t.retirement.reason, version: draft.version, at: ts });
+        }
+      }
       this.db.exec('COMMIT');
+      return { version: draft.version, contentHash: hash, retired: retired.map(t => t.id) };
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
-    return { version: draft.version, contentHash: hash };
   }
 
   // ---- execution side ----------------------------------------------------
