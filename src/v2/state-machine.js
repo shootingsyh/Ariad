@@ -67,7 +67,7 @@ export const TASK_MACHINE = defineStateMachine({
     },
     NEEDS_HUMAN: {
       HUMAN_DECISION: {
-        target: ({ systemDiagnosis = false }) => systemDiagnosis ? 'DONE' : 'READY',
+        target: ({ systemDiagnosis = false, humanGate = false }) => (systemDiagnosis || humanGate) ? 'DONE' : 'READY',
       },
     },
     DONE: {},

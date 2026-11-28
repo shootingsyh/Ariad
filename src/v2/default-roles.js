@@ -154,6 +154,7 @@ export function createDefaultV2Roles({
           affectedComponent: issue.affectedComponent ?? null,
           affectedInterface: issue.affectedInterface ?? null,
           fingerprint: issue.dedupeKey ?? null,
+          target: issue.target === 'platform' ? 'platform' : 'project',
           context: { roleOutcome: result.outcome, reportedAtRoleResult: true },
         });
       }

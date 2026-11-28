@@ -7,6 +7,7 @@ export const TASK_KINDS = Object.freeze({
   PLANNING: 'PLANNING',
   REVIEW_GATE: 'REVIEW_GATE',
   DIAGNOSTIC: 'DIAGNOSTIC',
+  HUMAN_GATE: 'HUMAN_GATE',
   FEATURE_TASK: 'FEATURE_TASK',
   INTEGRATION_TASK: 'INTEGRATION_TASK',
 });
@@ -40,6 +41,11 @@ export function controlTaskPolicyFailure(task) {
     if (!String(task.flowId ?? '').startsWith('adhoc:')) return 'ADHOC_ANALYSIS_REQUIRES_ADHOC_FLOW';
     if (!ADHOC_ISSUERS.has(task.input?.requestedBy)) return 'ADHOC_ANALYSIS_UNAUTHORIZED_ISSUER';
     if (!String(task.input?.instruction ?? '').trim()) return 'ADHOC_ANALYSIS_REQUIRES_INSTRUCTION';
+    return null;
+  }
+  if (kind === TASK_KINDS.HUMAN_GATE) {
+    if (task.stage !== 'human') return 'HUMAN_GATE_REQUIRES_HUMAN_STAGE';
+    if (!String(task.flowId ?? '').startsWith('human-gate:')) return 'HUMAN_GATE_REQUIRES_GATE_FLOW';
     return null;
   }
   if (!CONTROL_ROLES.has(task.stage)) return 'CONTROL_TASK_INVALID_ROLE';

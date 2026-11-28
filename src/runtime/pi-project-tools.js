@@ -285,7 +285,7 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
   pi.registerTool({
     name: 'ariad_report_issue',
     label: 'Ariad report issue',
-    description: 'Report a newly discovered product/project defect immediately without ending the current role. Ariad deduplicates it and starts Tech Lead triage/assignment while this role may continue. Report evidence and suspected impact; only Tech Lead triage decides blocking scope.',
+    description: 'Report a newly discovered defect immediately without ending the current role. Project defects are deduplicated and start Tech Lead triage/assignment while this role may continue. Set target to platform when the defect is in Ariad itself - the runtime, tooling, spec export, task-context artifacts, commit gates, CI locators or test-harness infrastructure - rather than in the product under construction: platform defects bypass triage and escalate straight to a human gate. Report evidence and suspected impact; only Tech Lead triage decides blocking scope for project defects.',
     parameters: Type.Object({
       title: Type.String({ minLength: 1 }),
       description: Type.String({ minLength: 1 }),
@@ -296,6 +296,7 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
       affectedInterface: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.Array(Type.Any())),
       dedupeKey: Type.Optional(Type.String({ minLength: 1 })),
+      target: Type.Optional(Type.Union([Type.Literal('project'), Type.Literal('platform')])),
     }, { additionalProperties: false }),
     async execute(_id, params) {
       if (typeof reportIssue !== 'function') {
@@ -318,13 +319,16 @@ export function registerAriadProjectTools(pi, { workspace, projectStoreFile = nu
         affectedComponent: params.affectedComponent ?? null,
         affectedInterface: params.affectedInterface ?? null,
         fingerprint: params.dedupeKey ?? null,
+        target: params.target ?? 'project',
         context: { reportedDuringRoleExecution: true },
       });
       return textResult({
         accepted: true,
         nonTerminal: true,
         issue,
-        guidance: 'The issue is queued for Tech Lead triage. Evaluate the current task independently against its acceptance criteria.',
+        guidance: issue?.state === 'NEEDS_HUMAN'
+          ? 'Platform defect: escalated straight to a human gate; it will not enter Tech Lead triage. Evaluate the current task independently against its acceptance criteria.'
+          : 'The issue is queued for Tech Lead triage. Evaluate the current task independently against its acceptance criteria.',
       });
     },
   });

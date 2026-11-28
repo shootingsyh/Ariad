@@ -16,6 +16,7 @@ import { ensureTakeoverReviewState } from '../v2/takeover-gate.js';
 import { applyTaskEvent } from '../v2/state-machine.js';
 import { TASK_KINDS, openDiagnosisGate, scopeOfTask } from '../v2/control-task-policy.js';
 import { diagnosisTaskView } from '../v2/system-block-diagnosis.js';
+import { escalatePlatformIssue, recordPlatformGateDecision } from '../v2/platform-issue-gate.js';
 import { auditTasks } from '../v2/dispatch-fairness.js';
 import { CURRENT_STORAGE_VERSION } from '../v2/schema-version.js';
 
@@ -218,6 +219,12 @@ export class StandaloneProjectRuntime {
       projectId: this.projectId,
       ...structuredClone(issue),
     });
+    if (created.target === 'platform' && !['CLOSED', 'REJECTED'].includes(created.state)) {
+      // Platform defects are not project work: no Tech Lead triage.
+      // The report escalates straight to a human gate (owner decision,
+      // 2026-11-27); see src/v2/platform-issue-gate.js.
+      return escalatePlatformIssue(this.store, created).issue;
+    }
     if (!created.planningRequestId && !['CLOSED', 'REJECTED'].includes(created.state)) {
       const requestId = `${this.projectId}:issue:${created.fingerprint}:${++this.requestSequence}`;
       this.store.enqueuePlanningRequest({
@@ -390,13 +397,15 @@ export class StandaloneProjectRuntime {
         taskState: updated.state,
       };
     }
+    const humanGate = task.taskKind === TASK_KINDS.HUMAN_GATE;
     const updated = this.store.appendTaskHistory(task.id, task.version, {
       type: 'HUMAN_DECISION',
       decision,
       at: new Date().toISOString(),
     }, applyTaskEvent(task, 'HUMAN_DECISION', {
       execution: null,
-    }, { systemDiagnosis }));
+    }, { systemDiagnosis, humanGate }));
+    if (humanGate) recordPlatformGateDecision(this.store, task, decision);
     return {
       taskId: updated.id,
       decision,

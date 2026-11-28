@@ -573,7 +573,7 @@ export class SQLiteV2Store {
   }
 
 
-  createIssue({ projectId, id = null, source = null, sourceTaskId = null, reportedBy = null, title, description, evidence = [], severity = 'medium', blocking = false, affectedComponent = null, affectedInterface = null, fingerprint = null, context = null }) {
+  createIssue({ projectId, id = null, source = null, sourceTaskId = null, reportedBy = null, title, description, evidence = [], severity = 'medium', blocking = false, affectedComponent = null, affectedInterface = null, fingerprint = null, context = null, target = 'project' }) {
     if (!projectId || !this.getProject(projectId)) throw new Error('unknown project');
     if (!String(title ?? '').trim()) throw new Error('issue title is required');
     if (!String(description ?? '').trim()) throw new Error('issue description is required');
@@ -588,6 +588,7 @@ export class SQLiteV2Store {
       affectedComponent,
       affectedInterface,
       context: structuredClone(context),
+      target: target === 'platform' ? 'platform' : 'project',
       triage: null,
       planningRequestId: null,
       assignedTaskIds: [],
