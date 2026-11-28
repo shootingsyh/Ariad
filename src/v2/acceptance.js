@@ -5,9 +5,21 @@ export const CRITERION_STATUSES = Object.freeze([
   'BLOCKED',
 ]);
 
+// Canonical criteria shape: an array of criterion texts. A task may be
+// authored with acceptanceCriteria as a single string (one prose
+// criterion) - every consumer derives positional IDs (AC1..ACn) from the
+// normalized array, so the string form must normalize to a one-element
+// array instead of silently reading as zero criteria (SRPG: M-core-systems
+// and the crx verification tasks carried string criteria that spec export,
+// task-context artifacts and tester aggregation all dropped to none).
+export function normalizeAcceptanceCriteria(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string' && value.trim()) return [value];
+  return [];
+}
+
 export function acceptanceCriteriaForTask(task) {
-  const criteria = task?.acceptanceCriteria ?? task?.input?.acceptanceCriteria ?? [];
-  return Array.isArray(criteria) ? criteria : [];
+  return normalizeAcceptanceCriteria(task?.acceptanceCriteria ?? task?.input?.acceptanceCriteria);
 }
 
 export function acceptanceCriterionIds(task) {

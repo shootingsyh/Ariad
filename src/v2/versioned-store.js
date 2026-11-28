@@ -403,6 +403,10 @@ export class VersionedStore {
     if (!task.title || typeof task.title !== 'string' || !task.title.trim()) errors.push(`task ${task.id ?? '?'}: title is required`);
     if (task.dependsOn !== undefined && !Array.isArray(task.dependsOn)) errors.push(`task ${task.id}: dependsOn must be an array`);
     if (task.interfaceIds !== undefined && !Array.isArray(task.interfaceIds)) errors.push(`task ${task.id}: interfaceIds must be an array`);
+    if (task.acceptanceCriteria !== undefined && task.acceptanceCriteria !== null
+      && typeof task.acceptanceCriteria !== 'string' && !Array.isArray(task.acceptanceCriteria)) {
+      errors.push(`task ${task.id}: acceptanceCriteria must be an array of criteria or a single criterion string`);
+    }
   }
 
   #validateContract(contract, errors) {

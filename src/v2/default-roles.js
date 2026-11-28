@@ -1,7 +1,7 @@
 import { runAutomatedRegression } from '../runtime/automated-regression.js';
 import { deriveExecutionHandoff } from '../runtime/role-run-prompt.js';
 import { buildTaskContextArtifact, writeTaskContextArtifact } from '../runtime/task-context-artifact.js';
-import { acceptanceCriterionIds } from './acceptance.js';
+import { acceptanceCriteriaForTask, acceptanceCriterionIds } from './acceptance.js';
 import { artCapabilityRecommendations, requiredArtCapabilities } from './art-capabilities.js';
 import { validatePlanAutonomy } from './autonomy.js';
 import { TASK_KINDS, scopeOfTask } from './control-task-policy.js';
@@ -839,7 +839,7 @@ export function createDefaultV2Roles({
           purpose: task.input?.purpose ?? null,
           title: task.title ?? null,
           intent: task.intent ?? task.input?.intent ?? null,
-          acceptanceCriteria: task.acceptanceCriteria ?? task.input?.acceptanceCriteria ?? [],
+          acceptanceCriteria: acceptanceCriteriaForTask(task),
           acceptanceCriterionIds: acceptanceCriterionIds(task),
           verification: task.verification ?? task.input?.verification ?? [],
           testStrategy: task.testStrategy ?? task.input?.testStrategy ?? null,

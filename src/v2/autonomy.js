@@ -1,3 +1,5 @@
+import { normalizeAcceptanceCriteria } from './acceptance.js';
+
 const HUMAN_REQUIREMENT_PATTERNS = [
   /\bexternal human(s| players?| testers?)?\b/i,
   /\bhuman playtest(ing|ers?)?\b/i,
@@ -27,13 +29,13 @@ export function validatePlanAutonomy(plan, planningRequests = []) {
 
   const violations = [];
   for (const task of plan?.tasks ?? []) {
-    const text = [task?.title, task?.intent, ...(task?.acceptanceCriteria ?? []), task?.testStrategy]
+    const text = [task?.title, task?.intent, ...normalizeAcceptanceCriteria(task?.acceptanceCriteria), task?.testStrategy]
       .filter(Boolean).join('\n');
     const match = HUMAN_REQUIREMENT_PATTERNS.find(re => re.test(text));
     if (match) violations.push({ taskId: task.id, reason: 'required external/manual human work', text });
   }
   for (const milestone of plan?.milestones ?? []) {
-    const text = [milestone?.title, milestone?.goal, ...(milestone?.acceptanceCriteria ?? []), milestone?.testStrategy]
+    const text = [milestone?.title, milestone?.goal, ...normalizeAcceptanceCriteria(milestone?.acceptanceCriteria), milestone?.testStrategy]
       .filter(Boolean).join('\n');
     const match = HUMAN_REQUIREMENT_PATTERNS.find(re => re.test(text));
     if (match) violations.push({ milestoneId: milestone.id, reason: 'required external/manual human work', text });

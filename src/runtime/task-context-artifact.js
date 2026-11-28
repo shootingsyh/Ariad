@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAutomatedRegression } from './automated-regression.js';
+import { normalizeAcceptanceCriteria } from '../v2/acceptance.js';
 
 function clone(value) {
   return value == null ? value : structuredClone(value);
@@ -15,7 +16,7 @@ function clone(value) {
 // directly always produced [] and left test-plan coverage validation with
 // no allowed IDs (SRPG T-fix-battlefield-location-routing, 2026-11-22).
 export function acceptanceCriterionIdsFor(criteria) {
-  return (Array.isArray(criteria) ? criteria : []).map((_, index) => `AC${index + 1}`);
+  return normalizeAcceptanceCriteria(criteria).map((_, index) => `AC${index + 1}`);
 }
 
 function compactBoundAnchor(entry) {
@@ -286,7 +287,7 @@ export function slimTaskArtifactForPrompt(artifact) {
 
 export function buildTaskContextArtifact({ task, boundaryContext, artifactRoot = null }) {
   const history = task?.history ?? [];
-  const acceptanceCriteria = clone(task?.acceptanceCriteria ?? task?.input?.acceptanceCriteria ?? []);
+  const acceptanceCriteria = clone(normalizeAcceptanceCriteria(task?.acceptanceCriteria ?? task?.input?.acceptanceCriteria));
   const developerResult = latestRoleResult(history, 'developer');
   const testerResult = latestRoleResult(history, 'tester');
   const reviewerResult = latestRoleResult(history, 'reviewer');

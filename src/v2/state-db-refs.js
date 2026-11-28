@@ -6,6 +6,8 @@
 // delegating it (2026-11-22 tc6 incident: a developer task told to
 // repair a stored test-plan entry edited the live store directly and
 // wedged the daemon).
+import { normalizeAcceptanceCriteria } from './acceptance.js';
+
 export const ARIAD_STATE_DB_REF_RE = /\bstate2?\.db(?:-wal|-shm|-journal)?\b|\.ariad\/[^\s'"]*?\.db(?:-wal|-shm|-journal)?\b/i;
 
 export function ariadStateDbRefInText(text) {
@@ -16,7 +18,7 @@ export function ariadStateDbRefInText(text) {
 
 export function ariadStateDbRefInTask(task) {
   const fields = [task?.title, task?.intent, task?.testStrategy,
-    ...(Array.isArray(task?.acceptanceCriteria) ? task.acceptanceCriteria : [])];
+    ...normalizeAcceptanceCriteria(task?.acceptanceCriteria)];
   for (const field of fields) {
     const ref = ariadStateDbRefInText(field);
     if (ref) return ref;

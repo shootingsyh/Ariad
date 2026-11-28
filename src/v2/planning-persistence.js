@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { acceptanceCriterionIds } from './acceptance.js';
+import { acceptanceCriterionIds, normalizeAcceptanceCriteria } from './acceptance.js';
 
 // Planning persistence (owner ruling 2026-11-03): important documents
 // and the planning state must live in the project's git repository.
@@ -32,7 +32,8 @@ const DOC_PATHS = [
 // (the same derivation task contexts use - see acceptance.js).
 function exportSpecTask(task) {
   const ids = acceptanceCriterionIds(task);
-  return ids.length ? { ...task, acceptanceCriterionIds: ids } : task;
+  if (!ids.length) return task;
+  return { ...task, acceptanceCriteria: normalizeAcceptanceCriteria(task.acceptanceCriteria), acceptanceCriterionIds: ids };
 }
 
 function stampOf(now) {
